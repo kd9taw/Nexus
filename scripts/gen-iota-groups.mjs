@@ -18,6 +18,15 @@
 // reset); after the fourth attempt the run fails, and release.yml makes that failure visible on
 // the run's summary. Any other status, and a file refused for its size, fails at once.
 //
+// Handed over (--checked <dir>): no download at all. <dir> holds the three files another run of
+// this script wrote (release.yml's installer jobs download them as one workflow artifact from its
+// iota-lists job), and it is checked as a whole before any of it is used (`checkListsDir`): exactly
+// those three files (iota_groups.json, iota_islands.json, iota_groups.manifest.json) and nothing
+// else, each a regular file (not a link) within its size limit; both lists pass the checks below
+// and the manifest is a JSON object with a whole-number `fetchedAt`. Each file is read once, and
+// only the checked bytes are written to outDir. The manifest keeps <dir>'s `fetchedAt`. Anything
+// else fails the run, naming why.
+//
 // The checks — any miss exits 1 and writes nothing, so a short or changed file never replaces
 // a copy already staged:
 //   - the body is a JSON array of objects carrying `refno` and `name`;
@@ -47,11 +56,12 @@
 //                               monthly check counts from the newer of the two.
 //
 // Run:  node scripts/gen-iota-groups.mjs [--download | <groups.json>] [outDir] [--islands <islands.json>] [--dry-run]
+//       node scripts/gen-iota-groups.mjs --checked <dir> [outDir] [--dry-run]
 //   Default: --download into src-tauri/resources/iota (both lists). A file argument re-checks a
 //   groups copy already on disk (no network) and dates it now, with `--islands` an islands copy too.
 //   --dry-run checks and prints the manifest, writes nothing.
 
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, lstatSync, readdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -179,20 +189,90 @@ export function checkIslands(bytes) {
 
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex')
 
+/** The files a handed-over directory holds, each with its size limit: what this script writes. */
+export const LIST_FILES = {
+  'iota_groups.json': MAX_BYTES,
+  'iota_islands.json': ISLANDS_MAX_BYTES,
+  'iota_groups.manifest.json': 64 * 1024,
+}
+
+/**
+ * The lists in `dir`, checked as a whole: `{groups, islands, fetchedAt}` (the bytes, read once),
+ * or `{miss}` naming why they cannot be used. See "Handed over" in the header.
+ */
+export function checkListsDir(dir) {
+  try {
+    let st
+    try {
+      st = lstatSync(dir)
+    } catch (e) {
+      if (e.code === 'ENOENT') return { miss: `no lists in ${dir}` }
+      throw e
+    }
+    if (!st.isDirectory()) return { miss: `${dir} is not a directory` }
+    const names = readdirSync(dir)
+    const extra = names.filter((n) => !Object.hasOwn(LIST_FILES, n))
+    if (extra.length) return { miss: `unexpected entries in ${dir}: ${extra.join(', ')}` }
+    if (names.length === 0) return { miss: `no lists in ${dir}` }
+    const bytes = {}
+    for (const [name, max] of Object.entries(LIST_FILES)) {
+      const path = join(dir, name)
+      let f
+      try {
+        f = lstatSync(path)
+      } catch (e) {
+        if (e.code === 'ENOENT') return { miss: `${name} is missing from ${dir}` }
+        throw e
+      }
+      if (!f.isFile()) return { miss: `${name} in ${dir} is not a regular file` }
+      if (f.size > max) return { miss: `${name} in ${dir} is ${f.size} bytes, over ${max}` }
+      bytes[name] = readFileSync(path)
+      if (bytes[name].length > max) return { miss: `${name} in ${dir} is over ${max} bytes` }
+    }
+    check(bytes['iota_groups.json'])
+    checkIslands(bytes['iota_islands.json'])
+    const manifest = JSON.parse(bytes['iota_groups.manifest.json'].toString('utf8'))
+    if (manifest === null || typeof manifest !== 'object' || Array.isArray(manifest)) {
+      return { miss: `the manifest is not a JSON object` }
+    }
+    if (!Number.isInteger(manifest.fetchedAt) || manifest.fetchedAt <= 0) {
+      return { miss: `the manifest has no valid fetchedAt` }
+    }
+    return { groups: bytes['iota_groups.json'], islands: bytes['iota_islands.json'], fetchedAt: manifest.fetchedAt }
+  } catch (e) {
+    return { miss: `the lists in ${dir} failed their checks: ${e.message}` }
+  }
+}
+
 async function main() {
   const argv = process.argv.slice(2)
   const dryRun = argv.includes('--dry-run')
-  const islandsAt = argv.indexOf('--islands')
-  const islandsFile = islandsAt >= 0 ? argv[islandsAt + 1] : null
-  const args = argv.filter((a, i) => a !== '--dry-run' && i !== islandsAt && (islandsAt < 0 || i !== islandsAt + 1))
+  const valued = new Set()
+  const option = (flag) => {
+    const at = argv.indexOf(flag)
+    if (at < 0) return null
+    valued.add(at).add(at + 1)
+    return argv[at + 1]
+  }
+  const islandsFile = option('--islands')
+  const checkedDir = option('--checked')
+  const args = argv.filter((a, i) => a !== '--dry-run' && !valued.has(i))
+  if (checkedDir) args.unshift('--checked')
   const [src = '--download', outDir = 'src-tauri/resources/iota'] = args
   const download = src === '--download'
-  const bytes = download ? await downloadWithRetry() : readFileSync(src)
+  if (checkedDir && islandsFile) throw new Error('--checked takes no --islands')
+  let handed = null
+  if (checkedDir) {
+    handed = checkListsDir(checkedDir)
+    if (handed.miss) throw new Error(`the handed-over IOTA lists cannot be used: ${handed.miss}`)
+    console.error(`gen-iota-groups: handed-over lists in ${checkedDir} checked (fetched ${new Date(handed.fetchedAt * 1000).toISOString()})`)
+  }
+  const bytes = handed ? handed.groups : download ? await downloadWithRetry() : readFileSync(src)
   const groups = check(bytes)
   // The islands, checked before anything is written; a failure is kept for after the groups are.
-  let islandBytes = null
+  let islandBytes = handed ? handed.islands : null
   let islandsFailed = null
-  if (download || islandsFile) {
+  if (!handed && (download || islandsFile)) {
     try {
       islandBytes = download
         ? await downloadWithRetry({ fetchOnce: () => downloadOnce(ISLANDS_URL, ISLANDS_MAX_BYTES) })
@@ -203,7 +283,8 @@ async function main() {
       islandsFailed = e
     }
   }
-  const now = new Date()
+  // Handed-over lists keep their own date, so the app never takes them as newer than they are.
+  const now = handed ? new Date(handed.fetchedAt * 1000) : new Date()
   const manifest = {
     source: GROUPS_URL,
     fetched: now.toISOString(),

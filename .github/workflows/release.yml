@@ -159,10 +159,82 @@ jobs:
             --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" --sha "$tag_sha"
 
   # ---------------------------------------------------------------------------------------
+  # THE IOTA LISTS — downloaded once, checked, and handed to the installer jobs as a workflow
+  # artifact. No cache: a release run reads nothing a less trusted workflow could have written.
+  #
+  # The IOTA island-group and islands lists (© RSGB and IOTA Ltd) ship in the installer with
+  # IOTA Ltd's permission and are never committed (src-tauri/resources/iota/README.md, NOTICE).
+  # iota-world.org answers HTTP 202 with no file while it rebuilds them; the script asks again
+  # (15/30/60 s). Even so, 1.25.0-beta.1's Linux x86_64 installer shipped without them, as
+  # 1.22.0's had, because each installer job downloaded on its own and only warned on a failure.
+  #
+  # FAIL CLOSED. This job is the one download. If it still fails after the retries, it fails,
+  # and every installer job, which needs it, does not run: no installer can ship without the
+  # lists. Re-run the workflow (or this job, then the rest) once the server answers.
+  #
+  # WHY NOT A CACHED FALLBACK. An Actions-cache copy of the last good lists was tried and
+  # refused in security review: any workflow run on main can save a main-scoped cache entry
+  # under any key, and actions/cache extracts with `tar -P`, so an entry is not confined to the
+  # `path` it names. A crafted entry could run code in whichever release job restored it, and
+  # every job holds the run's runtime token, which can upload an artifact that a later job
+  # downloads by pattern. So no job in this workflow restores an IOTA cache, and none should.
+  #
+  # The hand-over: one artifact by exact name, kept one day, holding only the three files the
+  # script wrote. Each installer job downloads it by name and the script checks it again
+  # (--checked: exactly those files, regular files within size limits, both lists passing the
+  # download checks, the manifest a JSON object). Each installer job's own artifact already
+  # carries the same lists inside the installer.
+  # ---------------------------------------------------------------------------------------
+  iota-lists:
+    name: IOTA lists (download and check, once)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # A job-level block REPLACES the workflow-level one; `contents: read` is for the checkout only.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          # No cache restore in a release job, ever (a cache any main run can write); setup-node
+          # would start one by itself if a root package.json ever declared `packageManager`.
+          package-manager-cache: false
+
+      # The output goes outside the workspace, into a directory only the script writes, so the
+      # upload below can carry nothing else.
+      - name: Download the IOTA lists
+        run: |
+          set -euo pipefail
+          if ! node scripts/gen-iota-groups.mjs --download "$RUNNER_TEMP/iota-lists"; then
+            echo "::error::IOTA lists not downloaded, so no installer is built"
+            {
+              echo "### IOTA lists: not downloaded, so no installer is built"
+              echo "iota-world.org did not hand over the lists after every retry (see this job's log)."
+              echo "Re-run the workflow once the server answers."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexus-iota-lists
+          path: |
+            ${{ runner.temp }}/iota-lists/iota_groups.json
+            ${{ runner.temp }}/iota-lists/iota_islands.json
+            ${{ runner.temp }}/iota-lists/iota_groups.manifest.json
+          if-no-files-found: error
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------------------
   # Linux x86_64 — .deb + AppImage via the same scripts/build-linux.sh developers use.
   # ---------------------------------------------------------------------------------------
   linux-x86:
     name: Linux x86_64 (.deb + AppImage)
+    needs: iota-lists
     # BUILT IN A PINNED CONTAINER, not on the runner. The build host's glibc IS the floor of every
     # published x86_64 artifact, so the image below decides who can run Nexus: ubuntu:22.04 is
     # glibc 2.35 (GLIBC_FLOOR). Pinned by digest, like the Pi jobs' `debian:${BASE}` images, so
@@ -243,25 +315,30 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+          # No cache restore in a release job, ever (a cache any main run can write); setup-node
+          # would start one by itself if a root package.json ever declared `packageManager`.
+          package-manager-cache: false
 
-      # The IOTA island-group list (© RSGB and IOTA Ltd) ships in the installer with IOTA Ltd's
-      # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the
-      # checkout has none. Best-effort, unlike DeepCW: without it the app checks island references
-      # by shape until its first monthly download, so a feed outage must not stop a release. The
-      # script asks again on a 202, a 5xx or no answer at all (15/30/60 s); if it still fails, the
-      # run's summary says so in a heading, not only in an annotation (1.22.0 shipped without the
-      # list unnoticed).
+      # The IOTA lists (© RSGB and IOTA Ltd; never committed, src-tauri/resources/iota/README.md)
+      # come from the iota-lists job, downloaded there once, as one artifact fetched by its exact
+      # name (never a pattern). The script checks the files again (--checked: exactly the three it
+      # writes) and fails the job when they do not pass, so no installer ships without the lists.
+      - name: Download the checked IOTA lists
+        uses: actions/download-artifact@v4
+        with:
+          name: nexus-iota-lists
+          path: ~/.nexus-iota-handover
+
       - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
         run: |
-          if ! node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota; then
-            echo "::warning::IOTA island list not staged; this installer ships without it"
-            {
-              echo "### ⚠️ ${{ github.job }}: this installer ships WITHOUT the IOTA island list"
-              echo "iota-world.org did not hand over groups.json after every retry (see the step's log)."
-              echo "Re-run this job to include it; without it the app checks island references by shape"
-              echo "until its first monthly download."
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
+          set -euo pipefail
+          node scripts/gen-iota-groups.mjs --checked "$HOME/.nexus-iota-handover" src-tauri/resources/iota
+          for f in iota_groups.json iota_islands.json iota_groups.manifest.json; do
+            if [ ! -s "src-tauri/resources/iota/$f" ]; then
+              echo "::error::src-tauri/resources/iota/$f is missing or empty after staging"
+              exit 1
+            fi
+          done
 
       # AppImage's bundler (appimagetool) normally needs FUSE, which hosted runners lack.
       # APPIMAGE_EXTRACT_AND_RUN makes it self-extract instead — the standard CI workaround.
@@ -478,6 +555,7 @@ jobs:
   # ---------------------------------------------------------------------------------------
   windows:
     name: Windows (NSIS installer)
+    needs: iota-lists
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -515,25 +593,30 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+          # No cache restore in a release job, ever (a cache any main run can write); setup-node
+          # would start one by itself if a root package.json ever declared `packageManager`.
+          package-manager-cache: false
 
-      # The IOTA island-group list (© RSGB and IOTA Ltd) ships in the installer with IOTA Ltd's
-      # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the
-      # checkout has none. Best-effort, unlike DeepCW: without it the app checks island references
-      # by shape until its first monthly download, so a feed outage must not stop a release. The
-      # script asks again on a 202, a 5xx or no answer at all (15/30/60 s); if it still fails, the
-      # run's summary says so in a heading, not only in an annotation (1.22.0 shipped without the
-      # list unnoticed).
+      # The IOTA lists (© RSGB and IOTA Ltd; never committed, src-tauri/resources/iota/README.md)
+      # come from the iota-lists job, downloaded there once, as one artifact fetched by its exact
+      # name (never a pattern). The script checks the files again (--checked: exactly the three it
+      # writes) and fails the job when they do not pass, so no installer ships without the lists.
+      - name: Download the checked IOTA lists
+        uses: actions/download-artifact@v4
+        with:
+          name: nexus-iota-lists
+          path: ~/.nexus-iota-handover
+
       - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
         run: |
-          if ! node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota; then
-            echo "::warning::IOTA island list not staged; this installer ships without it"
-            {
-              echo "### ⚠️ ${{ github.job }}: this installer ships WITHOUT the IOTA island list"
-              echo "iota-world.org did not hand over groups.json after every retry (see the step's log)."
-              echo "Re-run this job to include it; without it the app checks island references by shape"
-              echo "until its first monthly download."
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
+          set -euo pipefail
+          node scripts/gen-iota-groups.mjs --checked "$HOME/.nexus-iota-handover" src-tauri/resources/iota
+          for f in iota_groups.json iota_islands.json iota_groups.manifest.json; do
+            if [ ! -s "src-tauri/resources/iota/$f" ]; then
+              echo "::error::src-tauri/resources/iota/$f is missing or empty after staging"
+              exit 1
+            fi
+          done
 
       # FFTW, and any other native library build-windows-cross.sh compiles from a downloaded
       # tarball, is built HERE, with no secret in the environment: third-party builds run
@@ -803,6 +886,7 @@ jobs:
   macos:
     name: macOS (${{ matrix.label }} .dmg)
     runs-on: ${{ matrix.runner }}
+    needs: iota-lists
     # `tsc -b` needs about 2.5 GB of JavaScript heap since the Chinese catalogs (2,048 MB, Node's
     # default on these 7 GB runners, aborts with exit 134; 3,072 MB passes). For the whole job, not
     # one step: the web UI is built here AND again by `cargo tauri build`'s beforeBuildCommand. The
@@ -943,25 +1027,30 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+          # No cache restore in a release job, ever (a cache any main run can write); setup-node
+          # would start one by itself if a root package.json ever declared `packageManager`.
+          package-manager-cache: false
 
-      # The IOTA island-group list (© RSGB and IOTA Ltd) ships in the installer with IOTA Ltd's
-      # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the
-      # checkout has none. Best-effort, unlike DeepCW: without it the app checks island references
-      # by shape until its first monthly download, so a feed outage must not stop a release. The
-      # script asks again on a 202, a 5xx or no answer at all (15/30/60 s); if it still fails, the
-      # run's summary says so in a heading, not only in an annotation (1.22.0 shipped without the
-      # list unnoticed).
+      # The IOTA lists (© RSGB and IOTA Ltd; never committed, src-tauri/resources/iota/README.md)
+      # come from the iota-lists job, downloaded there once, as one artifact fetched by its exact
+      # name (never a pattern). The script checks the files again (--checked: exactly the three it
+      # writes) and fails the job when they do not pass, so no installer ships without the lists.
+      - name: Download the checked IOTA lists
+        uses: actions/download-artifact@v4
+        with:
+          name: nexus-iota-lists
+          path: ~/.nexus-iota-handover
+
       - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
         run: |
-          if ! node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota; then
-            echo "::warning::IOTA island list not staged; this installer ships without it"
-            {
-              echo "### ⚠️ ${{ github.job }}: this installer ships WITHOUT the IOTA island list"
-              echo "iota-world.org did not hand over groups.json after every retry (see the step's log)."
-              echo "Re-run this job to include it; without it the app checks island references by shape"
-              echo "until its first monthly download."
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
+          set -euo pipefail
+          node scripts/gen-iota-groups.mjs --checked "$HOME/.nexus-iota-handover" src-tauri/resources/iota
+          for f in iota_groups.json iota_islands.json iota_groups.manifest.json; do
+            if [ ! -s "src-tauri/resources/iota/$f" ]; then
+              echo "::error::src-tauri/resources/iota/$f is missing or empty after staging"
+              exit 1
+            fi
+          done
 
       - name: Build the web UI
         run: |
@@ -1309,6 +1398,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+          # No cache restore in a release job, ever (a cache any main run can write); setup-node
+          # would start one by itself if a root package.json ever declared `packageManager`.
+          package-manager-cache: false
 
       - name: Mount the DMG and Gatekeeper-assess the app
         run: |
@@ -1412,6 +1504,7 @@ jobs:
   # ---------------------------------------------------------------------------------------
   pi:
     name: Raspberry Pi .deb (${{ matrix.base }})
+    needs: iota-lists
     runs-on: ubuntu-24.04-arm
     strategy:
       fail-fast: false
@@ -1444,25 +1537,30 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+          # No cache restore in a release job, ever (a cache any main run can write); setup-node
+          # would start one by itself if a root package.json ever declared `packageManager`.
+          package-manager-cache: false
 
-      # The IOTA island-group list (© RSGB and IOTA Ltd) ships in the installer with IOTA Ltd's
-      # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the
-      # checkout has none. Best-effort, unlike DeepCW: without it the app checks island references
-      # by shape until its first monthly download, so a feed outage must not stop a release. The
-      # script asks again on a 202, a 5xx or no answer at all (15/30/60 s); if it still fails, the
-      # run's summary says so in a heading, not only in an annotation (1.22.0 shipped without the
-      # list unnoticed).
+      # The IOTA lists (© RSGB and IOTA Ltd; never committed, src-tauri/resources/iota/README.md)
+      # come from the iota-lists job, downloaded there once, as one artifact fetched by its exact
+      # name (never a pattern). The script checks the files again (--checked: exactly the three it
+      # writes) and fails the job when they do not pass, so no installer ships without the lists.
+      - name: Download the checked IOTA lists
+        uses: actions/download-artifact@v4
+        with:
+          name: nexus-iota-lists
+          path: ~/.nexus-iota-handover
+
       - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
         run: |
-          if ! node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota; then
-            echo "::warning::IOTA island list not staged; this installer ships without it"
-            {
-              echo "### ⚠️ ${{ github.job }}: this installer ships WITHOUT the IOTA island list"
-              echo "iota-world.org did not hand over groups.json after every retry (see the step's log)."
-              echo "Re-run this job to include it; without it the app checks island references by shape"
-              echo "until its first monthly download."
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
+          set -euo pipefail
+          node scripts/gen-iota-groups.mjs --checked "$HOME/.nexus-iota-handover" src-tauri/resources/iota
+          for f in iota_groups.json iota_islands.json iota_groups.manifest.json; do
+            if [ ! -s "src-tauri/resources/iota/$f" ]; then
+              echo "::error::src-tauri/resources/iota/$f is missing or empty after staging"
+              exit 1
+            fi
+          done
 
       # The ClubLog key, compiled in as on every other platform (#388). It goes in as a BuildKit
       # secret, which Dockerfile.pi mounts for the one RUN that compiles Nexus; a build arg would
