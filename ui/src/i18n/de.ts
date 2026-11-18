@@ -9488,7 +9488,7 @@ export const DE: PartialCatalog = {
   "shell.lane.audio.soundCard": "SOUNDKARTE AUSGEFALLEN",
   "shell.lane.audio.noReceiveAudio": "KEIN EMPFANGSAUDIO",
   "shell.lane.audio.ptt": "PTT NICHT ANGENOMMEN",
-  "shell.lane.audio.ptt.brief": "PTT NICHT ANGENOMMEN: PTT-Methode & Port prüfen (Einstellungen ▸ Funkgerät ▸ Rig & CAT)",
+  "shell.lane.audio.ptt.brief": "PTT NICHT ANGENOMMEN: PTT-Methode & Port prüfen (Einstellungen ▸ Funkgerät ▸ Funkgerät & CAT)",
   "shell.lane.audio.pttUnconfirmed": "PTT NICHT BESTÄTIGT",
   "shell.lane.audio.flexAudio": "KEIN FLEX-AUDIO",
   "shell.lane.audio.flexAddress": "KEINE FLEX-RADIO-IP",
