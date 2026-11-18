@@ -200,6 +200,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+          # No cache restore in a release job, ever (a cache any main run can write); setup-node
+          # would start one by itself if a root package.json ever declared `packageManager`.
+          package-manager-cache: false
 
       # The output goes outside the workspace, into a directory only the script writes, so the
       # upload below can carry nothing else.
@@ -312,6 +315,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+          # No cache restore in a release job, ever (a cache any main run can write); setup-node
+          # would start one by itself if a root package.json ever declared `packageManager`.
+          package-manager-cache: false
 
       # The IOTA lists (© RSGB and IOTA Ltd; never committed, src-tauri/resources/iota/README.md)
       # come from the iota-lists job, downloaded there once, as one artifact fetched by its exact
@@ -587,6 +593,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+          # No cache restore in a release job, ever (a cache any main run can write); setup-node
+          # would start one by itself if a root package.json ever declared `packageManager`.
+          package-manager-cache: false
 
       # The IOTA lists (© RSGB and IOTA Ltd; never committed, src-tauri/resources/iota/README.md)
       # come from the iota-lists job, downloaded there once, as one artifact fetched by its exact
@@ -1018,6 +1027,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+          # No cache restore in a release job, ever (a cache any main run can write); setup-node
+          # would start one by itself if a root package.json ever declared `packageManager`.
+          package-manager-cache: false
 
       # The IOTA lists (© RSGB and IOTA Ltd; never committed, src-tauri/resources/iota/README.md)
       # come from the iota-lists job, downloaded there once, as one artifact fetched by its exact
@@ -1386,6 +1398,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+          # No cache restore in a release job, ever (a cache any main run can write); setup-node
+          # would start one by itself if a root package.json ever declared `packageManager`.
+          package-manager-cache: false
 
       - name: Mount the DMG and Gatekeeper-assess the app
         run: |
@@ -1522,6 +1537,9 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+          # No cache restore in a release job, ever (a cache any main run can write); setup-node
+          # would start one by itself if a root package.json ever declared `packageManager`.
+          package-manager-cache: false
 
       # The IOTA lists (© RSGB and IOTA Ltd; never committed, src-tauri/resources/iota/README.md)
       # come from the iota-lists job, downloaded there once, as one artifact fetched by its exact

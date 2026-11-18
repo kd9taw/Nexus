@@ -1163,9 +1163,9 @@ test('the Pi container build hands the ClubLog key to the RUN that compiles it i
   assert.match(compile[0].args, /^(?:--\S+\s+)*--mount=type=secret,id=clublog_api_key,env=CLUBLOG_API_KEY\s/, 'the RUN that compiles Nexus does not mount the ClubLog key');
 });
 
-// The IOTA island list is staged by a Node script, best-effort: a failure is a warning and the
-// installer ships without the list. So a staging step that runs before the job has Node fails on
-// every release with nothing but a yellow annotation (the linux-x86 container has no Node until
+// The IOTA island list is staged by a Node script (`gen-iota-groups.mjs --checked`, from the
+// iota-lists job's artifact), and a failure fails the job. So a staging step that runs before the
+// job has Node stops every release (the linux-x86 container has no Node until
 // actions/setup-node). Every job that stages the list has to set up Node before it.
 const IOTA_STAGE = /^Stage the IOTA island list\b/;
 function iotaStagedWithoutNode(wf) {
@@ -1188,10 +1188,52 @@ test('every job that stages the IOTA list sets up Node first', () => {
     TEXT,
     "      # The runner image's own Node is whatever version the image carries; pin it as the other\n" +
       '      # build jobs do, for the IOTA staging step below.\n' +
-      '      - uses: actions/setup-node@v7\n        with:\n          node-version: 24\n',
+      '      - uses: actions/setup-node@v7\n        with:\n          node-version: 24\n' +
+      SETUP_NODE_NO_CACHE,
     '',
   );
   assert.deepEqual(iotaStagedWithoutNode(readWorkflow(planted)), ['pi']);
+});
+
+// No release job restores a cache. An Actions cache entry is writable by any workflow run on main
+// and is extracted unconfined (`tar -P`), so a restore would let it plant files in a job that
+// builds installers or uploads artifacts later jobs trust. That covers actions/cache itself and
+// setup-node's own cache: its `cache:` input, and the npm cache it turns on by itself when a root
+// package.json declares `packageManager`, which only `package-manager-cache: false` keeps off.
+const SETUP_NODE_NO_CACHE =
+  '          # No cache restore in a release job, ever (a cache any main run can write); setup-node\n' +
+  "          # would start one by itself if a root package.json ever declared `packageManager`.\n" +
+  '          package-manager-cache: false\n';
+function cacheRestores(wf) {
+  const bad = [];
+  for (const j of wf.jobs.values()) {
+    for (const s of j.steps) {
+      const uses = s?.uses ?? '';
+      if (/^actions\/cache(?:\/restore)?@/.test(uses)) bad.push(`${j.id}: ${uses}`);
+      if (/^actions\/setup-node@/.test(uses) && (s.with.has('cache') || s.with.get('package-manager-cache') !== 'false')) {
+        bad.push(`${j.id}: ${s.label} may restore a package-manager cache`);
+      }
+    }
+  }
+  return bad;
+}
+
+test('no release job restores a cache', () => {
+  assert.deepEqual(cacheRestores(WF), []);
+  // Positive controls: an actions/cache restore, a setup-node `cache:`, and a setup-node without
+  // `package-manager-cache: false` are each reported.
+  const pi = "      - uses: actions/setup-node@v7\n        with:\n          node-version: 24\n" + SETUP_NODE_NO_CACHE;
+  assert.ok(TEXT.includes(pi), 'the setup-node block this test plants into is gone');
+  const restore = plant(TEXT, "      # The runner image's own Node is whatever version the image carries; pin it as the other\n",
+    '      - uses: actions/cache/restore@v6\n        with:\n          path: x\n          key: k\n\n' +
+      "      # The runner image's own Node is whatever version the image carries; pin it as the other\n");
+  assert.deepEqual(cacheRestores(readWorkflow(restore)), ['pi: actions/cache/restore@v6']);
+  const npmCache = plant(TEXT, "      # build jobs do, for the IOTA staging step below.\n" + pi,
+    "      # build jobs do, for the IOTA staging step below.\n" + pi + "          cache: npm\n");
+  assert.equal(cacheRestores(readWorkflow(npmCache)).length, 1);
+  const unset = plant(TEXT, "      # build jobs do, for the IOTA staging step below.\n" + pi,
+    "      # build jobs do, for the IOTA staging step below.\n      - uses: actions/setup-node@v7\n        with:\n          node-version: 24\n");
+  assert.equal(cacheRestores(readWorkflow(unset)).length, 1);
 });
 
 // The shipped link. src-tauri's [profile.release] links with fat LTO and one codegen unit. ci.yml's
