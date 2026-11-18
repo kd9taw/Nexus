@@ -1,0 +1,74 @@
+# IOTA lists cache — keep main's copy of the last good IOTA lists, for release.yml to fall back on.
+#
+# The IOTA island-group and islands lists (© RSGB and IOTA Ltd) ship in the installer with IOTA
+# Ltd's permission and are never committed (src-tauri/resources/iota/README.md, NOTICE). Each
+# release job downloads them from iota-world.org, and that server answers HTTP 202 with no file
+# while it rebuilds them: 1.22.0 and 1.25.0-beta.1 shipped an installer without them. So
+# release.yml's jobs restore the last good lists from the Actions cache and fall back to them.
+#
+# WHY A WORKFLOW OF ITS OWN. A tag run reads only caches saved under its own tag or under main,
+# and a tag is new on every release, so the copy has to be saved on main. Nothing else on main
+# stages the lists: ci-main.yml runs ci.yml on main only when it has to, and ci.yml never
+# downloads them. This runs on every push to main, which includes each release-prep commit before
+# its tag, and weekly, so the entry is never evicted for want of use (GitHub evicts after 7 days
+# untouched).
+#
+# The key is the two lists' content: a save happens only when they changed, and the restore takes
+# the newest entry. The paths, the key and the steps match release.yml's IOTA steps; change them
+# together, or the release jobs restore nothing from here.
+
+name: IOTA lists cache
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    name: Refresh the cached IOTA lists
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Restore the last good IOTA lists
+        id: iota-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            src-tauri/resources/iota/iota_groups.json
+            src-tauri/resources/iota/iota_islands.json
+            src-tauri/resources/iota/iota_groups.manifest.json
+          key: iota-lists-${{ github.run_id }}
+          restore-keys: iota-lists-
+
+      # A download that fails falls back to the restored copy and passes; only with neither does
+      # this fail, and then main holds no copy for the next release until a run here succeeds.
+      - name: Download the IOTA lists
+        run: node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota --fallback src-tauri/resources/iota
+
+      - name: Save the IOTA lists when they changed
+        if: steps.iota-cache.outputs.cache-matched-key != format('iota-lists-{0}', hashFiles('src-tauri/resources/iota/iota_groups.json', 'src-tauri/resources/iota/iota_islands.json'))
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            src-tauri/resources/iota/iota_groups.json
+            src-tauri/resources/iota/iota_islands.json
+            src-tauri/resources/iota/iota_groups.manifest.json
+          key: iota-lists-${{ hashFiles('src-tauri/resources/iota/iota_groups.json', 'src-tauri/resources/iota/iota_islands.json') }}

@@ -18,6 +18,14 @@
 // reset); after the fourth attempt the run fails, and release.yml makes that failure visible on
 // the run's summary. Any other status, and a file refused for its size, fails at once.
 //
+// Fallback (--fallback <dir>): a list whose download (or file) fails, or fails the checks below,
+// is taken from the copy this script wrote into <dir> on an earlier run, when that copy passes the
+// same checks, and a line on stderr says so ("using the cached copy"). The release jobs restore
+// the last good lists there from the GitHub Actions cache, because the lists are never committed.
+// The manifest then carries the cached copy's `fetchedAt`, not now, so the app still knows how old
+// the bundled lists are (0, undated, when that manifest is missing). No usable cached copy: the
+// run fails as it would without --fallback.
+//
 // The checks — any miss exits 1 and writes nothing, so a short or changed file never replaces
 // a copy already staged:
 //   - the body is a JSON array of objects carrying `refno` and `name`;
@@ -46,7 +54,7 @@
 //                               downloads itself replaces the bundled one only when newer, and the
 //                               monthly check counts from the newer of the two.
 //
-// Run:  node scripts/gen-iota-groups.mjs [--download | <groups.json>] [outDir] [--islands <islands.json>] [--dry-run]
+// Run:  node scripts/gen-iota-groups.mjs [--download | <groups.json>] [outDir] [--islands <islands.json>] [--fallback <dir>] [--dry-run]
 //   Default: --download into src-tauri/resources/iota (both lists). A file argument re-checks a
 //   groups copy already on disk (no network) and dates it now, with `--islands` an islands copy too.
 //   --dry-run checks and prints the manifest, writes nothing.
@@ -179,31 +187,84 @@ export function checkIslands(bytes) {
 
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex')
 
+/**
+ * `get()`'s bytes once `checkFn` passes them; when either throws and `dir` is set, the copy of
+ * `file` in `dir` instead, if it passes `checkFn`. Returns `{bytes, cached}`; with no usable
+ * copy, throws the first failure with the copy's own reason added.
+ */
+export async function orCached(get, { file, checkFn, dir, log = (line) => console.error(line) }) {
+  try {
+    const bytes = await get()
+    checkFn(bytes)
+    return { bytes, cached: false }
+  } catch (e) {
+    if (!dir) throw e
+    const path = join(dir, file)
+    let bytes
+    try {
+      bytes = readFileSync(path)
+      checkFn(bytes)
+    } catch (c) {
+      throw new Error(`${e.message}; no usable cached copy (${path}: ${c.code === 'ENOENT' ? 'missing' : c.message})`)
+    }
+    log(`gen-iota-groups: ${e.message}; using the cached copy ${path} instead`)
+    return { bytes, cached: true }
+  }
+}
+
+/** The `fetchedAt` of the manifest in `dir`, or 0 (undated) when there is none to read. */
+function cachedFetchedAt(dir) {
+  try {
+    const at = JSON.parse(readFileSync(join(dir, 'iota_groups.manifest.json'), 'utf8')).fetchedAt
+    return Number.isInteger(at) && at > 0 ? at : 0
+  } catch {
+    return 0
+  }
+}
+
 async function main() {
   const argv = process.argv.slice(2)
   const dryRun = argv.includes('--dry-run')
-  const islandsAt = argv.indexOf('--islands')
-  const islandsFile = islandsAt >= 0 ? argv[islandsAt + 1] : null
-  const args = argv.filter((a, i) => a !== '--dry-run' && i !== islandsAt && (islandsAt < 0 || i !== islandsAt + 1))
+  const valued = new Set()
+  const option = (flag) => {
+    const at = argv.indexOf(flag)
+    if (at < 0) return null
+    valued.add(at).add(at + 1)
+    return argv[at + 1]
+  }
+  const islandsFile = option('--islands')
+  const fallbackDir = option('--fallback')
+  const args = argv.filter((a, i) => a !== '--dry-run' && !valued.has(i))
   const [src = '--download', outDir = 'src-tauri/resources/iota'] = args
   const download = src === '--download'
-  const bytes = download ? await downloadWithRetry() : readFileSync(src)
+  const fromCache = []
+  const take = async (file, get, checkFn) => {
+    const got = await orCached(get, { file, checkFn, dir: fallbackDir })
+    if (got.cached) fromCache.push(file)
+    return got.bytes
+  }
+  const bytes = await take('iota_groups.json', () => (download ? downloadWithRetry() : readFileSync(src)), check)
   const groups = check(bytes)
   // The islands, checked before anything is written; a failure is kept for after the groups are.
   let islandBytes = null
   let islandsFailed = null
   if (download || islandsFile) {
     try {
-      islandBytes = download
-        ? await downloadWithRetry({ fetchOnce: () => downloadOnce(ISLANDS_URL, ISLANDS_MAX_BYTES) })
-        : readFileSync(islandsFile)
-      checkIslands(islandBytes)
+      islandBytes = await take(
+        'iota_islands.json',
+        () =>
+          download
+            ? downloadWithRetry({ fetchOnce: () => downloadOnce(ISLANDS_URL, ISLANDS_MAX_BYTES) })
+            : readFileSync(islandsFile),
+        checkIslands,
+      )
     } catch (e) {
       islandBytes = null
       islandsFailed = e
     }
   }
-  const now = new Date()
+  // A list from the cache dates the whole manifest as that copy, so the app never takes it as new.
+  const now = fromCache.length ? new Date(cachedFetchedAt(fallbackDir) * 1000) : new Date()
   const manifest = {
     source: GROUPS_URL,
     fetched: now.toISOString(),
@@ -227,6 +288,7 @@ async function main() {
     writeFileSync(join(outDir, 'iota_groups.manifest.json'), JSON.stringify(manifest, null, 2) + '\n')
     console.log(`IOTA list: ${groups} island groups, ${bytes.length} bytes -> ${outDir}`)
     if (islandBytes) console.log(`IOTA islands: ${manifest.islands} islands, ${islandBytes.length} bytes -> ${outDir}`)
+    if (fromCache.length) console.log(`IOTA lists from the cached copy (fetched ${manifest.fetched}): ${fromCache.join(', ')}`)
   }
   if (islandsFailed) throw new Error(`the island groups were staged, the islands list was not: ${islandsFailed.message}`)
 }

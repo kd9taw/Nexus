@@ -187,14 +187,15 @@ jobs:
       # gstreamer1.0-plugins-base/-good (the app, autodetect and coreelements plugins build-linux.sh
       # copies in, and Verify requires) and xdg-utils (tauri's AppImage bundler refuses to build
       # without /usr/bin/xdg-open, which it ships as usr/bin/xdg-open). gh is jammy's own (2.4.0),
-      # for the model download below.
+      # for the model download below. zstd is for actions/cache: without it the IOTA cache steps
+      # write and read gzip entries, a different cache from every other job's.
       - name: Install build dependencies
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            ca-certificates curl wget file git xz-utils python3 gh \
+            ca-certificates curl wget file git xz-utils zstd python3 gh \
             libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
             librsvg2-dev libxdo-dev libssl-dev libsoup-3.0-dev patchelf \
             build-essential cmake ninja-build gfortran pkg-config \
@@ -244,24 +245,60 @@ jobs:
         with:
           node-version: 24
 
-      # The IOTA island-group list (© RSGB and IOTA Ltd) ships in the installer with IOTA Ltd's
-      # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the
-      # checkout has none. Best-effort, unlike DeepCW: without it the app checks island references
-      # by shape until its first monthly download, so a feed outage must not stop a release. The
-      # script asks again on a 202, a 5xx or no answer at all (15/30/60 s); if it still fails, the
-      # run's summary says so in a heading, not only in an annotation (1.22.0 shipped without the
-      # list unnoticed).
+      # The IOTA island-group and islands lists (© RSGB and IOTA Ltd) ship in the installer with
+      # IOTA Ltd's permission but are never committed (src-tauri/resources/iota/README.md, NOTICE),
+      # so the checkout has none. The script asks again on a 202, a 5xx or no answer at all
+      # (15/30/60 s); even so 1.25.0-beta.1's Linux x86_64 installer shipped without them (202 on
+      # every attempt), as 1.22.0's had. So the last good lists are kept in the Actions cache, and the
+      # script falls back to them ("using the cached copy" in its log), dated as that copy.
+      #
+      # THE CACHE IS FILLED ON MAIN. A tag run reads only caches its own tag saved and main's
+      # (the macos job's tauri-cli note), so iota-cache.yml refreshes main's copy on every push
+      # to main and weekly. The save here serves this run's re-runs only. The key is the two
+      # lists' content, and the restore takes the newest entry. The linux-x86 container installs
+      # zstd so its cache entries match the other jobs' (actions/cache falls back to gzip
+      # without it, and a gzip entry is a different cache).
+      #
+      # FAIL CLOSED. With neither a download nor a usable cached copy, the job FAILS: no
+      # installer ships without the lists. Re-run the job once the server answers.
+      - name: Restore the last good IOTA lists
+        id: iota-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            src-tauri/resources/iota/iota_groups.json
+            src-tauri/resources/iota/iota_islands.json
+            src-tauri/resources/iota/iota_groups.manifest.json
+          key: iota-lists-${{ github.run_id }}
+          restore-keys: iota-lists-
+
       - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
         run: |
-          if ! node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota; then
-            echo "::warning::IOTA island list not staged; this installer ships without it"
+          if ! node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota --fallback src-tauri/resources/iota; then
+            echo "::error::IOTA lists not staged: no download and no usable cached copy"
             {
-              echo "### ⚠️ ${{ github.job }}: this installer ships WITHOUT the IOTA island list"
-              echo "iota-world.org did not hand over groups.json after every retry (see the step's log)."
-              echo "Re-run this job to include it; without it the app checks island references by shape"
-              echo "until its first monthly download."
+              echo "### ${{ github.job }}: stopped, no IOTA lists to ship"
+              echo "iota-world.org did not hand over the lists after every retry, and the Actions cache held"
+              echo "no usable copy (see the step's log). Re-run this job once the server answers."
             } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
+          for f in iota_groups.json iota_islands.json iota_groups.manifest.json; do
+            if [ ! -s "src-tauri/resources/iota/$f" ]; then
+              echo "::error::src-tauri/resources/iota/$f is missing or empty after staging"
+              exit 1
+            fi
+          done
+
+      - name: Keep the IOTA lists for this run's re-runs
+        if: steps.iota-cache.outputs.cache-matched-key != format('iota-lists-{0}', hashFiles('src-tauri/resources/iota/iota_groups.json', 'src-tauri/resources/iota/iota_islands.json'))
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            src-tauri/resources/iota/iota_groups.json
+            src-tauri/resources/iota/iota_islands.json
+            src-tauri/resources/iota/iota_groups.manifest.json
+          key: iota-lists-${{ hashFiles('src-tauri/resources/iota/iota_groups.json', 'src-tauri/resources/iota/iota_islands.json') }}
 
       # AppImage's bundler (appimagetool) normally needs FUSE, which hosted runners lack.
       # APPIMAGE_EXTRACT_AND_RUN makes it self-extract instead — the standard CI workaround.
@@ -516,24 +553,60 @@ jobs:
         with:
           node-version: 24
 
-      # The IOTA island-group list (© RSGB and IOTA Ltd) ships in the installer with IOTA Ltd's
-      # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the
-      # checkout has none. Best-effort, unlike DeepCW: without it the app checks island references
-      # by shape until its first monthly download, so a feed outage must not stop a release. The
-      # script asks again on a 202, a 5xx or no answer at all (15/30/60 s); if it still fails, the
-      # run's summary says so in a heading, not only in an annotation (1.22.0 shipped without the
-      # list unnoticed).
+      # The IOTA island-group and islands lists (© RSGB and IOTA Ltd) ship in the installer with
+      # IOTA Ltd's permission but are never committed (src-tauri/resources/iota/README.md, NOTICE),
+      # so the checkout has none. The script asks again on a 202, a 5xx or no answer at all
+      # (15/30/60 s); even so 1.25.0-beta.1's Linux x86_64 installer shipped without them (202 on
+      # every attempt), as 1.22.0's had. So the last good lists are kept in the Actions cache, and the
+      # script falls back to them ("using the cached copy" in its log), dated as that copy.
+      #
+      # THE CACHE IS FILLED ON MAIN. A tag run reads only caches its own tag saved and main's
+      # (the macos job's tauri-cli note), so iota-cache.yml refreshes main's copy on every push
+      # to main and weekly. The save here serves this run's re-runs only. The key is the two
+      # lists' content, and the restore takes the newest entry. The linux-x86 container installs
+      # zstd so its cache entries match the other jobs' (actions/cache falls back to gzip
+      # without it, and a gzip entry is a different cache).
+      #
+      # FAIL CLOSED. With neither a download nor a usable cached copy, the job FAILS: no
+      # installer ships without the lists. Re-run the job once the server answers.
+      - name: Restore the last good IOTA lists
+        id: iota-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            src-tauri/resources/iota/iota_groups.json
+            src-tauri/resources/iota/iota_islands.json
+            src-tauri/resources/iota/iota_groups.manifest.json
+          key: iota-lists-${{ github.run_id }}
+          restore-keys: iota-lists-
+
       - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
         run: |
-          if ! node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota; then
-            echo "::warning::IOTA island list not staged; this installer ships without it"
+          if ! node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota --fallback src-tauri/resources/iota; then
+            echo "::error::IOTA lists not staged: no download and no usable cached copy"
             {
-              echo "### ⚠️ ${{ github.job }}: this installer ships WITHOUT the IOTA island list"
-              echo "iota-world.org did not hand over groups.json after every retry (see the step's log)."
-              echo "Re-run this job to include it; without it the app checks island references by shape"
-              echo "until its first monthly download."
+              echo "### ${{ github.job }}: stopped, no IOTA lists to ship"
+              echo "iota-world.org did not hand over the lists after every retry, and the Actions cache held"
+              echo "no usable copy (see the step's log). Re-run this job once the server answers."
             } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
+          for f in iota_groups.json iota_islands.json iota_groups.manifest.json; do
+            if [ ! -s "src-tauri/resources/iota/$f" ]; then
+              echo "::error::src-tauri/resources/iota/$f is missing or empty after staging"
+              exit 1
+            fi
+          done
+
+      - name: Keep the IOTA lists for this run's re-runs
+        if: steps.iota-cache.outputs.cache-matched-key != format('iota-lists-{0}', hashFiles('src-tauri/resources/iota/iota_groups.json', 'src-tauri/resources/iota/iota_islands.json'))
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            src-tauri/resources/iota/iota_groups.json
+            src-tauri/resources/iota/iota_islands.json
+            src-tauri/resources/iota/iota_groups.manifest.json
+          key: iota-lists-${{ hashFiles('src-tauri/resources/iota/iota_groups.json', 'src-tauri/resources/iota/iota_islands.json') }}
 
       # FFTW, and any other native library build-windows-cross.sh compiles from a downloaded
       # tarball, is built HERE, with no secret in the environment: third-party builds run
@@ -944,24 +1017,60 @@ jobs:
         with:
           node-version: 24
 
-      # The IOTA island-group list (© RSGB and IOTA Ltd) ships in the installer with IOTA Ltd's
-      # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the
-      # checkout has none. Best-effort, unlike DeepCW: without it the app checks island references
-      # by shape until its first monthly download, so a feed outage must not stop a release. The
-      # script asks again on a 202, a 5xx or no answer at all (15/30/60 s); if it still fails, the
-      # run's summary says so in a heading, not only in an annotation (1.22.0 shipped without the
-      # list unnoticed).
+      # The IOTA island-group and islands lists (© RSGB and IOTA Ltd) ship in the installer with
+      # IOTA Ltd's permission but are never committed (src-tauri/resources/iota/README.md, NOTICE),
+      # so the checkout has none. The script asks again on a 202, a 5xx or no answer at all
+      # (15/30/60 s); even so 1.25.0-beta.1's Linux x86_64 installer shipped without them (202 on
+      # every attempt), as 1.22.0's had. So the last good lists are kept in the Actions cache, and the
+      # script falls back to them ("using the cached copy" in its log), dated as that copy.
+      #
+      # THE CACHE IS FILLED ON MAIN. A tag run reads only caches its own tag saved and main's
+      # (the macos job's tauri-cli note), so iota-cache.yml refreshes main's copy on every push
+      # to main and weekly. The save here serves this run's re-runs only. The key is the two
+      # lists' content, and the restore takes the newest entry. The linux-x86 container installs
+      # zstd so its cache entries match the other jobs' (actions/cache falls back to gzip
+      # without it, and a gzip entry is a different cache).
+      #
+      # FAIL CLOSED. With neither a download nor a usable cached copy, the job FAILS: no
+      # installer ships without the lists. Re-run the job once the server answers.
+      - name: Restore the last good IOTA lists
+        id: iota-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            src-tauri/resources/iota/iota_groups.json
+            src-tauri/resources/iota/iota_islands.json
+            src-tauri/resources/iota/iota_groups.manifest.json
+          key: iota-lists-${{ github.run_id }}
+          restore-keys: iota-lists-
+
       - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
         run: |
-          if ! node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota; then
-            echo "::warning::IOTA island list not staged; this installer ships without it"
+          if ! node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota --fallback src-tauri/resources/iota; then
+            echo "::error::IOTA lists not staged: no download and no usable cached copy"
             {
-              echo "### ⚠️ ${{ github.job }}: this installer ships WITHOUT the IOTA island list"
-              echo "iota-world.org did not hand over groups.json after every retry (see the step's log)."
-              echo "Re-run this job to include it; without it the app checks island references by shape"
-              echo "until its first monthly download."
+              echo "### ${{ github.job }}: stopped, no IOTA lists to ship"
+              echo "iota-world.org did not hand over the lists after every retry, and the Actions cache held"
+              echo "no usable copy (see the step's log). Re-run this job once the server answers."
             } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
+          for f in iota_groups.json iota_islands.json iota_groups.manifest.json; do
+            if [ ! -s "src-tauri/resources/iota/$f" ]; then
+              echo "::error::src-tauri/resources/iota/$f is missing or empty after staging"
+              exit 1
+            fi
+          done
+
+      - name: Keep the IOTA lists for this run's re-runs
+        if: steps.iota-cache.outputs.cache-matched-key != format('iota-lists-{0}', hashFiles('src-tauri/resources/iota/iota_groups.json', 'src-tauri/resources/iota/iota_islands.json'))
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            src-tauri/resources/iota/iota_groups.json
+            src-tauri/resources/iota/iota_islands.json
+            src-tauri/resources/iota/iota_groups.manifest.json
+          key: iota-lists-${{ hashFiles('src-tauri/resources/iota/iota_groups.json', 'src-tauri/resources/iota/iota_islands.json') }}
 
       - name: Build the web UI
         run: |
@@ -1445,24 +1554,60 @@ jobs:
         with:
           node-version: 24
 
-      # The IOTA island-group list (© RSGB and IOTA Ltd) ships in the installer with IOTA Ltd's
-      # permission but is never committed (src-tauri/resources/iota/README.md, NOTICE), so the
-      # checkout has none. Best-effort, unlike DeepCW: without it the app checks island references
-      # by shape until its first monthly download, so a feed outage must not stop a release. The
-      # script asks again on a 202, a 5xx or no answer at all (15/30/60 s); if it still fails, the
-      # run's summary says so in a heading, not only in an annotation (1.22.0 shipped without the
-      # list unnoticed).
+      # The IOTA island-group and islands lists (© RSGB and IOTA Ltd) ship in the installer with
+      # IOTA Ltd's permission but are never committed (src-tauri/resources/iota/README.md, NOTICE),
+      # so the checkout has none. The script asks again on a 202, a 5xx or no answer at all
+      # (15/30/60 s); even so 1.25.0-beta.1's Linux x86_64 installer shipped without them (202 on
+      # every attempt), as 1.22.0's had. So the last good lists are kept in the Actions cache, and the
+      # script falls back to them ("using the cached copy" in its log), dated as that copy.
+      #
+      # THE CACHE IS FILLED ON MAIN. A tag run reads only caches its own tag saved and main's
+      # (the macos job's tauri-cli note), so iota-cache.yml refreshes main's copy on every push
+      # to main and weekly. The save here serves this run's re-runs only. The key is the two
+      # lists' content, and the restore takes the newest entry. The linux-x86 container installs
+      # zstd so its cache entries match the other jobs' (actions/cache falls back to gzip
+      # without it, and a gzip entry is a different cache).
+      #
+      # FAIL CLOSED. With neither a download nor a usable cached copy, the job FAILS: no
+      # installer ships without the lists. Re-run the job once the server answers.
+      - name: Restore the last good IOTA lists
+        id: iota-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            src-tauri/resources/iota/iota_groups.json
+            src-tauri/resources/iota/iota_islands.json
+            src-tauri/resources/iota/iota_groups.manifest.json
+          key: iota-lists-${{ github.run_id }}
+          restore-keys: iota-lists-
+
       - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
         run: |
-          if ! node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota; then
-            echo "::warning::IOTA island list not staged; this installer ships without it"
+          if ! node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota --fallback src-tauri/resources/iota; then
+            echo "::error::IOTA lists not staged: no download and no usable cached copy"
             {
-              echo "### ⚠️ ${{ github.job }}: this installer ships WITHOUT the IOTA island list"
-              echo "iota-world.org did not hand over groups.json after every retry (see the step's log)."
-              echo "Re-run this job to include it; without it the app checks island references by shape"
-              echo "until its first monthly download."
+              echo "### ${{ github.job }}: stopped, no IOTA lists to ship"
+              echo "iota-world.org did not hand over the lists after every retry, and the Actions cache held"
+              echo "no usable copy (see the step's log). Re-run this job once the server answers."
             } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
+          for f in iota_groups.json iota_islands.json iota_groups.manifest.json; do
+            if [ ! -s "src-tauri/resources/iota/$f" ]; then
+              echo "::error::src-tauri/resources/iota/$f is missing or empty after staging"
+              exit 1
+            fi
+          done
+
+      - name: Keep the IOTA lists for this run's re-runs
+        if: steps.iota-cache.outputs.cache-matched-key != format('iota-lists-{0}', hashFiles('src-tauri/resources/iota/iota_groups.json', 'src-tauri/resources/iota/iota_islands.json'))
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            src-tauri/resources/iota/iota_groups.json
+            src-tauri/resources/iota/iota_islands.json
+            src-tauri/resources/iota/iota_groups.manifest.json
+          key: iota-lists-${{ hashFiles('src-tauri/resources/iota/iota_groups.json', 'src-tauri/resources/iota/iota_islands.json') }}
 
       # The ClubLog key, compiled in as on every other platform (#388). It goes in as a BuildKit
       # secret, which Dockerfile.pi mounts for the one RUN that compiles Nexus; a build arg would
