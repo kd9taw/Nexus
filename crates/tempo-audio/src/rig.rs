@@ -910,6 +910,83 @@ pub fn deadline_passed(e: &std::io::Error) -> bool {
         .is_some_and(|mark| !mark.hamlib)
 }
 
+/// What a PTT line's error carries when rigctld ANSWERED it with a refusal (`RPRT <code>`, any code
+/// but a link fault): the rig, or Hamlib, said no, in the error's own words. The only failed key a
+/// CAT link can report as one that left the transmitter unkeyed ([`Rig::key_definitely_refused`]):
+/// every other failure (no answer in time, a lost connection, a reply that is no `RPRT` at all)
+/// leaves it unknown whether the radio keyed.
+#[derive(Debug)]
+struct KeyRefused {
+    words: String,
+    code: i32,
+}
+
+impl std::fmt::Display for KeyRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.words)
+    }
+}
+
+impl std::error::Error for KeyRefused {}
+
+/// The `RPRT` code rigctld refused a PTT line with, if `e` is that refusal ([`KeyRefused`]).
+pub fn key_refusal_code(e: &std::io::Error) -> Option<i32> {
+    e.get_ref()
+        .and_then(|inner| inner.downcast_ref::<KeyRefused>())
+        .map(|refused| refused.code)
+}
+
+/// Whether a Hamlib refusal code says, by Hamlib's own definition, that the command was rejected
+/// WITHOUT being carried out, so a key answered with it keyed nothing. From Hamlib 4.6.5 `rig.h`
+/// (`enum rig_errcode_e`): Hamlib's own "soft" errors (`RIG_IS_SOFT_ERRCODE`, "caused by invalid
+/// parameters and software/hardware features") except ETRUNC, and the two that say the port or
+/// its configuration could not be used at all:
+///
+/// - -1 EINVAL "invalid parameter", -4 ENIMPL "function not implemented", -9 ERJCTED "Command
+///   rejected by the rig", -11 ENAVAIL "Function not available", -12 ENTARGET "VFO not
+///   targetable", -16 EVFO "Invalid VFO", -17 EDOM "Argument out of domain of func",
+///   -18 EDEPRECATED "Function deprecated", -19 ESECURITY "Security error", -20 EPOWER "Rig not
+///   powered on";
+/// - -2 ECONF "invalid configuration (serial,..)", -22 EACCESS "Access denied -- e.g. port
+///   already in use".
+///
+/// ⛔ Every other code leaves it unknown whether the radio keyed: -3 ENOMEM, -7 EINTERNAL,
+/// -8 EPROTO "Protocol error", -10 ETRUNC "Command performed, but arg truncated", -15 EARG,
+/// -21 ELIMIT, the link faults ([`rprt_is_link_fault`]) and any code Hamlib does not name.
+fn rprt_keyed_nothing(code: i32) -> bool {
+    matches!(code, -1 | -2 | -4 | -9 | -11 | -12 | -20..=-16 | -22)
+}
+
+/// Hamlib's own words for one of its error codes (`rigerror`, Hamlib 4.x `rig.c`), for a refusal
+/// the operator is shown. `None` for a code Hamlib has no words for.
+pub fn hamlib_error_words(code: i32) -> Option<&'static str> {
+    Some(match code {
+        -1 => "Invalid parameter",
+        -2 => "Invalid configuration",
+        -3 => "Memory shortage",
+        -4 => "Feature not implemented",
+        -5 => "Communication timed out",
+        -6 => "IO error",
+        -7 => "Internal Hamlib error",
+        -8 => "Protocol error",
+        -9 => "Command rejected by the rig",
+        -10 => "Command performed, but arg truncated, result not guaranteed",
+        -11 => "Feature not available",
+        -12 => "Target VFO unaccessible",
+        -13 => "Communication bus error",
+        -14 => "Communication bus collision",
+        -15 => "NULL RIG handle or invalid pointer parameter",
+        -16 => "Invalid VFO",
+        -17 => "Argument out of domain of func",
+        -18 => "Function deprecated",
+        -19 => "Security error password not provided or crypto failure",
+        -20 => "Rig is not powered on",
+        -21 => "Limit exceeded",
+        -22 => "Access denied",
+        _ => return None,
+    })
+}
+
 /// What rigctld's answer to a PTT line (`T 1`, `T 3`, `T 0`) says. `RPRT 0`, or an empty reply, is
 /// done. Any other code is the rig, or Hamlib, refusing it, except Hamlib's own "the rig did not
 /// answer" ([`rprt_is_link_fault`]): rigctld sent the line on and heard nothing back, so the radio
@@ -929,7 +1006,9 @@ fn ptt_reply(reply: &str) -> std::io::Result<()> {
                 hamlib: true,
             },
         ),
-        _ => std::io::Error::other(words),
+        Some(code) => std::io::Error::other(KeyRefused { words, code }),
+        // A reply that is no `RPRT` line: not a refusal anyone can be sure of.
+        None => std::io::Error::other(words),
     })
 }
 
@@ -1037,6 +1116,22 @@ impl Rig {
         #[cfg(feature = "serial")]
         {
             self.serial = None;
+        }
+    }
+    /// Whether `e`, the error of a key-down on this rig, means the transmitter was DEFINITELY not
+    /// keyed: rigctld answered the line with a refusal that keyed nothing ([`key_refusal_code`],
+    /// [`rprt_keyed_nothing`]), or the serial PTT
+    /// port would not open, so no line was raised. Anything else is not known to have left it
+    /// unkeyed (no answer in time, a lost connection, a line write a port that is open refused)
+    /// and answers `false`, so a caller holding receive for a key holds it for those. Reads only.
+    pub fn key_definitely_refused(&self, e: &std::io::Error) -> bool {
+        match &self.ptt_mode {
+            PttMode::Cat | PttMode::CatData => key_refusal_code(e).is_some_and(rprt_keyed_nothing),
+            #[cfg(feature = "serial")]
+            PttMode::Serial { .. } => self.serial.is_none(),
+            #[cfg(not(feature = "serial"))]
+            PttMode::Serial { .. } => false,
+            PttMode::Vox => false,
         }
     }
     /// How this rig is currently keyed (for the handoff to verify an adopted rig can key).
@@ -5264,6 +5359,51 @@ mod tests {
             );
         }
         assert!(super::ptt_reply("RPRT 0\n").is_ok(), "RPRT 0 keyed it");
+    }
+
+    /// Only an `RPRT` refusal is a key known to have keyed nothing: Hamlib's own "the rig did not
+    /// answer", a reply that is no `RPRT` at all and a rigctld that cannot be reached are not
+    /// known, so a caller holding receive for a key keeps holding it. The words are unchanged.
+    #[test]
+    fn only_a_refusal_answered_is_a_key_known_to_have_keyed_nothing() {
+        let rig = Rig::rigctld("127.0.0.1:1");
+        for code in [-1, -2, -4, -9, -11, -12, -16, -17, -18, -19, -20, -22] {
+            let e = super::ptt_reply(&format!("RPRT {code}\n")).expect_err("premise: not keyed");
+            assert_eq!(super::key_refusal_code(&e), Some(code));
+            assert!(rig.key_definitely_refused(&e), "RPRT {code}");
+            assert_eq!(
+                e.to_string(),
+                format!("rigctld PTT error: \"RPRT {code}\\n\"")
+            );
+            assert_eq!(
+                e.kind(),
+                std::io::ErrorKind::Other,
+                "still a refusal to every caller"
+            );
+        }
+        for code in [-5, -6, -13, -14] {
+            let e = super::ptt_reply(&format!("RPRT {code}\n")).expect_err("premise: not keyed");
+            assert!(!rig.key_definitely_refused(&e), "RPRT {code} is not known");
+        }
+        // ⛔ Refusals that can come after the command reached the radio: their words are kept for
+        // the operator, but the key is not known to have keyed nothing.
+        for code in [-3, -7, -8, -10, -15, -21] {
+            let e = super::ptt_reply(&format!("RPRT {code}\n")).expect_err("premise: not keyed");
+            assert_eq!(super::key_refusal_code(&e), Some(code));
+            assert!(!rig.key_definitely_refused(&e), "RPRT {code} is not known");
+        }
+        let garbled = super::ptt_reply("what\n").expect_err("premise: not keyed");
+        assert!(!rig.key_definitely_refused(&garbled), "{garbled}");
+        let unsent = Rig::rigctld("127.0.0.1:1")
+            .ptt(true)
+            .expect_err("premise: no rigctld");
+        assert!(!rig.key_definitely_refused(&unsent), "{unsent}");
+        assert!(!Rig::vox().key_definitely_refused(&unsent), "VOX");
+        assert_eq!(
+            super::hamlib_error_words(-11),
+            Some("Feature not available")
+        );
+        assert_eq!(super::hamlib_error_words(-99), None);
     }
 
     #[test]

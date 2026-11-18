@@ -4184,6 +4184,20 @@ const PTT_UNCONFIRMED: (AudioErrorKind, &str) = (
     "The rig did not answer the PTT key in time — check the CAT link to the radio.",
 );
 
+/// What an over's key is called when Nexus's own daemon (native CI-V, Icom network, Flex or TCI)
+/// answered it with no answer ([`RadioLoop::daemon_said_no_answer`]): the radio's ack never came,
+/// or the link or session went away under the key. The over is dropped, as when those daemons
+/// answered it as a refusal; [`KeyUp::Refused`] carries these words first, for the log and the PTT
+/// line ([`PTT_UNCONFIRMED_DROPPED`]).
+const DAEMON_NO_ANSWER: &str = "the radio didn't confirm PTT";
+
+/// The PTT line for an over dropped because Nexus's own daemon had no answer to its key
+/// ([`DAEMON_NO_ANSWER`]): not confirmed, and nothing was sent.
+const PTT_UNCONFIRMED_DROPPED: (AudioErrorKind, &str) = (
+    AudioErrorKind::PttUnconfirmed,
+    "The radio didn't confirm PTT, so nothing was sent — check the CAT link to the radio.",
+);
+
 /// The PTT line for a key that is not a slot over, refused because Split Operation could not put
 /// the radio's TX VFO back on the dial first (`RadioLoop::split_ready_for_a_non_slot_key`).
 const PTT_SPLIT_NOT_READY: (AudioErrorKind, &str) = (
@@ -4748,6 +4762,13 @@ struct RadioLoop {
     sstv_feed: Option<SstvFeed>,
     /// Last manual-PTT (live phone) state we applied to the rig — only key on change.
     manual_ptt_applied: bool,
+    /// The key-down that set `manual_ptt_applied` was DEFINITELY not taken: the radio (or Hamlib,
+    /// or the program standing in for it) refused it, the serial PTT port would not open, or the
+    /// split was not ready, so nothing keyed ([`Rig::key_definitely_refused`]). Only the receive
+    /// hold reads it ([`Self::manual_ptt_may_be_on_air`]); `manual_ptt_applied` stays the applied
+    /// state, so a refused key is still not tried again while it is held, and every other guard
+    /// that reads it still stands down. Meaningful only while `manual_ptt_applied` is true.
+    manual_ptt_refused: bool,
     /// Last RF power fraction we pushed to the rig — only set on change.
     last_rf_power: Option<f32>,
     /// Last mic-gain fraction we pushed to the rig — only set on change.
@@ -5647,6 +5668,7 @@ impl RadioLoop {
             rtty_keyer: None,
             sstv_feed: None,
             manual_ptt_applied: false,
+            manual_ptt_refused: false,
             last_rf_power: None,
             last_mic_gain: None,
             last_nr_level: None,
@@ -7247,6 +7269,11 @@ impl RadioLoop {
     fn report_key(&mut self, engine: &Arc<Mutex<Engine>>, key: &KeyUp) {
         if *key == KeyUp::NoAnswer {
             self.report_ptt_as(engine, Some(PTT_UNCONFIRMED));
+        } else if matches!(key, KeyUp::Refused(why) if why.starts_with(DAEMON_NO_ANSWER)) {
+            // Dropped for a daemon's no answer: said as not confirmed, not as not accepted.
+            if !std::mem::take(&mut self.key_refused_for_split) {
+                self.report_ptt_as(engine, Some(PTT_UNCONFIRMED_DROPPED));
+            }
         } else {
             self.report_ptt(engine, key.warns());
         }
@@ -7315,6 +7342,15 @@ impl RadioLoop {
     /// the same question ([`crate::slot::key_slot_transmitter`]).
     fn holds_tx(&self) -> bool {
         self.tx_until_ms.is_some() || self.manual_ptt_applied
+    }
+
+    /// Whether the operator's PTT may have the transmitter keyed, for the receive hold: applied,
+    /// and not a key known to have been refused ([`Self::manual_ptt_refused`]). ⛔ FAILS SAFE: a
+    /// key whose outcome is not known (no answer in time, a lost link, a line write the port
+    /// refused) counts as keyed, and holds receive as it always did. Only a definite refusal, which
+    /// put nothing on the air, lets the receiver be shown while the press is held.
+    fn manual_ptt_may_be_on_air(&self) -> bool {
+        self.manual_ptt_applied && !self.manual_ptt_refused
     }
 
     /// Tell the engine the deadline this loop holds the key to (`tx_until_ms`), on a change: a
@@ -7693,6 +7729,26 @@ impl RadioLoop {
         ms
     }
 
+    /// Whether `e`, a key's error, is Nexus's own daemon answering it with no answer (`RPRT -5`
+    /// from the native CI-V daemon, the Icom network client, the Flex client or the TCI client:
+    /// the radio's ack lost, or the link or session gone under the key), rather than Hamlib's
+    /// rigctld saying the rig did not answer, or Nexus's own deadline passing. The radio may be
+    /// keyed either way, so receive is held for it ([`Rig::key_definitely_refused`] is false); it
+    /// differs only in what an over does with it ([`Self::key_up`]).
+    fn daemon_said_no_answer(&self, e: &std::io::Error) -> bool {
+        crate::rig::no_answer_in_time(e)
+            && !crate::rig::deadline_passed(e)
+            && matches!(
+                self.rigctld_proc,
+                Some(
+                    CatDaemon::Native(_)
+                        | CatDaemon::IcomLan(_)
+                        | CatDaemon::Flex(_)
+                        | CatDaemon::Tci(_)
+                )
+            )
+    }
+
     /// [`Self::key_over`]'s second half: the key itself, once Rig split is ready for it.
     fn key_up(&self, rig: &mut Rig, plain: bool) -> KeyUp {
         let held = self.holds_tx();
@@ -7706,6 +7762,12 @@ impl RadioLoop {
         match key {
             Ok(()) => KeyUp::Keyed,
             Err(_) if held => KeyUp::Held,
+            // ⛔ A daemon of Nexus's own with no answer to the key drops the over, as it did when
+            // those daemons answered the silence as a refusal. Only Hamlib's own no answer, and
+            // Nexus's deadline passing, still play with the warning.
+            Err(e) if self.daemon_said_no_answer(&e) => {
+                KeyUp::Refused(format!("{DAEMON_NO_ANSWER} ({e})"))
+            }
             Err(e) if crate::rig::no_answer_in_time(&e) => KeyUp::NoAnswer,
             // Nexus's TCI client says why it kept the key off the air, in place of the rigctld
             // answer (`RPRT -1`), which carries no reason.
@@ -15869,6 +15931,22 @@ impl RadioLoop {
                     rig.ptt_plain(false)
                 };
                 let ptt_failed = keyed.is_err();
+                // A key that DEFINITELY put nothing on the air: refused for the split before any
+                // line went out, or refused by the radio or the port. Read only by the receive
+                // hold; unknown is not refused. ⛔ Not through OmniRig: its shim answers any COM
+                // failure as a refusal, one that came after the key reached the radio included.
+                let refused = ptt
+                    && (split_ready.is_err()
+                        || (!self.applied.is_omnirig()
+                            && keyed.as_ref().is_err_and(|e| rig.key_definitely_refused(e))));
+                // The diagnostic log's word on why: once per press, since a failed key is not
+                // tried again while it is held. Reporting only.
+                if let (true, Err(e)) = (ptt, &keyed) {
+                    tempo_core::applog::warn(
+                        "ptt",
+                        &ptt_diag::failed_key_line(&self.applied, rig.ptt_mode(), e, refused),
+                    );
+                }
                 if ptt {
                     // A press Nexus's own Flex client kept off the air because the radio still
                     // takes its transmit audio from the DAX Nexus set, not the mic (`flex::shim`):
@@ -15890,13 +15968,21 @@ impl RadioLoop {
                         // Its own line, said where it was refused.
                     } else if keyed.as_ref().is_err_and(crate::rig::no_answer_in_time) {
                         self.report_ptt_as(engine, Some(PTT_UNCONFIRMED));
+                    } else if let (Err(e), None) = (&keyed, &mic_not_back) {
+                        // Not accepted, with what came back after the advice.
+                        let line = format!(
+                            "The rig didn't accept PTT — check your PTT method and CAT/port. {}",
+                            ptt_diag::refused_key_answer(&self.applied, rig.ptt_mode(), e)
+                        );
+                        self.report_ptt_as(engine, Some((AudioErrorKind::Ptt, &line)));
                     } else {
-                        self.report_ptt(engine, ptt_failed && mic_not_back.is_none());
+                        self.report_ptt(engine, false);
                     }
                 } else {
                     self.report_ptt(engine, false);
                 }
                 self.manual_ptt_applied = ptt;
+                self.manual_ptt_refused = refused;
             }
             // ⚠️ THE LEVEL PUSHES FROM HERE ON (power, mic gain, the receive levels, NR, notch,
             // AGC) ARE NOT held on a switch the handoff has not seen (W0). That is an open
@@ -16652,8 +16738,11 @@ impl RadioLoop {
         // cannot know any of this (its capture list is its safety argument), so the flag is
         // set here, at the one place that decides keying. Covers slot TX, the tune carrier
         // and manual PTT alike; a missed clear self-heals on the next 20 ms tick.
+        // The operator's PTT holds it unless its key was definitely refused: a refused key
+        // that stays held (the dock's Lock) put nothing on the air, and holding receive for it
+        // froze the scope until the hold's fuse blanked it.
         self.spectrum_feed.set_tx_hold(
-            self.tx_until_ms.is_some() || self.tuning_keyed || self.manual_ptt_applied,
+            self.tx_until_ms.is_some() || self.tuning_keyed || self.manual_ptt_may_be_on_air(),
         );
         // ⚠ THIS GUARD IS HELD ACROSS BLOCKING CAT I/O for the rest of the tick —
         // set_freq, set_split, several ptt() paths and finish_boundary all run
@@ -22143,6 +22232,7 @@ mod tests {
     mod cw_speed_match;
     mod cw_stop;
     mod cw_tune_keyer;
+    mod daemon_no_answer;
     mod decode_in_flight;
     mod failed_unkey;
     mod filter_width;

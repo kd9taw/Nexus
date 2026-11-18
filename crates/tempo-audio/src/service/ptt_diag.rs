@@ -358,9 +358,123 @@ impl RadioLoop {
     }
 }
 
+/// The diagnostic log's line for a key-down of the operator's PTT that failed: what came back,
+/// whether the key was refused outright (`refused`, [`Rig::key_definitely_refused`]) or may still
+/// have keyed the radio, and how this radio is keyed. A serial port is named by its last path
+/// segment only ([`scrub_port`]): a port path can sit under a home directory.
+pub(super) fn failed_key_line(
+    t: &Transport,
+    mode: &PttMode,
+    e: &std::io::Error,
+    refused: bool,
+) -> String {
+    let outcome = if refused {
+        "refused, nothing keyed"
+    } else {
+        "not confirmed, the radio may have keyed"
+    };
+    let cause = scrub_port(&e.to_string(), mode);
+    let hamlib = crate::rig::key_refusal_code(e)
+        .filter(|_| key_answerer(t).is_none())
+        .and_then(crate::rig::hamlib_error_words)
+        .map(|words| format!(" (Hamlib: {words})"))
+        .unwrap_or_default();
+    format!(
+        "manual PTT key {outcome}: {cause}{hamlib}; PTT method {}, CAT through {}",
+        scrub_port(&method_words(t, mode), mode),
+        cat_words(t)
+    )
+}
+
+/// The radio's answer to a key-down of the operator's PTT that it did not accept, in words for the
+/// status lane's PTT line, after its advice: what Hamlib (or the program standing in for it) said,
+/// or what the serial PTT port or the link said. A serial port is named as [`failed_key_line`]
+/// names it.
+pub(super) fn refused_key_answer(t: &Transport, mode: &PttMode, e: &std::io::Error) -> String {
+    match (crate::rig::key_refusal_code(e), key_answerer(t)) {
+        (Some(code), None) => match crate::rig::hamlib_error_words(code) {
+            Some(words) => format!("Hamlib answered: {words} (RPRT {code})."),
+            None => format!("Hamlib answered RPRT {code}."),
+        },
+        (Some(code), Some(who)) => format!("{who} answered RPRT {code}."),
+        (None, _) if matches!(mode, PttMode::Serial { .. }) => {
+            format!("The PTT port said: {}.", scrub_port(&e.to_string(), mode))
+        }
+        (None, _) => format!("What came back: {}.", scrub_port(&e.to_string(), mode)),
+    }
+}
+
+/// Who answers a CAT key that is not Hamlib's rigctld, by name; `None` for Hamlib, whose answer
+/// codes carry Hamlib's own words ([`crate::rig::hamlib_error_words`]).
+fn key_answerer(t: &Transport) -> Option<&'static str> {
+    if t.is_tci() {
+        Some("The TCI client")
+    } else if flex_client_ip(t).is_some() {
+        Some("Nexus's own Flex client")
+    } else if t.is_icom_lan() {
+        Some("The Icom network client")
+    } else if native_civ_addr(t).is_some() {
+        Some("Nexus's own CI-V daemon")
+    } else if t.is_omnirig() {
+        Some("OmniRig")
+    } else {
+        None
+    }
+}
+
+/// `text` with a serial PTT port's name (as stored, and as it opens: `~/` expanded) cut to its last
+/// path segment, so no home directory, and no username in it, reaches the log or the screen.
+fn scrub_port(text: &str, mode: &PttMode) -> String {
+    let PttMode::Serial { port, .. } = mode else {
+        return text.to_string();
+    };
+    let short = port
+        .rsplit(['/', '\\'])
+        .find(|segment| !segment.is_empty())
+        .unwrap_or(port);
+    let mut out = text.to_string();
+    for name in [crate::ports::heal_stored_port(port.clone()), port.clone()] {
+        if !name.is_empty() && name != short {
+            out = out.replace(&name, short);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A serial PTT port under a home directory reaches neither the log line nor the status line
+    /// with its path: only its last segment does, with what the port said.
+    #[test]
+    fn a_failed_key_names_a_serial_port_by_its_last_segment_only() {
+        let t = Transport::from_cfg(&super::super::RadioConfig::default());
+        let port = "/home/someone/vports/ptt0";
+        let mode = PttMode::Serial {
+            port: port.into(),
+            line: SerialLine::Rts,
+        };
+        let e = std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!("couldn't open {port} at any baud rate — the system said: Access is denied."),
+        );
+        let line = failed_key_line(&t, &mode, &e, true);
+        let answer = refused_key_answer(&t, &mode, &e);
+        for text in [&line, &answer] {
+            assert!(!text.contains("/home/someone"), "{text}");
+            assert!(
+                text.contains("ptt0") && text.contains("Access is denied."),
+                "{text}"
+            );
+        }
+        assert!(
+            line.starts_with("manual PTT key refused, nothing keyed: "),
+            "{line}"
+        );
+        assert!(line.contains("PTT method RTS on ptt0"), "{line}");
+        assert!(answer.starts_with("The PTT port said: "), "{answer}");
+    }
 
     #[test]
     fn a_key_and_its_unkey_are_one_line_each_and_a_held_key_is_none() {

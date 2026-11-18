@@ -1062,13 +1062,6 @@ impl FlexShim {
         }
     }
 
-    /// Run a start through the core's admission; `false` for any refusal.
-    fn start(&self, start: TxStart) -> bool {
-        self.conn
-            .upgrade()
-            .is_some_and(|conn| conn.start(start).is_ok())
-    }
-
     /// `u TUNER`: whether the radio's tuner is in line, answered only while this client runs the
     /// radio's ATU and the radio reports a tuner fitted; otherwise not at all, so no ATU button is
     /// offered, as before the switch. In line once the radio's last cycle matched
@@ -1517,25 +1510,39 @@ impl RigBackend for FlexShim {
     }
 
     fn set_ptt(&self, on: bool) -> bool {
-        if on {
-            if let Some(why) = self
-                .conn
-                .upgrade()
-                .and_then(|conn| split_blocks_key(&conn, &self.state))
-            {
-                let why = format!("not keying: {why}");
-                tempo_core::applog::warn("cat", &format!("Flex client: {why}"));
-                self.refuse(why, None);
-                return false;
-            }
-            if let Some((why, cause)) = self.audio_refuses_key() {
-                tempo_core::applog::warn("cat", &format!("Flex client: {why}"));
-                self.refuse(why, Some(cause));
-                return false;
-            }
-            self.start(TxStart::Key)
-        } else {
-            self.end_ours()
+        self.try_set_ptt(on).is_ok()
+    }
+
+    /// [`Self::set_ptt`] with its outcome told apart: a key admission or the audio route refused
+    /// is a refusal; a session that went away under the start (`Err(None)`) is no answer, since
+    /// the start may already have gone to the radio.
+    fn try_set_ptt(&self, on: bool) -> Result<(), SetFault> {
+        if !on {
+            return if self.end_ours() {
+                Ok(())
+            } else {
+                Err(SetFault::Refused)
+            };
+        }
+        if let Some(why) = self
+            .conn
+            .upgrade()
+            .and_then(|conn| split_blocks_key(&conn, &self.state))
+        {
+            let why = format!("not keying: {why}");
+            tempo_core::applog::warn("cat", &format!("Flex client: {why}"));
+            self.refuse(why, None);
+            return Err(SetFault::Refused);
+        }
+        if let Some((why, cause)) = self.audio_refuses_key() {
+            tempo_core::applog::warn("cat", &format!("Flex client: {why}"));
+            self.refuse(why, Some(cause));
+            return Err(SetFault::Refused);
+        }
+        match self.conn.upgrade().map(|conn| conn.start(TxStart::Key)) {
+            Some(Ok(_)) => Ok(()),
+            Some(Err(Some(_))) | None => Err(SetFault::Refused),
+            Some(Err(None)) => Err(SetFault::NoAnswer),
         }
     }
 

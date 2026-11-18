@@ -722,6 +722,12 @@ pub(crate) mod tests_support {
         pub drop_split_writes: u32,
         /// Fault injection — the next N split writes, the same frames, are answered NG (`FA`).
         pub nak_split_writes: u32,
+        /// Fault injection — the next N PTT writes (`1C 00 <on>`) get no answer at all: a radio
+        /// that may have keyed and whose ack was lost. Otherwise this fixture answers PTT NG, as
+        /// it answers every command it does not script.
+        pub drop_ptt_writes: u32,
+        /// Ack PTT writes (`1C 00 <on>`) instead of answering them NG: a radio that keys.
+        pub ack_ptt: bool,
         /// Fault injection — the next N `26` READS are answered NG (`FA`). The IC-9700 answers
         /// every `26` that way in satellite mode ("In the satellite mode, 'FA' (NG) is returned",
         /// A7508-3EX-4, command 26).
@@ -836,6 +842,14 @@ pub(crate) mod tests_support {
         if data_write && r.nak_data_writes > 0 {
             r.nak_data_writes -= 1;
             return Some((0xFA, Vec::new()));
+        }
+        // See `Regs::drop_ptt_writes`.
+        if cmd == 0x1C && data.first() == Some(&0x00) && data.len() > 1 && r.drop_ptt_writes > 0 {
+            r.drop_ptt_writes -= 1;
+            return Some((SILENT, Vec::new()));
+        }
+        if cmd == 0x1C && data.first() == Some(&0x00) && data.len() > 1 && r.ack_ptt {
+            return None;
         }
         // See `Regs::drop_split_writes` and `Regs::nak_split_writes`.
         let split_write = match cmd {
@@ -1336,6 +1350,8 @@ pub(crate) mod tests_support {
                         nak_data_writes: 0,
                         drop_split_writes: 0,
                         nak_split_writes: 0,
+                        drop_ptt_writes: 0,
+                        ack_ptt: false,
                         nak_band_mode_reads: 0,
                         band_mode_main_only: false,
                         off: false,
