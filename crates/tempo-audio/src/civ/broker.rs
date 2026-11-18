@@ -1506,11 +1506,19 @@ impl RigBackend for CivBackend {
     /// `nothing_new_rides_between_the_go_and_ptt_on` and
     /// `an_unkey_never_waits_on_the_band_lock`.
     fn set_ptt(&self, on: bool) -> bool {
+        self.try_set_ptt(on).is_ok()
+    }
+
+    /// [`Self::set_ptt`] with its outcome told apart: the radio's `FA` (or a key refused before
+    /// any frame goes out) is a refusal; no `FB` before the deadline, or no engine left, is no
+    /// answer, since the frame may already be on the wire and the radio keyed. The frame is the
+    /// same one either way.
+    fn try_set_ptt(&self, on: bool) -> Result<(), SetFault> {
         // A key is refused where the link may not key; an unkey never is.
         if on && self.keying_refused("T 1").is_some() {
-            return false;
+            return Err(SetFault::Refused);
         }
-        self.ack(commands::set_ptt(self.addr, on))
+        self.answer(commands::set_ptt(self.addr, on))
     }
 
     fn set_vfo(&self, vfo: &str) -> bool {
@@ -3562,6 +3570,37 @@ mod tests {
             ),
             ("RPRT 0\n", "RPRT -1\n", "RPRT -5\n", 7_074_000)
         );
+    }
+
+    /// ⭐ A KEY THE RADIO DID NOT ANSWER IS NOT A KEY IT REFUSED. The PTT frame went out; with no
+    /// ack before the deadline the radio may be keyed, so `T 1` is answered Hamlib's `RPRT -5`,
+    /// which Nexus's own client reads as no answer in time. It was `RPRT -1`, a refusal, which the
+    /// radio loop took for a key that keyed nothing. The NG stays `RPRT -1`. The frame is the same
+    /// `1C 00 01` both times.
+    #[test]
+    fn a_key_the_radio_does_not_answer_is_rprt_minus_5_and_an_ng_stays_rprt_minus_1() {
+        use crate::rigctld_server::{handle_command, Handled};
+        let (_e, b, regs) = backend_on(0x94, Some(IcomModel::Ic7300));
+        let reply = |line: &str| match handle_command(line, &*b) {
+            Handled::Reply(r) => r,
+            Handled::Close => panic!("{line} closed the connection"),
+        };
+        // This fixture answers PTT NG unless told to say nothing.
+        let refused = reply("T 1");
+        regs.lock().unwrap().drop_ptt_writes = 1;
+        let unanswered = reply("T 1");
+        assert_eq!(
+            (refused.as_str(), unanswered.as_str()),
+            ("RPRT -1\n", "RPRT -5\n")
+        );
+        let keys = regs
+            .lock()
+            .unwrap()
+            .acted
+            .iter()
+            .filter(|(_, cmd, data)| *cmd == 0x1C && data.as_slice() == [0x00, 0x01])
+            .count();
+        assert_eq!(keys, 2, "the key frame went out both times, unchanged");
     }
 
     /// ⭐ A MODE THE RADIO DID NOT ANSWER IS NOT A MODE IT REFUSED. Three mode writes through the

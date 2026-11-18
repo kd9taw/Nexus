@@ -88,6 +88,11 @@ const SLICE: Duration = Duration::from_millis(20);
 /// The words for a key or a write once the session is gone.
 const CLOSED: &str = "the connection to the SDR program is closed";
 
+/// A key refused before it went out, in its words ([`TciShim::key`]).
+fn refused(why: String) -> (String, SetFault) {
+    (why, SetFault::Refused)
+}
+
 /// A rigctld mode word as the server's: the data modes have TCI names of their own, CW is the upper
 /// side where a server names both, FM is whichever FM the server offers, and the rest are the same
 /// word. `None` when the server does not offer it (its `modulations_list`; the first name when it
@@ -409,44 +414,47 @@ impl TciShim {
         *lock(&self.state.refused) = Some((Instant::now(), why));
     }
 
-    /// Key an over, or say why not (see the module notes). The radio loop has run every engine
-    /// gate before it sent `T 1`.
-    fn key(&self) -> Result<(), String> {
+    /// Key an over, or say why not (see the module notes), and whether that was a refusal or the
+    /// session going away after the key was sent ([`SetFault::NoAnswer`]: it may be keyed). The
+    /// radio loop has run every engine gate before it sent `T 1`.
+    fn key(&self) -> Result<(), (String, SetFault)> {
         let _in_flight = KeyInFlight::new(&self.state.keys_in_flight);
         if self.state.closing.load(Ordering::SeqCst) {
-            return Err("not keyed: the TCI connection is closing".into());
+            return Err(refused("not keyed: the TCI connection is closing".into()));
         }
         let trx = self.trx;
         let reported = self
             .read(|s| Some(s.model.trx(trx).modulation.known().cloned()))
-            .ok_or_else(|| format!("not keyed: {CLOSED}"))?;
+            .ok_or_else(|| refused(format!("not keyed: {CLOSED}")))?;
         let asked = lock(&self.state.asked_mode).clone();
         let Some(mode) = asked.clone().or_else(|| reported.clone()) else {
-            return Err("not keyed: the SDR program has not said which mode it is in".into());
+            return Err(refused(
+                "not keyed: the SDR program has not said which mode it is in".into(),
+            ));
         };
         let voice = self.state.voice.load(Ordering::SeqCst);
         let start = match class(mode.as_str()) {
             Class::Cw => {
-                return Err(format!(
+                return Err(refused(format!(
                     "not keyed in {}: CW through the SDR program's own keyer is not built yet; \
                      the soundcard keyer sends CW over TCI",
                     rigctld_mode(mode.as_str())
-                ))
+                )))
             }
             Class::Other => {
-                return Err(format!(
+                return Err(refused(format!(
                     "not keyed: the SDR program is in {}, which Nexus does not transmit in",
                     rigctld_mode(mode.as_str())
-                ))
+                )))
             }
             Class::Digital if self.state.audio => TxStart::Audio,
             Class::Voice if voice && self.state.audio => TxStart::Audio,
             Class::Digital | Class::Voice => TxStart::Microphone,
         };
         if start == TxStart::Audio && !self.state.tx_route.load(Ordering::SeqCst) {
-            return Err(
+            return Err(refused(
                 "not keyed: Nexus's transmit audio is not connected to the SDR program yet".into(),
-            );
+            ));
         }
         // The mode the radio loop asked for, put back where the server reports another (a band
         // change restored the band's own): the source above was chosen for it.
@@ -461,19 +469,19 @@ impl TciShim {
                 |s| s.model.trx(trx).modulation.known() == Some(&asked),
             );
             if put_back.is_err() {
-                return Err(format!(
+                return Err(refused(format!(
                     "not keyed: the SDR program reports {} where Nexus set {}, and did not take \
                      {} back in time",
                     reported.map_or_else(|| "no mode".to_string(), |m| rigctld_mode(m.as_str())),
                     rigctld_mode(asked.as_str()),
                     rigctld_mode(asked.as_str())
-                ));
+                )));
             }
         }
         let conn = self
             .conn
             .upgrade()
-            .ok_or_else(|| format!("not keyed: {CLOSED}"))?;
+            .ok_or_else(|| refused(format!("not keyed: {CLOSED}")))?;
         match conn.key(start) {
             Ok(()) => Ok(()),
             // The drive Nexus set, put back where the server reports more (a band restore) or
@@ -492,23 +500,23 @@ impl TciShim {
             )) => {
                 drop(conn);
                 if self.drive(ceiling, self.state.reassert).is_err() {
-                    return Err(format!(
+                    return Err(refused(format!(
                         "not keyed: the SDR program's drive is not the {ceiling} Nexus set, and it \
                          did not take {ceiling} back in time"
-                    ));
+                    )));
                 }
                 let conn = self
                     .conn
                     .upgrade()
-                    .ok_or_else(|| format!("not keyed: {CLOSED}"))?;
+                    .ok_or_else(|| refused(format!("not keyed: {CLOSED}")))?;
                 match conn.key(start) {
                     Ok(()) => Ok(()),
-                    Err(Some(refusal)) => Err(format!("not keyed: {refusal}")),
-                    Err(None) => Err(format!("not keyed: {CLOSED}")),
+                    Err(Some(refusal)) => Err(refused(format!("not keyed: {refusal}"))),
+                    Err(None) => Err((format!("not keyed: {CLOSED}"), SetFault::NoAnswer)),
                 }
             }
-            Err(Some(refusal)) => Err(format!("not keyed: {refusal}")),
-            Err(None) => Err(format!("not keyed: {CLOSED}")),
+            Err(Some(refusal)) => Err(refused(format!("not keyed: {refusal}"))),
+            Err(None) => Err((format!("not keyed: {CLOSED}"), SetFault::NoAnswer)),
         }
     }
 
@@ -643,17 +651,24 @@ impl RigBackend for TciShim {
     }
 
     fn set_ptt(&self, on: bool) -> bool {
+        self.try_set_ptt(on).is_ok()
+    }
+
+    /// [`Self::set_ptt`] with its outcome told apart: a key refused before it goes out is a
+    /// refusal; a session that went away under the key is no answer ([`Self::key`]).
+    fn try_set_ptt(&self, on: bool) -> Result<(), SetFault> {
         if !on {
             // Never gated: nothing is asked before the stop goes out.
-            return self.end_ours();
+            return if self.end_ours() {
+                Ok(())
+            } else {
+                Err(SetFault::Refused)
+            };
         }
-        match self.key() {
-            Ok(()) => true,
-            Err(why) => {
-                self.refuse(why);
-                false
-            }
-        }
+        self.key().map_err(|(why, fault)| {
+            self.refuse(why);
+            fault
+        })
     }
 
     fn set_vfo(&self, vfo: &str) -> bool {

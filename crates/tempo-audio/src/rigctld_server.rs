@@ -103,6 +103,17 @@ pub trait RigBackend: Send + Sync {
         }
     }
     fn set_ptt(&self, on: bool) -> bool;
+    /// The key or unkey as `T` relays it: [`Self::set_ptt`], told apart the way
+    /// [`Self::try_set_freq`] tells a dial apart. ⛔ A key whose line went out and drew no answer
+    /// is NOT a refusal: the radio may be keyed, and Nexus's client must hear `RPRT -5`, which it
+    /// reads as no answer in time, never `RPRT -1`, which it reads as a key that keyed nothing.
+    ///
+    /// The default is [`Self::set_ptt`], whose `false` is a refusal: a backend that cannot tell
+    /// sends exactly the bytes it always sent. The native CI-V daemon, the Flex client and the TCI
+    /// client override it. The keying itself is the same either way.
+    fn try_set_ptt(&self, on: bool) -> Result<(), SetFault> {
+        refused_unless(self.set_ptt(on))
+    }
     fn set_vfo(&self, _vfo: &str) -> bool {
         true
     }
@@ -761,12 +772,10 @@ pub fn handle_command(line: &str, backend: &dyn RigBackend) -> Handled {
                 // RIG_PTT_ON=1, RIG_PTT_ON_MIC=2, RIG_PTT_ON_DATA=3 are all key-down;
                 // only 0 (RIG_PTT_OFF) is key-up. WSJT-X with a Rear/Data audio source
                 // sends `T 3`, so keying on `s == "1"` would silently never TX.
-                Some("T") => rprt(
-                    p.next()
-                        .and_then(|s| s.parse::<i32>().ok())
-                        .map(|v| backend.set_ptt(v != 0))
-                        .unwrap_or(false),
-                ),
+                Some("T") => match p.next().and_then(|s| s.parse::<i32>().ok()) {
+                    Some(v) => rprt_set(backend.try_set_ptt(v != 0)),
+                    None => rprt(false),
+                },
                 Some("s") => format!("{}\n{}\n", backend.split() as u8, backend.split_vfo()),
                 Some("i") => match backend.split_freq_hz() {
                     Some(hz) => format!("{hz}\n"),

@@ -1497,6 +1497,37 @@ fn a_phone_ptt_not_answered_in_time_still_holds_receive() {
     }
 }
 
+/// Each class of Hamlib refusal through the loop: a code that says the rig rejected the command
+/// without carrying it out (an invalid or rejected command, a feature not available) lets receive
+/// go; ⛔ a code that can come after the command reached the radio (-3 ENOMEM, -7 EINTERNAL,
+/// -8 EPROTO, -10 ETRUNC "Command performed") keeps it held, as for a key. Every one of them is
+/// still not accepted on the status line, with Hamlib's words.
+#[test]
+fn only_a_hamlib_code_that_keyed_nothing_lets_receive_go() {
+    for (code, keyed_nothing) in [
+        (-1, true),
+        (-9, true),
+        (-11, true),
+        (-3, false),
+        (-7, false),
+        (-8, false),
+        (-10, false),
+    ] {
+        let mut s = Scene::new(Key::Answers(code), |e| {
+            phone(e);
+            e.set_ptt(true);
+        });
+        s.run_to(300.0);
+        assert_eq!(s.keys(), 1, "RPRT {code}: premise: one key");
+        let banner = s.banner().unwrap_or_default();
+        assert!(
+            banner.starts_with(REFUSED) && banner.contains(&format!("(RPRT {code})")),
+            "RPRT {code}: {banner}"
+        );
+        assert_eq!(receive_shown(&s), keyed_nothing, "RPRT {code}");
+    }
+}
+
 /// ⭐ A SERIAL PTT PORT THAT WILL NOT OPEN raised no line, so it holds no receive either, and the
 /// status line says what the port said, naming it by its last path segment only.
 #[cfg(feature = "serial")]

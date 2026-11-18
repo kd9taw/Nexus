@@ -15699,10 +15699,12 @@ impl RadioLoop {
                 let ptt_failed = keyed.is_err();
                 // A key that DEFINITELY put nothing on the air: refused for the split before any
                 // line went out, or refused by the radio or the port. Read only by the receive
-                // hold; unknown is not refused.
+                // hold; unknown is not refused. ⛔ Not through OmniRig: its shim answers any COM
+                // failure as a refusal, one that came after the key reached the radio included.
                 let refused = ptt
                     && (split_ready.is_err()
-                        || keyed.as_ref().is_err_and(|e| rig.key_definitely_refused(e)));
+                        || (!self.applied.is_omnirig()
+                            && keyed.as_ref().is_err_and(|e| rig.key_definitely_refused(e))));
                 // The diagnostic log's word on why: once per press, since a failed key is not
                 // tried again while it is held. Reporting only.
                 if let (true, Err(e)) = (ptt, &keyed) {

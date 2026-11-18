@@ -874,3 +874,62 @@ fn rtty_afsk_follows_the_sideband_setting_on_an_icom() {
         assert_eq!((r.main_mode, r.data_mode), (want, true), "AFSK on {side}");
     }
 }
+
+/// ⛔ A PTT KEY THE RADIO NEVER ACKS STILL HOLDS RECEIVE. Nexus's own CI-V daemon sent the key
+/// frame and heard nothing back in time, so the radio may be keyed: the daemon answers `T 1` with
+/// Hamlib's `RPRT -5`, the loop reads no answer in time ("not confirmed") and receive stays held.
+/// It answered `RPRT -1`, which the loop took for a key that keyed nothing, and let the scope paint
+/// a keyed receiver. The control in the same test: the radio's NG (`FA`) is a refusal, said as
+/// one, and receive is shown.
+#[test]
+fn a_ptt_key_the_radio_never_acks_keeps_receive_held_and_an_ng_lets_it_go() {
+    use super::refused_key::{REFUSED, UNCONFIRMED};
+    for silent in [true, false] {
+        let mut s = Scene::new(IcomModel::Ic905, 3090, (144.2, "2m"), &[]);
+        // This fixture answers PTT NG unless told to say nothing.
+        s.regs.lock().unwrap().drop_ptt_writes = if silent { u32::MAX } else { 0 };
+        {
+            let mut e = s.engine.lock().unwrap();
+            e.set_operating_mode("phone", true);
+            e.set_ptt(true);
+        }
+        s.settle(|s| s.state.manual_ptt_applied);
+        assert!(s.state.manual_ptt_applied, "premise: the press was applied");
+        let key_frames = s
+            .regs
+            .lock()
+            .unwrap()
+            .acted
+            .iter()
+            .filter(|(_, cmd, data)| *cmd == 0x1C && data.as_slice() == [0x00, 0x01])
+            .count();
+        assert_eq!(
+            key_frames, 1,
+            "silent={silent}: the key frame went out once"
+        );
+        let banner = s
+            .engine
+            .lock()
+            .unwrap()
+            .snapshot()
+            .radio
+            .audio_error
+            .unwrap_or_default();
+        s.state
+            .spectrum_feed
+            .publish_audio(tempo_app::dto::Spectrum {
+                row: vec![0.5; 8],
+                lo_hz: 0.0,
+                hi_hz: 4_000.0,
+                source: "audio".into(),
+            });
+        let shown = s.state.spectrum_feed.row().is_some();
+        if silent {
+            assert_eq!(banner, UNCONFIRMED, "an unanswered key");
+            assert!(!shown, "a key the radio may have taken let receive go");
+        } else {
+            assert!(banner.starts_with(REFUSED), "the NG: {banner}");
+            assert!(shown, "control: a key the radio refused held receive");
+        }
+    }
+}

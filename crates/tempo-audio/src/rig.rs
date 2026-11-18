@@ -936,6 +936,17 @@ pub fn key_refusal_code(e: &std::io::Error) -> Option<i32> {
         .map(|refused| refused.code)
 }
 
+/// Whether a Hamlib refusal code says the rig rejected the command WITHOUT carrying it out, so a
+/// key answered with it keyed nothing (`rig.h`): an invalid, unconfigured, unimplemented,
+/// rejected, unavailable or out-of-range command, a VFO not targetable, a security or power
+/// refusal, a limit or access refusal. ⛔ Not the codes that can come after the command reached the
+/// radio: -3 ENOMEM, -7 EINTERNAL, -8 EPROTO (a reply that did not parse) and -10 ETRUNC
+/// ("Command performed"), nor the link faults ([`rprt_is_link_fault`]), nor any code Hamlib does
+/// not name. Those leave it unknown whether the radio keyed.
+fn rprt_keyed_nothing(code: i32) -> bool {
+    matches!(code, -1 | -2 | -4 | -9 | -11 | -12 | -22..=-15)
+}
+
 /// Hamlib's own words for one of its error codes (`rigerror`, Hamlib 4.x `rig.c`), for a refusal
 /// the operator is shown. `None` for a code Hamlib has no words for.
 pub fn hamlib_error_words(code: i32) -> Option<&'static str> {
@@ -1098,13 +1109,14 @@ impl Rig {
         }
     }
     /// Whether `e`, the error of a key-down on this rig, means the transmitter was DEFINITELY not
-    /// keyed: rigctld answered the line with a refusal ([`key_refusal_code`]), or the serial PTT
+    /// keyed: rigctld answered the line with a refusal that keyed nothing ([`key_refusal_code`],
+    /// [`rprt_keyed_nothing`]), or the serial PTT
     /// port would not open, so no line was raised. Anything else is not known to have left it
     /// unkeyed (no answer in time, a lost connection, a line write a port that is open refused)
     /// and answers `false`, so a caller holding receive for a key holds it for those. Reads only.
     pub fn key_definitely_refused(&self, e: &std::io::Error) -> bool {
         match &self.ptt_mode {
-            PttMode::Cat | PttMode::CatData => key_refusal_code(e).is_some(),
+            PttMode::Cat | PttMode::CatData => key_refusal_code(e).is_some_and(rprt_keyed_nothing),
             #[cfg(feature = "serial")]
             PttMode::Serial { .. } => self.serial.is_none(),
             #[cfg(not(feature = "serial"))]
@@ -5361,6 +5373,13 @@ mod tests {
         }
         for code in [-5, -6, -13, -14] {
             let e = super::ptt_reply(&format!("RPRT {code}\n")).expect_err("premise: not keyed");
+            assert!(!rig.key_definitely_refused(&e), "RPRT {code} is not known");
+        }
+        // ⛔ Refusals that can come after the command reached the radio: their words are kept for
+        // the operator, but the key is not known to have keyed nothing.
+        for code in [-3, -7, -8, -10] {
+            let e = super::ptt_reply(&format!("RPRT {code}\n")).expect_err("premise: not keyed");
+            assert_eq!(super::key_refusal_code(&e), Some(code));
             assert!(!rig.key_definitely_refused(&e), "RPRT {code} is not known");
         }
         let garbled = super::ptt_reply("what\n").expect_err("premise: not keyed");
