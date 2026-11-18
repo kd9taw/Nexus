@@ -128,7 +128,17 @@ jobs:
     permissions:
       contents: read
       actions: read
+    # When this run started, for publish: an updater signature older than this run is refused, so
+    # a signed file from an earlier run of the same version (a re-pushed tag) cannot be swapped in.
+    # A job output survives "re-run failed jobs", so a re-run of publish keeps the same window.
+    outputs:
+      started: ${{ steps.start.outputs.started }}
     steps:
+      # FIRST, before anything that can wait: this job starts with the run.
+      - name: Record when this run started
+        id: start
+        run: echo "started=$(date +%s)" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
@@ -749,6 +759,10 @@ jobs:
     name: Sign the Windows and Linux installers for self-update
     needs: [updater-signer, linux-x86, windows]
     runs-on: ubuntu-latest
+    # Whether nexus-updater-sigs was uploaded: a fork without the key uploads none, and publish
+    # downloads it by name, which fails on an artifact that does not exist.
+    outputs:
+      signed: ${{ steps.signed.outputs.signed }}
     steps:
       # For tauri.conf.json: the version the NSIS signature binds, stamped exactly as the build
       # jobs stamp it, and the public key every signature must match.
@@ -759,21 +773,29 @@ jobs:
       - name: Stamp the tag's version into tauri.conf.json
         run: bash scripts/stamp-version.sh
 
+      # EVERY DOWNLOAD HERE AND BELOW IS BY EXACT NAME, into a directory of its own, and checked to
+      # hold exactly the files its job uploads. A pattern takes in any artifact whose name matches,
+      # and every job in this run holds a token that can upload one, the build jobs included, which
+      # run third-party code. scripts/release-secrets.test.mjs refuses a pattern download.
       - uses: actions/download-artifact@v4
         with:
           path: signer
-          pattern: nexus-updater-signer
-          merge-multiple: true
+          name: nexus-updater-signer
       - uses: actions/download-artifact@v4
         with:
-          path: unsigned
-          pattern: nexus-windows
-          merge-multiple: true
+          path: unsigned/nexus-windows
+          name: nexus-windows
       - uses: actions/download-artifact@v4
         with:
-          path: unsigned
-          pattern: nexus-linux-x86
-          merge-multiple: true
+          path: unsigned/nexus-linux-x86
+          name: nexus-linux-x86
+      - name: Check each artifact holds exactly the expected files
+        run: |
+          set -euo pipefail
+          ver=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
+          bash scripts/check-artifact-set.sh signer cargo-tauri
+          bash scripts/check-artifact-set.sh unsigned/nexus-windows "Nexus_${ver}_x64-setup.exe" "Nexus_${ver}_x64.sym.gz"
+          bash scripts/check-artifact-set.sh unsigned/nexus-linux-x86 "Nexus_${ver}_amd64.AppImage" "Nexus_${ver}_pc_amd64.deb"
 
       # THE KEY DECIDES WHETHER A SIGNATURE IS REQUIRED. latest.json's `add()` omits any platform
       # with no .sig, so a missing signature ships a manifest with no windows-x86_64 or
@@ -840,6 +862,10 @@ jobs:
           done
           echo "signed for self-update with key $want (version $ver):"; ls -l sigs/
 
+      - name: Report whether the installers were signed
+        id: signed
+        run: if [ -n "$(ls -A sigs)" ]; then echo signed=true; else echo signed=false; fi >> "$GITHUB_OUTPUT"
+
       - uses: actions/upload-artifact@v4
         with:
           name: nexus-updater-sigs
@@ -894,6 +920,18 @@ jobs:
     # release run reaches this. Prove a change here with a workflow_dispatch of this file.
     env:
       NODE_OPTIONS: --max-old-space-size=4096
+    # WHICH BYTES EACH LEG BUILT. Both legs' updater tarballs are signed as Nexus.app.tar.gz for the
+    # same version in the same run, so their signatures cannot tell them apart: an artifact
+    # re-uploaded with the other leg's genuine files under this leg's names would pass every check
+    # in publish, and send each architecture's installs the other's app. Each leg reports the
+    # sha256 of its DMG and tarball here, under keys of its own (a matrix job's outputs combine when
+    # the keys differ), and publish checks the bytes it ships against them. Another job cannot
+    # rewrite a job output. release-secrets.test.mjs holds these keys to the matrix's legs.
+    outputs:
+      sha256-aarch64-dmg: ${{ steps.sum.outputs.sha256-aarch64-dmg }}
+      sha256-aarch64-tar: ${{ steps.sum.outputs.sha256-aarch64-tar }}
+      sha256-x64-dmg: ${{ steps.sum.outputs.sha256-x64-dmg }}
+      sha256-x64-tar: ${{ steps.sum.outputs.sha256-x64-tar }}
     strategy:
       # One leg failing must not cancel the other: a dry run should say which architecture broke.
       fail-fast: false
@@ -1357,6 +1395,21 @@ jobs:
           fi
           ( cd out && shasum -a 256 ./* )
 
+      # This leg's sha256 outputs (see the job's `outputs`), from exactly the files uploaded next.
+      # No tarball (a fork without the key) reports `none`, never an empty value, so macos-outputs
+      # can tell a leg that built no tarball from an output that never arrived.
+      - name: Report the sha256 of what this leg uploads
+        id: sum
+        run: |
+          set -euo pipefail
+          ver=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
+          sfx=${{ matrix.suffix }}
+          f="out/Nexus_${ver}_${sfx}"
+          echo "sha256-${sfx}-dmg=$(shasum -a 256 "$f.dmg" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          tar=none
+          [ ! -f "$f.app.tar.gz" ] || tar=$(shasum -a 256 "$f.app.tar.gz" | cut -d' ' -f1)
+          echo "sha256-${sfx}-tar=$tar" >> "$GITHUB_OUTPUT"
+
       - uses: actions/upload-artifact@v4
         with:
           name: nexus-macos-${{ matrix.suffix }}
@@ -1388,12 +1441,29 @@ jobs:
         with:
           persist-credentials: false
 
-      # Both legs' artifacts; each smoke leg picks its own by file name below.
+      # For the artifact check below: the version its file names carry.
+      - name: Stamp the tag's version into tauri.conf.json
+        run: bash scripts/stamp-version.sh
+
+      # This leg's artifact, by its exact name (see sign-updaters).
       - uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: nexus-macos-*
-          merge-multiple: true
+          name: nexus-macos-${{ matrix.suffix }}
+      # The DMG alone, or the DMG with the updater bundle and its signature. This job holds no
+      # secret, not even whether the key exists (its runner would be handed the key to find out):
+      # the macos job already fails when the key exists and no bundle was made, and publish
+      # checks the set again against the key.
+      - name: Check the artifact holds exactly the expected files
+        run: |
+          set -euo pipefail
+          ver=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
+          f="Nexus_${ver}_${{ matrix.suffix }}"
+          if [ -e "dist/$f.app.tar.gz" ] || [ -e "dist/$f.app.tar.gz.sig" ]; then
+            bash scripts/check-artifact-set.sh dist "$f.dmg" "$f.app.tar.gz" "$f.app.tar.gz.sig"
+          else
+            bash scripts/check-artifact-set.sh dist "$f.dmg"
+          fi
 
       - uses: actions/setup-node@v7
         with:
@@ -1497,6 +1567,36 @@ jobs:
           base64 --decode < "$tarball.sig" > "$RUNNER_TEMP/updater.minisig"
           minisign -Vm "$tarball" -p "$RUNNER_TEMP/updater.pub" -x "$RUNNER_TEMP/updater.minisig"
           echo "updater bundle verified: unpacks, signed app v$upver matches the DMG, minisign signature valid"
+
+  # Proves, on EVERY run, the dispatch dry run included, that each macOS leg's sha256 outputs
+  # reached the job's combined outputs. publish compares the bytes it ships against them, but runs only
+  # on a tag; this makes a regression in how a matrix job's outputs combine fail the rehearsal rather
+  # than the release. No checkout, no secret. LEGS is the macos matrix's suffixes, held equal to it by
+  # release-secrets.test.mjs.
+  macos-outputs:
+    name: Check every macOS leg reported its sha256 outputs
+    needs: macos
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require a 64-hex DMG and tarball sha256 (or none, with no key) from every leg
+        env:
+          LEGS: aarch64 x64
+          OUTPUTS: ${{ toJSON(needs.macos.outputs) }}
+        run: |
+          set -euo pipefail
+          for sfx in $LEGS; do
+            for kind in dmg tar; do
+              k="sha256-$sfx-$kind"
+              v=$(jq -r --arg k "$k" '.[$k] // ""' <<<"$OUTPUTS")
+              if [[ "$v" =~ ^[0-9a-f]{64}$ ]] || { [ "$kind" = tar ] && [ "$v" = none ]; }; then
+                echo "$k=$v"
+              else
+                echo "macos output $k is ${v:-missing}: not a sha256"; exit 1
+              fi
+            done
+          done
 
   # ---------------------------------------------------------------------------------------
   # Raspberry Pi — one .deb per live Pi OS base, native on the hosted arm64 runner.
@@ -1617,11 +1717,25 @@ jobs:
     needs: windows
     runs-on: windows-latest
     steps:
+      # For the artifact check below: the script, and the version its file names carry.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Stamp the tag's version into tauri.conf.json
+        shell: bash
+        run: bash scripts/stamp-version.sh
+
+      # By its exact name (see sign-updaters).
       - uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: nexus-windows
-          merge-multiple: true
+          name: nexus-windows
+      - name: Check the artifact holds exactly the expected files
+        shell: bash
+        run: |
+          set -euo pipefail
+          ver=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
+          bash scripts/check-artifact-set.sh dist "Nexus_${ver}_x64-setup.exe" "Nexus_${ver}_x64.sym.gz"
 
       - name: Silent-install the NSIS artifact
         shell: pwsh
@@ -1726,7 +1840,7 @@ jobs:
     # sign-updaters is here because the Windows and Linux updater signatures come from it, and
     # a pattern download from a job this one does not wait for can find nothing and still
     # succeed: latest.json would then drop both platforms without a word.
-    needs: [ci-evidence, linux-x86, windows, smoke-windows, sign-updaters, macos, smoke-macos, manual]
+    needs: [ci-evidence, linux-x86, windows, smoke-windows, sign-updaters, macos, smoke-macos, macos-outputs, manual]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     # `actions: write` is for the downstream hand-off at the end of this job. Job-level
@@ -1741,28 +1855,117 @@ jobs:
           persist-credentials: false
           fetch-depth: 0   # need tags + history for the notes range
 
+      # Each by its exact name (see sign-updaters), checked, and only then gathered into dist/.
       - uses: actions/download-artifact@v4
         with:
-          path: dist
-          pattern: nexus-linux-x86
-          merge-multiple: true
+          path: artifacts/nexus-linux-x86
+          name: nexus-linux-x86
       - uses: actions/download-artifact@v4
         with:
-          path: dist
-          pattern: nexus-windows
-          merge-multiple: true
-      # Both macOS legs: nexus-macos-aarch64 and nexus-macos-x64.
+          path: artifacts/nexus-windows
+          name: nexus-windows
+      # Both macOS legs.
       - uses: actions/download-artifact@v4
         with:
-          path: dist
-          pattern: nexus-macos-*
-          merge-multiple: true
-      # The NSIS and AppImage .sig files, beside the installers they sign.
+          path: artifacts/nexus-macos-aarch64
+          name: nexus-macos-aarch64
       - uses: actions/download-artifact@v4
         with:
-          path: dist
-          pattern: nexus-updater-sigs
-          merge-multiple: true
+          path: artifacts/nexus-macos-x64
+          name: nexus-macos-x64
+      # The NSIS and AppImage .sig files, beside the installers they sign. A fork without the key
+      # uploads none.
+      - uses: actions/download-artifact@v4
+        if: needs.sign-updaters.outputs.signed == 'true'
+        with:
+          path: artifacts/nexus-updater-sigs
+          name: nexus-updater-sigs
+      # Brought into dist/ after latest.json (see "Bring in the manual"), checked with the rest.
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts/nexus-manual
+          name: nexus-manual
+
+      - name: Check each artifact holds exactly the expected files, and gather them
+        env:
+          # Whether the key exists, not the key: with it, every updater bundle and signature ships.
+          SIGNING_KEY_PRESENT: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          # Each macOS leg's sha256 of its DMG and tarball (see the macos job's `outputs`).
+          MACOS_SHA256: ${{ toJSON(needs.macos.outputs) }}
+        run: |
+          set -euo pipefail
+          # The version every file name carries; the next step proves it against tauri.conf.json.
+          ver="${GITHUB_REF_NAME#v}"
+          check() { bash scripts/check-artifact-set.sh "artifacts/$1" "${@:2}"; }
+          check nexus-linux-x86 "Nexus_${ver}_amd64.AppImage" "Nexus_${ver}_pc_amd64.deb"
+          check nexus-windows "Nexus_${ver}_x64-setup.exe" "Nexus_${ver}_x64.sym.gz"
+          check nexus-manual Nexus-Manual.pdf Nexus-Manual.epub
+          # Every macOS leg downloaded above, which release-secrets.test.mjs holds to the macos
+          # job's matrix: a leg the matrix builds is checked and published with no list here.
+          for d in artifacts/nexus-macos-*; do
+            sfx="${d#artifacts/nexus-macos-}"
+            f="Nexus_${ver}_${sfx}"
+            if [ "$SIGNING_KEY_PRESENT" = true ]; then
+              check "nexus-macos-$sfx" "$f.dmg" "$f.app.tar.gz" "$f.app.tar.gz.sig"
+            else
+              check "nexus-macos-$sfx" "$f.dmg"
+            fi
+            # And they are the bytes this leg built, not the other leg's (see the macos job).
+            built() { jq -r --arg k "sha256-$sfx-$1" '.[$k] // ""' <<<"$MACOS_SHA256"; }
+            same() {
+              [ -n "$2" ] && [ "$(sha256sum "$1" | cut -d' ' -f1)" = "$2" ] \
+                || { echo "$1 is not the file the macos job built for $sfx (sha256 ${2:-not reported})"; exit 1; }
+            }
+            same "$d/$f.dmg" "$(built dmg)"
+            if [ "$SIGNING_KEY_PRESENT" = true ]; then
+              same "$d/$f.app.tar.gz" "$(built tar)"
+            else
+              [ "$(built tar)" = none ] || { echo "the macos job reported a $sfx tarball (or nothing) with no signing key"; exit 1; }
+            fi
+          done
+          if [ "$SIGNING_KEY_PRESENT" = true ]; then
+            check nexus-updater-sigs "Nexus_${ver}_x64-setup.exe.sig" "Nexus_${ver}_amd64.AppImage.sig"
+          else
+            [ ! -e artifacts/nexus-updater-sigs ] || { echo "updater signatures arrived with no signing key"; exit 1; }
+          fi
+          mkdir -p dist
+          # Every artifact just checked, the manual excepted (it joins dist/ after latest.json). A
+          # download this step does not check is refused rather than gathered unchecked.
+          for d in artifacts/*; do
+            case "${d#artifacts/}" in
+              nexus-manual) ;;
+              nexus-linux-x86|nexus-windows|nexus-updater-sigs|nexus-macos-*) mv "$d"/* dist/ ;;
+              *) echo "$d was downloaded but this step does not check it"; exit 1 ;;
+            esac
+          done
+
+      # TIE WHAT SHIPS TO WHAT WAS SIGNED. The installers and bundles were signed in other jobs and
+      # came back out of the artifact store; nothing above proves they are the bytes that were
+      # signed. A file replaced after signing would pass every other gate here and be published, and
+      # only self-updating clients would ever refuse it. So every signed file is verified against
+      # the public key compiled into every client (tauri.conf.json), with no secret: a mismatch or a
+      # missing .sig fails the release before it exists. The .debs, DMGs and symbol maps carry no
+      # updater signature and are not covered here.
+      - name: Verify every updater signature against the key clients trust
+        env:
+          # Whether the key exists, not the key: without it nothing was signed (a fork).
+          SIGNING_KEY_PRESENT: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          RUN_STARTED: ${{ needs.ci-evidence.outputs.started }}
+        run: |
+          set -euo pipefail
+          if [ "$SIGNING_KEY_PRESENT" != true ]; then
+            echo "note: unsigned build (no signing key) — no updater signatures to verify"; exit 0
+          fi
+          ver="${GITHUB_REF_NAME#v}"
+          signed=("dist/Nexus_${ver}_x64-setup.exe" "dist/Nexus_${ver}_amd64.AppImage")
+          for t in dist/Nexus_"${ver}"_*.app.tar.gz; do signed+=("$t"); done
+          # Each signature must also be FOR this release: this file name, this version, and made in
+          # this run (ci-evidence's start, less 300 s for clock skew between runners). Otherwise an
+          # older installer swapped in with its own valid .sig would pass. See the script's header
+          # for the macOS tarball's name.
+          [[ "$RUN_STARTED" =~ ^[0-9]+$ ]] || { echo "no run start time from ci-evidence"; exit 1; }
+          node scripts/verify-updater-sigs.mjs --version "$ver" --not-before "$(( RUN_STARTED - 300 ))" \
+            src-tauri/tauri.conf.json "${signed[@]}"
 
       - name: Derive + cross-check the version
         id: ver
@@ -1878,10 +2081,7 @@ jobs:
           cat dist/latest.json
 
       - name: Bring in the manual (PDF + EPUB)
-        uses: actions/download-artifact@v4
-        with:
-          name: nexus-manual
-          path: dist
+        run: mv artifacts/nexus-manual/Nexus-Manual.pdf artifacts/nexus-manual/Nexus-Manual.epub dist/
 
       - name: Create the GitHub Release
         env:
@@ -1954,11 +2154,29 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
+      # For scripts/check-artifact-set.sh.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      # One per Pi base, each by its exact name (see sign-updaters).
       - uses: actions/download-artifact@v4
         with:
-          path: pidist
-          pattern: nexus-pi-*
-          merge-multiple: true
+          path: piartifacts/nexus-pi-bookworm
+          name: nexus-pi-bookworm
+      - uses: actions/download-artifact@v4
+        with:
+          path: piartifacts/nexus-pi-trixie
+          name: nexus-pi-trixie
+      - name: Check each artifact holds exactly the expected file, and gather them
+        run: |
+          set -euo pipefail
+          ver="${GITHUB_REF_NAME#v}"
+          mkdir -p pidist
+          for d in piartifacts/nexus-pi-*; do
+            base="${d#piartifacts/nexus-pi-}"
+            bash scripts/check-artifact-set.sh "$d" "Nexus_${ver}_pi_arm64_$base.deb"
+            mv "$d/Nexus_${ver}_pi_arm64_$base.deb" pidist/
+          done
       - name: Upload to the release + extend SHA256SUMS
         env:
           GH_TOKEN: ${{ github.token }}

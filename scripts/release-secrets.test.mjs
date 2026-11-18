@@ -22,7 +22,10 @@
 //      holds it: the updater key signs the Windows and Linux installers in a job of its own, on a
 //      runner that builds nothing. macOS is the one exception (see SIGNS_IN_BUNDLER).
 //   6. Every artifact a job downloads is uploaded by a job it needs, so splitting a job cannot
-//      leave a later step reading a file nothing hands it.
+//      leave a later step reading a file nothing hands it. And it is downloaded by its exact
+//      name, never by a pattern or merged with others: any job in the run holds a token that can
+//      upload an artifact, and the builds run third-party code, so a pattern would take in
+//      whatever such code uploaded under a matching name and smoke or publish it.
 //   7. The updater signing step's script, run against a stand-in signer, signs both installers
 //      and refuses every signature a client would reject (see "The signing step's own checks").
 //
@@ -42,6 +45,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -392,18 +396,24 @@ function violations(wf) {
     for (const n of wf.jobs.get(id)?.needs ?? []) if (!seen.has(n)) upstream(n, seen.add(n));
     return seen;
   };
-  const glob = (p) => new RegExp(`^${p.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`);
+  // An upload named with an expression (`nexus-pi-${{ matrix.base }}`) is one artifact per value,
+  // and a download named with one (`nexus-macos-${{ matrix.suffix }}`) is one artifact per leg.
+  const EXPR_IN_NAME = /\$\{\{[^}]*\}\}/g;
+  const named = (p) => new RegExp(`^${p.split(EXPR_IN_NAME).map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[^/]+')}$`);
   for (const j of wf.jobs.values()) {
     const needed = upstream(j.id);
     for (const s of j.steps) {
       if (!s || !/^actions\/download-artifact@/.test(s.uses ?? '')) continue;
-      const want = s.with.get('name') ?? s.with.get('pattern');
+      if (s.with.has('pattern') || s.with.has('merge-multiple')) {
+        v.push(`job ${j.id}, step "${s.label}": downloads by pattern; name the one artifact it reads, since any job can upload one a pattern matches`);
+        continue;
+      }
+      const want = s.with.get('name');
       if (!want) {
         v.push(`job ${j.id}, step "${s.label}": downloads every artifact of the run; name the ones it reads`);
         continue;
       }
-      // An upload named with an expression (`nexus-pi-${{ matrix.base }}`) is one artifact per value.
-      const from = uploads.filter((u) => glob(want).test(u.name.replace(/\$\{\{[^}]*\}\}/g, 'X')));
+      const from = uploads.filter((u) => named(u.name).test(want.replace(EXPR_IN_NAME, 'X')));
       if (!from.length) v.push(`job ${j.id}, step "${s.label}": downloads "${want}", which no job uploads`);
       else if (!from.some((u) => needed.has(u.job))) {
         v.push(`job ${j.id}, step "${s.label}": downloads "${want}" from job ${[...new Set(from.map((u) => u.job))].join(', ')}, which job ${j.id} does not need`);
@@ -647,6 +657,26 @@ test('release.yml: no step or job that builds or runs third-party code can see a
   assert.deepEqual(v, [], `\n${v.join('\n')}\n`);
 });
 
+// The smoke jobs run the built app and install tools from Homebrew, and a runner is handed every
+// secret its job references when the job starts, whether a step reads the value or only asks
+// whether it is set (`secrets.X != ''` is evaluated on the runner). So no smoke job references a
+// signing secret at all, not even to test for one: what the key decides, the build job enforces.
+function smokeSigningRefs(wf) {
+  return wf.refs
+    .filter((r) => r.scope !== 'comment' && r.path[0] === 'jobs' && /^smoke-/.test(r.path[1] ?? '') && r.secret && signingGrade(r.secret))
+    .map((r) => `job ${r.path[1]}, line ${r.line}: references ${r.secret}`);
+}
+
+test('no smoke job references a signing secret, not even whether one is set', () => {
+  assert.deepEqual(smokeSigningRefs(WF), []);
+  const planted = plant(
+    TEXT,
+    '      - name: Check the artifact holds exactly the expected files\n        run: |\n          set -euo pipefail\n          ver=',
+    "      - name: Check the artifact holds exactly the expected files\n        env:\n          SIGNING_KEY_PRESENT: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}\n        run: |\n          set -euo pipefail\n          ver=",
+  );
+  assert.equal(smokeSigningRefs(readWorkflow(planted)).length, 1);
+});
+
 test('a signing key planted in a build step is reported', () => {
   const planted = plant(
     TEXT,
@@ -729,8 +759,399 @@ test('a third-party step added to the signing job is reported', () => {
 test('an artifact downloaded from a job not needed, or from no job at all, is reported', () => {
   const unneeded = plant(TEXT, 'smoke-windows, sign-updaters, macos', 'smoke-windows, macos');
   reported(unneeded, 'downloads "nexus-updater-sigs" from job sign-updaters, which job publish does not need');
-  const typo = plant(TEXT, '          pattern: nexus-updater-sigs\n', '          pattern: nexus-updater-sig\n');
+  const typo = plant(TEXT, '          path: artifacts/nexus-updater-sigs\n          name: nexus-updater-sigs\n', '          path: artifacts/nexus-updater-sigs\n          name: nexus-updater-sig\n');
   reported(typo, 'downloads "nexus-updater-sig", which no job uploads');
+});
+
+test('an artifact downloaded by pattern, or merged with others, is reported', () => {
+  const anchor = '          path: artifacts/nexus-macos-x64\n          name: nexus-macos-x64\n';
+  const byPattern = plant(TEXT, anchor, '          path: artifacts/nexus-macos-x64\n          pattern: nexus-macos-*\n');
+  reported(byPattern, 'job publish, step "actions/download-artifact@v4": downloads by pattern');
+  const merged = plant(TEXT, anchor, `${anchor}          merge-multiple: true\n`);
+  reported(merged, 'job publish, step "actions/download-artifact@v4": downloads by pattern');
+});
+
+// What each publish job downloads, by name. With a pattern gone, a leg or a Pi base added to a
+// build matrix and not downloaded here would build, pass every gate, and never be published.
+const downloadedBy = (wf, jobId) =>
+  wf.jobs.get(jobId).steps.filter((s) => s && /^actions\/download-artifact@/.test(s.uses ?? '')).map((s) => s.with.get('name'));
+function matrixUndownloaded(wf) {
+  const v = [];
+  const pi = wf.entries.find((e) => e.path.join('.') === 'jobs.pi.strategy.matrix.base')?.value ?? '';
+  const bases = pi.replace(/^\[|\]$/g, '').split(',').map((x) => x.trim()).filter(Boolean);
+  if (!bases.length) v.push('no Pi bases read from the pi job matrix');
+  for (const b of bases) if (!downloadedBy(wf, 'publish-pi').includes(`nexus-pi-${b}`)) v.push(`publish-pi does not download nexus-pi-${b}`);
+  const suffixes = matrixLegs(wf, 'macos').map((l) => l.suffix);
+  for (const sfx of suffixes) {
+    if (!downloadedBy(wf, 'publish').includes(`nexus-macos-${sfx}`)) v.push(`publish does not download nexus-macos-${sfx}`);
+  }
+  // And nothing else: publish checks and gathers whatever nexus-macos-* it downloaded.
+  for (const n of downloadedBy(wf, 'publish').filter((x) => x?.startsWith('nexus-macos-'))) {
+    if (!suffixes.includes(n.slice('nexus-macos-'.length))) v.push(`publish downloads ${n}, which no macos leg builds`);
+  }
+  return v;
+}
+
+test('the publish jobs download every leg and every Pi base the builds upload', () => {
+  assert.deepEqual(matrixUndownloaded(WF), []);
+  const thirdBase = plant(TEXT, 'base: [bookworm, trixie]', 'base: [bookworm, trixie, forky]');
+  assert.deepEqual(matrixUndownloaded(readWorkflow(thirdBase)), ['publish-pi does not download nexus-pi-forky']);
+});
+
+// ---- publish, run: what it gathers, and what it verifies before anything is published ----------
+
+// The steps of publish that take the artifacts from the store to dist/, in order. Each one's script
+// runs verbatim against a stand-in artifact store; a step missing from the workflow is reported.
+const GATHER = 'Check each artifact holds exactly the expected files, and gather them';
+const VERIFY_SIGS = 'Verify every updater signature against the key clients trust';
+const FIXTURE_SIG = path.join(ROOT, 'scripts', 'fixtures', 'updater-sig');
+const FIXTURE_FILE = 'payload.txt'; // not .exe: .gitignore drops those, and the signature covers the bytes, not the name
+const VERIFY = path.join(ROOT, 'scripts', 'verify-updater-sigs.mjs');
+
+// A minisign signer in the format tauri writes (prehashed "ED", the whole file base64-wrapped), with
+// a key made per run, so a signature is always fresh and a test never ages out. The tauri-cli
+// fixture above proves the format against the real signer.
+function updaterKey() {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const id = crypto.randomBytes(8);
+  const raw = publicKey.export({ format: 'der', type: 'spki' }).subarray(12);
+  const pub = `untrusted comment: minisign public key: X\n${Buffer.concat([Buffer.from('Ed'), id, raw]).toString('base64')}\n`;
+  const conf = `${JSON.stringify({ plugins: { updater: { pubkey: Buffer.from(pub).toString('base64') } } })}\n`;
+  const sign = (data, comment) => {
+    const sig = crypto.sign(null, crypto.createHash('blake2b512').update(data).digest(), privateKey);
+    const global = crypto.sign(null, Buffer.concat([sig, Buffer.from(comment)]), privateKey);
+    const text = `untrusted comment: signature from tauri secret key\n${Buffer.concat([Buffer.from('ED'), id, sig]).toString('base64')}\ntrusted comment: ${comment}\n${global.toString('base64')}\n`;
+    return Buffer.from(text).toString('base64');
+  };
+  return { conf, sign };
+}
+const now = () => Math.floor(Date.now() / 1000);
+// What tauri writes: sign-updaters binds the file's own name; the macOS bundler signs the tarball
+// as Nexus.app.tar.gz before the macos job renames it. Both bind the version.
+const tauriComment = (name, ver, ts = now()) =>
+  `timestamp:${ts}\tfile:${name.endsWith('.app.tar.gz') ? 'Nexus.app.tar.gz' : name}\tversion:${ver}`;
+
+function runPublishGather({ text = TEXT, legs = ['aarch64', 'x64'], key = true, tamper = null, dropSig = null, comments = {}, runStarted = now() - 600, swapMacLegs = false, macShas = null } = {}) {
+  const wf = readWorkflow(text);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'publish-gather-'));
+  try {
+    const at = (...p) => path.join(dir, ...p);
+    fs.symlinkSync(path.join(ROOT, 'scripts'), at('scripts'));
+    fs.mkdirSync(at('src-tauri'));
+    const k = updaterKey();
+    fs.writeFileSync(at('src-tauri', 'tauri.conf.json'), k.conf);
+    const v = '9.9.9';
+    const signed = [];
+    const put = (artifact, name, sigIn = null) => {
+      fs.mkdirSync(at('artifacts', artifact), { recursive: true });
+      fs.writeFileSync(at('artifacts', artifact, name), `stand-in for ${name}`);
+      if (sigIn) signed.push({ file: at('artifacts', artifact, name), name, sigDir: at('artifacts', sigIn) });
+    };
+    put('nexus-linux-x86', `Nexus_${v}_amd64.AppImage`, key && 'nexus-updater-sigs');
+    put('nexus-linux-x86', `Nexus_${v}_pc_amd64.deb`);
+    put('nexus-windows', `Nexus_${v}_x64-setup.exe`, key && 'nexus-updater-sigs');
+    put('nexus-windows', `Nexus_${v}_x64.sym.gz`);
+    put('nexus-manual', 'Nexus-Manual.pdf');
+    put('nexus-manual', 'Nexus-Manual.epub');
+    for (const sfx of legs) {
+      put(`nexus-macos-${sfx}`, `Nexus_${v}_${sfx}.dmg`);
+      if (key) put(`nexus-macos-${sfx}`, `Nexus_${v}_${sfx}.app.tar.gz`, `nexus-macos-${sfx}`);
+    }
+    for (const { file, name, sigDir } of signed) {
+      fs.mkdirSync(sigDir, { recursive: true });
+      if (name !== dropSig) fs.writeFileSync(path.join(sigDir, `${name}.sig`), k.sign(fs.readFileSync(file), comments[name] ?? tauriComment(name, v)));
+      if (name === tamper) fs.appendFileSync(file, 'replaced after signing');
+    }
+    // What the macos legs report as job outputs: the sha256 of the files each one uploaded.
+    const sha = (f) => crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex');
+    const outputs = {};
+    for (const sfx of legs) {
+      const d = at('artifacts', `nexus-macos-${sfx}`);
+      outputs[`sha256-${sfx}-dmg`] = sha(path.join(d, `Nexus_${v}_${sfx}.dmg`));
+      outputs[`sha256-${sfx}-tar`] = key ? sha(path.join(d, `Nexus_${v}_${sfx}.app.tar.gz`)) : 'none';
+    }
+    // Another job re-uploads each macOS artifact with the other leg's genuine, signed files under
+    // this leg's names: right names, right version, signatures that verify.
+    if (swapMacLegs) {
+      const [a, b] = legs.map((sfx) => at('artifacts', `nexus-macos-${sfx}`));
+      for (const ext of key ? ['.dmg', '.app.tar.gz', '.app.tar.gz.sig'] : ['.dmg']) {
+        const fa = path.join(a, `Nexus_${v}_${legs[0]}${ext}`);
+        const fb = path.join(b, `Nexus_${v}_${legs[1]}${ext}`);
+        const t = fs.readFileSync(fa);
+        fs.writeFileSync(fa, fs.readFileSync(fb));
+        fs.writeFileSync(fb, t);
+      }
+    }
+    const env = {
+      ...process.env,
+      MACOS_SHA256: JSON.stringify(macShas ?? outputs),
+      GITHUB_REF_NAME: `v${v}`,
+      SIGNING_KEY_PRESENT: String(key),
+      RUN_STARTED: String(runStarted),
+    };
+    const missing = [];
+    let status = 0;
+    let stderr = '';
+    for (const name of [GATHER, VERIFY_SIGS]) {
+      const step = wf.jobs.get('publish').steps.find((x) => x?.name === name);
+      if (!step) { missing.push(name); continue; }
+      const r = spawnSync('bash', ['-c', step.run], { cwd: dir, env, encoding: 'utf8' });
+      stderr += r.stdout + r.stderr;
+      if (r.status !== 0) { status = r.status; break; }
+    }
+    const dist = fs.existsSync(at('dist')) ? fs.readdirSync(at('dist')).sort() : [];
+    return { status, dist, stderr, missing };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+const expectedDist = (legs, key) => {
+  const v = '9.9.9';
+  const f = [`Nexus_${v}_amd64.AppImage`, `Nexus_${v}_pc_amd64.deb`, `Nexus_${v}_x64-setup.exe`, `Nexus_${v}_x64.sym.gz`];
+  if (key) f.push(`Nexus_${v}_amd64.AppImage.sig`, `Nexus_${v}_x64-setup.exe.sig`);
+  for (const sfx of legs) {
+    f.push(`Nexus_${v}_${sfx}.dmg`);
+    if (key) f.push(`Nexus_${v}_${sfx}.app.tar.gz`, `Nexus_${v}_${sfx}.app.tar.gz.sig`);
+  }
+  return f.sort();
+};
+
+test('publish gathers exactly the artifacts it always shipped, signed or not', () => {
+  for (const key of [true, false]) {
+    const r = runPublishGather({ key });
+    assert.deepEqual(r.missing, [], `publish has no step(s): ${r.missing.join(', ')}`);
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(r.dist, expectedDist(['aarch64', 'x64'], key));
+  }
+});
+
+// A third macOS leg, once the matrix builds it and publish downloads it (the matrix test below
+// holds those two together), must be checked and published like the others with no further edit:
+// a leg that builds but never publishes passes every gate and reaches nobody.
+test('publish checks and gathers every macOS leg it downloads, not a list of its own', () => {
+  const legs = ['aarch64', 'x64', 'universal'];
+  const r = runPublishGather({ legs });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(r.dist, expectedDist(legs, true));
+  const tampered = runPublishGather({ legs, tamper: 'Nexus_9.9.9_universal.app.tar.gz' });
+  assert.notEqual(tampered.status, 0, 'the third leg\'s bundle went unverified');
+});
+
+test('publish refuses an installer or bundle that is not the one that was signed', () => {
+  for (const tamper of ['Nexus_9.9.9_x64-setup.exe', 'Nexus_9.9.9_amd64.AppImage', 'Nexus_9.9.9_x64.app.tar.gz']) {
+    const r = runPublishGather({ tamper });
+    assert.notEqual(r.status, 0, `publish passed ${tamper} replaced after signing`);
+    assert.match(r.stderr, /does not verify/);
+  }
+  const unsigned = runPublishGather({ dropSig: 'Nexus_9.9.9_aarch64.app.tar.gz' });
+  assert.notEqual(unsigned.status, 0, 'publish passed a macOS bundle with no signature');
+});
+
+const stepId = (s) => s?.entries.find((e) => e.path.length === 5 && e.path[4] === 'id')?.value;
+
+// The replay window is this run: ci-evidence, the first job, records when it started, and publish
+// takes that (less a margin) as the earliest a signature may have been made.
+function runStartWiring(wf) {
+  const v = [];
+  const started = wf.entries.find((e) => e.path.join('.') === 'jobs.ci-evidence.outputs.started')?.value;
+  if (started !== '${{ steps.start.outputs.started }}') v.push('ci-evidence does not output started from its start step');
+  if (stepId(wf.jobs.get('ci-evidence').steps[0]) !== 'start') v.push("the start time is not ci-evidence's first step");
+  const verify = wf.jobs.get('publish').steps.find((s) => s?.name === VERIFY_SIGS);
+  if (verify?.env.get('RUN_STARTED') !== '${{ needs.ci-evidence.outputs.started }}') v.push("publish's signature step is not handed the run start as RUN_STARTED");
+  return v;
+}
+
+// The macOS legs' sha256 outputs: one dmg and one tarball key per matrix leg, each from the step
+// that sums what the leg uploads, and publish's gather step is handed all of them.
+function macShaWiring(wf) {
+  const v = [];
+  const outputs = wf.entries.filter((e) => e.path.length === 4 && e.path[0] === 'jobs' && e.path[1] === 'macos' && e.path[2] === 'outputs');
+  const want = matrixLegs(wf, 'macos').flatMap(({ suffix }) => [`sha256-${suffix}-dmg`, `sha256-${suffix}-tar`]).sort();
+  const have = outputs.map((e) => e.path[3]).sort();
+  if (have.join() !== want.join()) v.push(`macos outputs ${have.join(',') || '(none)'}, not ${want.join(',')}`);
+  for (const e of outputs) {
+    if (e.value !== `\${{ steps.sum.outputs.${e.path[3]} }}`) v.push(`macos output ${e.path[3]} is ${e.value}, not the sum step's`);
+  }
+  const steps = wf.jobs.get('macos').steps;
+  const sum = steps.findIndex((s) => stepId(s) === 'sum');
+  const upload = steps.findIndex((s) => /^actions\/upload-artifact@/.test(s?.uses ?? ''));
+  if (sum < 0 || sum !== upload - 1) v.push('the sum step is not the step right before the macos upload');
+  const gather = wf.jobs.get('publish').steps.find((s) => s?.name === GATHER);
+  if (gather?.env.get('MACOS_SHA256') !== '${{ toJSON(needs.macos.outputs) }}') v.push("publish's gather step is not handed the macos outputs as MACOS_SHA256");
+  return v;
+}
+
+// The job that proves those outputs on EVERY run, the workflow_dispatch dry run included: publish
+// runs only on a tag, so without it a matrix-output regression would first show on a real release.
+const OUTPUTS_JOB = 'macos-outputs';
+function outputsJobWiring(wf) {
+  const v = [];
+  const j = wf.jobs.get(OUTPUTS_JOB);
+  if (!j) return [`no ${OUTPUTS_JOB} job`];
+  const at = (...p) => wf.entries.find((e) => e.path.join('\u0000') === ['jobs', OUTPUTS_JOB, ...p].join('\u0000'))?.value;
+  if (!j.needs.includes('macos')) v.push(`${OUTPUTS_JOB} does not need macos`);
+  if (at('if') !== undefined) v.push(`${OUTPUTS_JOB} has an if:, so some run skips it`);
+  const perms = wf.entries.filter((e) => e.path[0] === 'jobs' && e.path[1] === OUTPUTS_JOB && e.path[2] === 'permissions');
+  if (perms.length !== 1 || perms[0].path[3] !== 'contents' || perms[0].value !== 'read') v.push(`${OUTPUTS_JOB} is not exactly contents: read`);
+  const secrets = wf.refs.filter((r) => r.scope !== 'comment' && r.path[1] === OUTPUTS_JOB);
+  if (secrets.length) v.push(`${OUTPUTS_JOB} references ${secrets.map((r) => r.secret).join(', ')}`);
+  const step = j.steps.find((s) => s?.run);
+  const legs = (step?.env.get('LEGS') ?? '').split(/\s+/).filter(Boolean).sort();
+  const matrix = matrixLegs(wf, 'macos').map((l) => l.suffix).sort();
+  if (legs.join() !== matrix.join()) v.push(`${OUTPUTS_JOB} checks legs ${legs.join(',') || '(none)'}, not the macos matrix's ${matrix.join(',')}`);
+  if (step?.env.get('OUTPUTS') !== '${{ toJSON(needs.macos.outputs) }}') v.push(`${OUTPUTS_JOB} is not handed the macos outputs`);
+  if (!wf.jobs.get('publish').needs.includes(OUTPUTS_JOB)) v.push(`publish does not need ${OUTPUTS_JOB}`);
+  return v;
+}
+
+test('a job on every run proves each macOS leg reported both sha256 outputs', () => {
+  assert.deepEqual(outputsJobWiring(WF), []);
+  const thirdLeg = plant(TEXT, '            suffix: x64 ', '            suffix: x64b ');
+  assert.match(outputsJobWiring(readWorkflow(thirdLeg)).join('\n'), /not the macos matrix's aarch64,x64b/);
+  const run = (outputs) => {
+    const step = WF.jobs.get(OUTPUTS_JOB).steps.find((s) => s?.run);
+    return spawnSync('bash', ['-c', step.run], { env: { ...process.env, LEGS: step.env.get('LEGS'), OUTPUTS: JSON.stringify(outputs) }, encoding: 'utf8' });
+  };
+  const hex = (c) => c.repeat(64);
+  const good = { 'sha256-aarch64-dmg': hex('a'), 'sha256-aarch64-tar': hex('b'), 'sha256-x64-dmg': hex('c'), 'sha256-x64-tar': hex('d') };
+  assert.equal(run(good).status, 0, run(good).stderr);
+  assert.equal(run({ ...good, 'sha256-aarch64-tar': 'none', 'sha256-x64-tar': 'none' }).status, 0, 'a build with no key reports none');
+  for (const [k, value] of [['sha256-x64-dmg', undefined], ['sha256-x64-dmg', ''], ['sha256-aarch64-tar', ''], ['sha256-aarch64-dmg', hex('g')], ['sha256-x64-tar', hex('a').slice(1)], ['sha256-aarch64-dmg', 'none']]) {
+    const bad = { ...good, [k]: value };
+    if (value === undefined) delete bad[k];
+    assert.notEqual(run(bad).status, 0, `passed ${k}=${JSON.stringify(value)}`);
+  }
+});
+
+test('the macOS sha256 outputs cover every leg, and publish is handed them', () => {
+  assert.deepEqual(macShaWiring(WF), []);
+  const thirdLeg = plant(TEXT, '            suffix: x64 ', '            suffix: x64b ');
+  assert.match(macShaWiring(readWorkflow(thirdLeg)).join('\n'), /not sha256-aarch64-dmg,sha256-aarch64-tar,sha256-x64b-dmg/);
+});
+
+test('publish refuses the macOS legs swapped for each other, and a leg its build did not report', () => {
+  for (const key of [true, false]) {
+    const r = runPublishGather({ key, swapMacLegs: true });
+    assert.notEqual(r.status, 0, `publish passed the two macOS legs swapped (key ${key})`);
+    assert.match(r.stderr, /is not the file the macos job built/);
+  }
+  const unreported = runPublishGather({ macShas: {} });
+  assert.notEqual(unreported.status, 0, 'publish passed a macOS leg with no sha256 from its build');
+});
+
+test('publish is handed the time this run started, from ci-evidence', () => {
+  assert.deepEqual(runStartWiring(WF), []);
+});
+
+test('publish refuses a signature made before this run started', () => {
+  // Inside the old 24 h window but before this run's start: a signature from an earlier run of the
+  // same version (a re-pushed tag), which a re-run of publish in THIS run must never accept.
+  const exe = 'Nexus_9.9.9_x64-setup.exe';
+  const runStarted = now() - 3600;
+  const r = runPublishGather({ runStarted, comments: { [exe]: tauriComment(exe, '9.9.9', runStarted - 301) } });
+  assert.notEqual(r.status, 0, 'publish passed a signature from before this run');
+  const skew = runPublishGather({ runStarted, comments: { [exe]: tauriComment(exe, '9.9.9', runStarted - 299) } });
+  assert.equal(skew.status, 0, `publish refused a signature inside the 300 s margin: ${skew.stderr}`);
+});
+
+test('publish refuses an older installer swapped in with its own valid signature', () => {
+  // Signed by the right key, over exactly these bytes, but for another release: by name, by
+  // version, and by age. Each alone must fail publish.
+  const exe = 'Nexus_9.9.9_x64-setup.exe';
+  for (const comment of [
+    `timestamp:${now()}\tfile:Nexus_9.9.8_x64-setup.exe\tversion:9.9.8`,
+    `timestamp:${now()}\tfile:${exe}\tversion:9.9.8`,
+    `timestamp:${now() - 3 * 86400}\tfile:${exe}\tversion:9.9.9`,
+  ]) {
+    const r = runPublishGather({ comments: { [exe]: comment } });
+    assert.notEqual(r.status, 0, `publish passed ${exe} signed as ${JSON.stringify(comment)}`);
+  }
+});
+
+test('the signature check reads the trusted comment it verified: file, version and age', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'updater-sig-'));
+  try {
+    const k = updaterKey();
+    const conf = path.join(dir, 'tauri.conf.json');
+    fs.writeFileSync(conf, k.conf);
+    const notBefore = now() - 86400;
+    const check = (name, comment, { sign = true, ver = '9.9.9' } = {}) => {
+      const file = path.join(dir, name);
+      fs.writeFileSync(file, `stand-in for ${name}`);
+      fs.rmSync(`${file}.sig`, { force: true });
+      if (sign) fs.writeFileSync(`${file}.sig`, k.sign(fs.readFileSync(file), comment));
+      return spawnSync('node', [VERIFY, '--version', ver, '--not-before', String(notBefore), conf, file], { encoding: 'utf8' });
+    };
+    const exe = 'Nexus_9.9.9_x64-setup.exe';
+    const tar = 'Nexus_9.9.9_x64.app.tar.gz';
+    assert.equal(check(exe, tauriComment(exe, '9.9.9')).status, 0, 'a good signature passes');
+    assert.equal(check(tar, tauriComment(tar, '9.9.9')).status, 0, "the bundler's Nexus.app.tar.gz passes for a tarball");
+    assert.equal(check(tar, `timestamp:${now()}\tfile:${tar}\tversion:9.9.9`).status, 0, 'its own name passes for a tarball');
+    const refused = [
+      [exe, `timestamp:${now()}\tfile:Nexus_9.9.9_amd64.AppImage\tversion:9.9.9`, /signed for Nexus_9.9.9_amd64.AppImage/],
+      [exe, `timestamp:${now()}\tfile:Nexus.app.tar.gz\tversion:9.9.9`, /signed for Nexus.app.tar.gz/],
+      [exe, `timestamp:${now()}\tversion:9.9.9`, /names no file/],
+      [exe, `timestamp:${now()}\tfile:${exe}`, /binds no version/],
+      [exe, `timestamp:${now()}\tfile:${exe}\tversion:9.9.8`, /version 9.9.8, not 9.9.9/],
+      [exe, `timestamp:${notBefore - 1}\tfile:${exe}\tversion:9.9.9`, /older than this run/],
+      [exe, `file:${exe}\tversion:9.9.9`, /no timestamp/],
+    ];
+    for (const [name, comment, why] of refused) {
+      const r = check(name, comment);
+      assert.notEqual(r.status, 0, `passed ${JSON.stringify(comment)}`);
+      assert.match(r.stderr, why);
+    }
+    assert.match(check(exe, '', { sign: false }).stderr, /has no signature beside it/);
+    // An empty or non-numeric --not-before must not switch the age check off.
+    check(exe, tauriComment(exe, '9.9.9'));
+    for (const bad of ['', '1e9', ' 5', '-1', '0x10']) {
+      const r = spawnSync('node', [VERIFY, '--version', '9.9.9', '--not-before', bad, conf, path.join(dir, exe)], { encoding: 'utf8' });
+      assert.notEqual(r.status, 0, `--not-before ${JSON.stringify(bad)} was accepted`);
+    }
+    // An edited trusted comment: the global signature no longer covers it.
+    const file = path.join(dir, exe);
+    check(exe, tauriComment(exe, '9.9.9'));
+    const lines = Buffer.from(fs.readFileSync(`${file}.sig`, 'utf8'), 'base64').toString().split('\n');
+    lines[2] = lines[2].replace('version:9.9.9', 'version:9.9.10');
+    fs.writeFileSync(`${file}.sig`, Buffer.from(lines.join('\n')).toString('base64'));
+    assert.match(spawnSync('node', [VERIFY, '--version', '9.9.10', '--not-before', String(notBefore), conf, file], { encoding: 'utf8' }).stderr, /trusted comment does not verify/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the signature check reads what tauri-cli writes, and checks the key it trusts', () => {
+  // The fixture was signed by tauri-cli 2.11.2 as Nexus_9.9.9_x64-setup.exe and stored as payload.txt.
+  // The comment is read only after the signature and the comment itself verify, so being refused for
+  // its file name is the proof that both did.
+  const conf = path.join(FIXTURE_SIG, 'tauri.conf.json');
+  const run = (c) => spawnSync('node', [VERIFY, '--version', '9.9.9', '--not-before', '0', c, path.join(FIXTURE_SIG, FIXTURE_FILE)], { encoding: 'utf8' });
+  assert.match(run(conf).stderr, /was signed for Nexus_9\.9\.9_x64-setup\.exe, not payload\.txt/);
+  assert.match(run(path.join(ROOT, 'src-tauri', 'tauri.conf.json')).stderr, /but clients trust/);
+});
+
+// ---- The artifact set check (scripts/check-artifact-set.sh) -------------------------------------
+
+function checkSet(files, expected) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'artifact-set-'));
+  try {
+    for (const f of files) {
+      if (f.endsWith('/')) fs.mkdirSync(path.join(dir, f));
+      else fs.writeFileSync(path.join(dir, f), 'x');
+    }
+    return spawnSync('bash', [path.join(ROOT, 'scripts', 'check-artifact-set.sh'), dir, ...expected], { encoding: 'utf8' }).status;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('the artifact set check passes exactly the expected files and refuses anything else', () => {
+  const want = ['Nexus_1.25.0_x64-setup.exe', 'Nexus_1.25.0_x64.sym.gz'];
+  assert.equal(checkSet(want, want), 0);
+  assert.equal(checkSet([...want, 'Nexus_1.25.0_x64-setup.exe.sig'], want), 1, 'an extra file');
+  assert.equal(checkSet([want[0]], want), 1, 'a missing file');
+  assert.equal(checkSet([...want, 'extra/'], want), 1, 'a subdirectory');
+  assert.equal(checkSet(['other.exe', want[1]], want), 1, 'a file swapped for another');
 });
 
 test('the signing certificate imported before the builds is reported', () => {
