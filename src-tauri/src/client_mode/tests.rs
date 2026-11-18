@@ -860,6 +860,9 @@ const MAY_REACH: &[&str] = &[
     // own requests to the Remote service and its issuer, and its enrolment on a connection of
     // its own to the station, which keeps it. It keys nothing and starts nothing of a station.
     "crate::lan_client::account",
+    // The sign-in's link, opened in this computer's own browser (without the AppImage's paths
+    // when Nexus runs as one), as the opener plugin opened it. It starts nothing of a station.
+    "crate::open_on_host",
     // The internet road: this computer's own requests to the Remote service (a pipe, its relay, a
     // renewal) and the road's record in this computer's store. It opens a link and starts nothing
     // of a station.

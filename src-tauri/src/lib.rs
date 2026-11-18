@@ -8558,9 +8558,7 @@ fn reveal_diag_log(app: tauri::AppHandle) -> Result<(), String> {
             .reveal_item_in_dir(&path)
             .map_err(|e| e.to_string())
     } else if let Some(dir) = path.parent() {
-        app.opener()
-            .open_path(dir.to_string_lossy().to_string(), None::<&str>)
-            .map_err(|e| e.to_string())
+        open_on_host(&app, dir.to_string_lossy())
     } else {
         Ok(())
     }
@@ -9061,9 +9059,7 @@ fn reveal_all_txt(app: tauri::AppHandle) -> Result<(), String> {
             .reveal_item_in_dir(&path)
             .map_err(|e| e.to_string())
     } else if let Some(dir) = path.parent() {
-        app.opener()
-            .open_path(dir.to_string_lossy().to_string(), None::<&str>)
-            .map_err(|e| e.to_string())
+        open_on_host(&app, dir.to_string_lossy())
     } else {
         Ok(())
     }
@@ -9520,13 +9516,10 @@ fn recordings_location() -> String {
 /// this issue is about.
 #[tauri::command]
 fn reveal_recordings(app: tauri::AppHandle) -> Result<(), String> {
-    use tauri_plugin_opener::OpenerExt;
     let dir = recordings_dir();
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
-    app.opener()
-        .open_path(dir.to_string_lossy().to_string(), None::<&str>)
-        .map_err(|e| e.to_string())
+    open_on_host(&app, dir.to_string_lossy())
 }
 
 /// Open the SSTV gallery folder (`Pictures/Nexus SSTV`) — #130. The diagnostic log, ALL.TXT and
@@ -9535,13 +9528,10 @@ fn reveal_recordings(app: tauri::AppHandle) -> Result<(), String> {
 /// lands in the folder pictures will go to instead of getting a silent no-op.
 #[tauri::command]
 fn reveal_sstv_gallery(app: tauri::AppHandle) -> Result<(), String> {
-    use tauri_plugin_opener::OpenerExt;
     let dir = sstv_gallery_dir();
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("Could not create {}: {e}", dir.display()))?;
-    app.opener()
-        .open_path(dir.to_string_lossy().to_string(), None::<&str>)
-        .map_err(|e| e.to_string())
+    open_on_host(&app, dir.to_string_lossy())
 }
 
 /// Write one per-QSO RX recording, naming the FULL path in any error.
@@ -24637,9 +24627,7 @@ fn reveal_in_downloads(app: tauri::AppHandle, filename: String) -> Result<bool, 
         return Ok(false);
     };
     if app.opener().reveal_item_in_dir(&path).is_err() {
-        app.opener()
-            .open_path(dir.to_string_lossy().to_string(), None::<&str>)
-            .map_err(|e| e.to_string())?;
+        open_on_host(&app, dir.to_string_lossy())?;
     }
     Ok(true)
 }
@@ -51557,6 +51545,99 @@ fn spawn_launcher(program: &str, args: &[&str], url: &str) -> Result<(), String>
     }
 }
 
+/// The desktop launchers that open a URL, a file or a folder on Linux, in the order they are
+/// tried. The list mirrors the `open` crate's: the freedesktop launcher first, then GIO (present
+/// where `xdg-open` may not be), then the WSL bridge and the Debian browser alternative.
+#[cfg(target_os = "linux")]
+const LAUNCHERS: [(&str, &[&str]); 5] = [
+    ("xdg-open", &[]),
+    ("gio", &["open"]),
+    ("kde-open", &[]),
+    ("wslview", &[]),
+    ("x-www-browser", &[]),
+];
+
+/// Open a web address, a file or a folder with this computer's own handler (its browser, its file
+/// manager), as the opener plugin does, but never with the AppImage's environment.
+///
+/// The plugin starts `xdg-open` with Nexus's environment as it stands, and inside an AppImage
+/// that environment puts the bundle's own libraries first on `LD_LIBRARY_PATH` and the bundle's
+/// directories on `PATH`, `XDG_DATA_DIRS`, the GTK and GIO module paths and more. The host's
+/// browser or file manager then loads the bundle's older libraries and can fail to start, as the
+/// host's TQSL did (`tempo_core::process`). So inside an AppImage the launcher is started here,
+/// through [`tempo_core::process::command_in`], which takes the bundle's entries out
+/// ([`host_launchers`]); everywhere else (Windows, macOS, a .deb, a dev run) the plugin's own
+/// call is made, unchanged. The plugin's `open_url` and `open_path` are one and the same call on
+/// the desktop, so this serves both.
+fn open_on_host<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    target: impl Into<String>,
+) -> Result<(), String> {
+    let target = target.into();
+    #[cfg(target_os = "linux")]
+    if let Some(launchers) = host_launchers(&target, std::env::vars_os()) {
+        return spawn_first_launcher(launchers);
+    }
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_url(target, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+/// The launcher commands that open `target` on the host, each with the environment `vars` less
+/// the AppImage's own entries, in [`LAUNCHERS`] order; `None` when `vars` is not an AppImage's
+/// (nothing would be taken out), and the opener plugin opens it as it always has.
+#[cfg(target_os = "linux")]
+fn host_launchers(
+    target: &str,
+    vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) -> Option<Vec<std::process::Command>> {
+    let vars: Vec<_> = vars.into_iter().collect();
+    if tempo_core::process::host_env_changes("xdg-open".as_ref(), vars.iter().cloned()).is_empty() {
+        return None;
+    }
+    Some(
+        LAUNCHERS
+            .iter()
+            .map(|(program, args)| {
+                let mut cmd = tempo_core::process::command_in(program, vars.iter().cloned());
+                cmd.args(*args).arg(target);
+                cmd
+            })
+            .collect(),
+    )
+}
+
+/// Start the first of `launchers` that starts, as the opener plugin does (`open::that_detached`):
+/// with no stdin, stdout or stderr, in a process group of its own so a signal meant for Nexus's
+/// terminal does not reach the browser, and reaped on a thread of its own when it exits. `Err`
+/// only when none of them could be started.
+#[cfg(target_os = "linux")]
+fn spawn_first_launcher(launchers: Vec<std::process::Command>) -> Result<(), String> {
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+    let mut failures = Vec::new();
+    for mut cmd in launchers {
+        let started = cmd
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn();
+        match started {
+            Ok(mut child) => {
+                std::thread::spawn(move || child.wait());
+                return Ok(());
+            }
+            Err(e) => failures.push(format!("{}: {e}", cmd.get_program().to_string_lossy())),
+        }
+    }
+    Err(format!(
+        "no launcher could be started ({})",
+        failures.join("; ")
+    ))
+}
+
 /// Open a URL in the operator's browser, reporting a failure as a failure (Linux).
 ///
 /// The candidate list mirrors the `open` crate's: the freedesktop launcher first, then GIO
@@ -51565,13 +51646,6 @@ fn spawn_launcher(program: &str, args: &[&str], url: &str) -> Result<(), String>
 /// so does this, carrying what each said.
 #[cfg(target_os = "linux")]
 fn open_url_checked(url: &str) -> Result<(), String> {
-    const LAUNCHERS: [(&str, &[&str]); 5] = [
-        ("xdg-open", &[]),
-        ("gio", &["open"]),
-        ("kde-open", &[]),
-        ("wslview", &[]),
-        ("x-www-browser", &[]),
-    ];
     let mut refusals = Vec::new();
     for (program, args) in LAUNCHERS {
         match spawn_launcher(program, args, url) {
@@ -51617,6 +51691,68 @@ fn open_download_page(app: tauri::AppHandle) -> Result<(), String> {
         ),
     }
     result
+}
+
+/// Opening a web address, a file or a folder from inside an AppImage starts the host's launcher
+/// without the bundle's paths in its environment; outside one the opener plugin opens it.
+#[cfg(all(test, target_os = "linux"))]
+mod host_open_tests {
+    use std::collections::HashMap;
+    use std::ffi::{OsStr, OsString};
+
+    fn vars(pairs: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (OsString::from(k), OsString::from(v)))
+            .collect()
+    }
+
+    #[test]
+    fn inside_an_appimage_the_launcher_gets_the_hosts_paths() {
+        let appimage = vars(&[
+            ("APPDIR", "/tmp/.mount_NexusX"),
+            ("LD_LIBRARY_PATH", "/tmp/.mount_NexusX/usr/lib:/usr/lib64"),
+            ("PATH", "/tmp/.mount_NexusX/usr/bin:/usr/bin:/bin"),
+            (
+                "GIO_EXTRA_MODULES",
+                "/tmp/.mount_NexusX/usr/lib/gio/modules",
+            ),
+            ("HOME", "/home/op"),
+        ]);
+        let url = "https://www.qrz.com/db/K1ABC";
+        let launchers = super::host_launchers(url, appimage).expect("an AppImage's environment");
+        let programs: Vec<&OsStr> = launchers.iter().map(|c| c.get_program()).collect();
+        assert_eq!(
+            programs,
+            super::LAUNCHERS.map(|(p, _)| OsStr::new(p)),
+            "every launcher, in order"
+        );
+        assert_eq!(
+            launchers[1].get_args().collect::<Vec<_>>(),
+            ["open", url],
+            "a launcher's own arguments, then the target"
+        );
+        for launcher in &launchers {
+            let env: HashMap<&OsStr, Option<&OsStr>> = launcher.get_envs().collect();
+            assert_eq!(
+                env[OsStr::new("LD_LIBRARY_PATH")],
+                Some(OsStr::new("/usr/lib64"))
+            );
+            assert_eq!(env[OsStr::new("PATH")], Some(OsStr::new("/usr/bin:/bin")));
+            assert_eq!(env[OsStr::new("GIO_EXTRA_MODULES")], None, "removed");
+            assert_eq!(env[OsStr::new("APPDIR")], None, "removed");
+            assert!(
+                !env.contains_key(OsStr::new("HOME")),
+                "the rest is inherited"
+            );
+        }
+    }
+
+    #[test]
+    fn outside_an_appimage_the_plugin_opens() {
+        let desktop = vars(&[("PATH", "/usr/bin:/bin"), ("HOME", "/home/op")]);
+        assert!(super::host_launchers("/home/op/Nexus", desktop).is_none());
+    }
 }
 
 /// Stamp POTA/SOTA park refs from a pota.app hunter/activator ADIF export onto
@@ -51696,11 +51832,8 @@ fn qrz_url(call: &str) -> Option<String> {
 /// logbook "who is this?" affordance).
 #[tauri::command]
 fn open_qrz_page(app: tauri::AppHandle, call: String) -> Result<(), String> {
-    use tauri_plugin_opener::OpenerExt;
     let url = qrz_url(&call).ok_or("no callsign")?;
-    app.opener()
-        .open_url(url, None::<&str>)
-        .map_err(|e| e.to_string())
+    open_on_host(&app, url)
 }
 
 /// The native title bar's theme, from the operator's theme pick: `"light"`, `"dark"`, or
@@ -51747,11 +51880,8 @@ fn dxped_page_url(call: &str, url: Option<&str>) -> Option<String> {
 /// operation" affordance.
 #[tauri::command]
 fn open_dxped_page(app: tauri::AppHandle, call: String, url: Option<String>) -> Result<(), String> {
-    use tauri_plugin_opener::OpenerExt;
     let target = dxped_page_url(&call, url.as_deref()).ok_or("no page to open")?;
-    app.opener()
-        .open_url(target, None::<&str>)
-        .map_err(|e| e.to_string())
+    open_on_host(&app, target)
 }
 
 /// Fire an OS notification (Pounce's "new one" alert). Routed through Rust — the
@@ -51795,16 +51925,13 @@ fn os_notify(app: tauri::AppHandle, title: String, body: String) -> Result<(), S
 /// hands a UI-supplied string (some of it third-party feed data) to the operator's browser.
 #[tauri::command]
 fn open_external_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
-    use tauri_plugin_opener::OpenerExt;
     let lower = url.to_ascii_lowercase();
     if !(lower.starts_with("http://") || lower.starts_with("https://"))
         || url.contains(char::is_whitespace)
     {
         return Err("not an http(s) URL".to_string());
     }
-    app.opener()
-        .open_url(url, None::<&str>)
-        .map_err(|e| e.to_string())
+    open_on_host(&app, url)
 }
 
 /// The most a QSL label sheet may be: a few thousand labels' markup, with room to spare.
@@ -51818,7 +51945,6 @@ const QSL_LABELS_MAX_BYTES: usize = 8 << 20;
 /// browser's honours the sheet's page size and zero margins.
 #[tauri::command]
 fn open_qsl_labels(app: tauri::AppHandle, html: String) -> Result<(), String> {
-    use tauri_plugin_opener::OpenerExt;
     if html.len() > QSL_LABELS_MAX_BYTES {
         return Err("the label sheet is too large to print in one go".to_string());
     }
@@ -51826,9 +51952,7 @@ fn open_qsl_labels(app: tauri::AppHandle, html: String) -> Result<(), String> {
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join("qsl-labels.html");
     std::fs::write(&path, html).map_err(|e| e.to_string())?;
-    app.opener()
-        .open_path(path.to_string_lossy().to_string(), None::<&str>)
-        .map_err(|e| e.to_string())
+    open_on_host(&app, path.to_string_lossy())
 }
 
 /// The quit cleanup ran — however many exit events arrive, it runs ONCE.
@@ -55754,12 +55878,7 @@ fn remote_service_for(
         // sign-in does on the operator's computer.
         {
             let app = handle.clone();
-            Arc::new(move |url: &str| {
-                use tauri_plugin_opener::OpenerExt;
-                app.opener()
-                    .open_url(url, None::<&str>)
-                    .map_err(|e| e.to_string())
-            })
+            Arc::new(move |url: &str| open_on_host(&app, url))
         },
     )
 }

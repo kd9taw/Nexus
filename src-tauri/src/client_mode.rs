@@ -2760,7 +2760,6 @@ fn sign_in_again<R: Runtime>(
     use crate::lan_client::account::{Ask, Env};
     client.signing_again(Some(by), true);
     tauri::async_runtime::spawn(async move {
-        use tauri_plugin_opener::OpenerExt;
         let env = Env::new(
             stations,
             Arc::new(tempo_stream::lan::dnssd::find),
@@ -2769,11 +2768,7 @@ fn sign_in_again<R: Runtime>(
         );
         let signed = match env {
             Ok(env) => {
-                let open = |url: &str| {
-                    app.opener()
-                        .open_url(url, None::<&str>)
-                        .map_err(|e| e.to_string())
-                };
+                let open = |url: &str| crate::open_on_host(&app, url);
                 let choose: crate::lan_client::internet::Choose =
                     Arc::new(|_| Box::pin(async { None }));
                 let ask: Ask = Arc::new(|_, _| Box::pin(async { None }));
