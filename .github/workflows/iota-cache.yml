@@ -13,9 +13,13 @@
 # its tag, and weekly, so the entry is never evicted for want of use (GitHub evicts after 7 days
 # untouched).
 #
-# The key is the two lists' content: a save happens only when they changed, and the restore takes
-# the newest entry. The paths, the key and the steps match release.yml's IOTA steps; change them
-# together, or the release jobs restore nothing from here.
+# Entries are saved under iota-lists-main-<the two lists' content hash>, only from main (a dispatch
+# on another branch refreshes nothing), and only when the content changed; the restore takes the
+# newest. release.yml restores iota-lists-tag-* (its own re-runs) then iota-lists-main-*, into a
+# directory outside the workspace, and the script checks that directory as a whole before using
+# any of it (release.yml's IOTA comment has the threat and the checks). The path, the prefixes and
+# the steps match release.yml's IOTA steps; change them together, or the release jobs restore
+# nothing from here.
 
 name: IOTA lists cache
 
@@ -47,28 +51,31 @@ jobs:
         with:
           node-version: 24
 
+      - name: Empty the IOTA cache directory
+        run: rm -rf ~/.nexus-iota-cache
+
       - name: Restore the last good IOTA lists
         id: iota-cache
         uses: actions/cache/restore@v6
         with:
-          path: |
-            src-tauri/resources/iota/iota_groups.json
-            src-tauri/resources/iota/iota_islands.json
-            src-tauri/resources/iota/iota_groups.manifest.json
-          key: iota-lists-${{ github.run_id }}
-          restore-keys: iota-lists-
+          path: ~/.nexus-iota-cache
+          key: iota-lists-main-${{ github.run_id }}
+          restore-keys: iota-lists-main-
 
       # A download that fails falls back to the restored copy and passes; only with neither does
       # this fail, and then main holds no copy for the next release until a run here succeeds.
       - name: Download the IOTA lists
-        run: node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota --fallback src-tauri/resources/iota
+        run: |
+          set -euo pipefail
+          node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota --fallback ~/.nexus-iota-cache
+          rm -rf ~/.nexus-iota-cache
+          mkdir -p ~/.nexus-iota-cache
+          cp src-tauri/resources/iota/iota_groups.json src-tauri/resources/iota/iota_islands.json \
+            src-tauri/resources/iota/iota_groups.manifest.json ~/.nexus-iota-cache/
 
       - name: Save the IOTA lists when they changed
-        if: steps.iota-cache.outputs.cache-matched-key != format('iota-lists-{0}', hashFiles('src-tauri/resources/iota/iota_groups.json', 'src-tauri/resources/iota/iota_islands.json'))
+        if: github.ref == 'refs/heads/main' && !endsWith(steps.iota-cache.outputs.cache-matched-key, format('-{0}', hashFiles('src-tauri/resources/iota/iota_groups.json', 'src-tauri/resources/iota/iota_islands.json')))
         uses: actions/cache/save@v6
         with:
-          path: |
-            src-tauri/resources/iota/iota_groups.json
-            src-tauri/resources/iota/iota_islands.json
-            src-tauri/resources/iota/iota_groups.manifest.json
-          key: iota-lists-${{ hashFiles('src-tauri/resources/iota/iota_groups.json', 'src-tauri/resources/iota/iota_islands.json') }}
+          path: ~/.nexus-iota-cache
+          key: iota-lists-main-${{ hashFiles('src-tauri/resources/iota/iota_groups.json', 'src-tauri/resources/iota/iota_islands.json') }}

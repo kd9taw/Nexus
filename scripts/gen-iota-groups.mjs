@@ -19,12 +19,16 @@
 // the run's summary. Any other status, and a file refused for its size, fails at once.
 //
 // Fallback (--fallback <dir>): a list whose download (or file) fails, or fails the checks below,
-// is taken from the copy this script wrote into <dir> on an earlier run, when that copy passes the
-// same checks, and a line on stderr says so ("using the cached copy"). The release jobs restore
-// the last good lists there from the GitHub Actions cache, because the lists are never committed.
-// The manifest then carries the cached copy's `fetchedAt`, not now, so the app still knows how old
-// the bundled lists are (0, undated, when that manifest is missing). No usable cached copy: the
-// run fails as it would without --fallback.
+// is taken from a copy an earlier run left in <dir>, and a line on stderr says so ("using the
+// cached copy"). The release jobs restore the last good lists into <dir> from the GitHub Actions
+// cache (the lists are never committed), so <dir> is untrusted input, read once and checked as a
+// whole before any of it is used (`checkCacheDir`): exactly the three files this script writes
+// (iota_groups.json, iota_islands.json, iota_groups.manifest.json) and nothing else, each a
+// regular file (not a link) within its size limit; both lists pass the checks below and the
+// manifest is a JSON object with a whole-number `fetchedAt`. Anything else is a cache miss, and
+// the reason is logged. Only the checked bytes are written to outDir; <dir> itself is never
+// copied. The manifest then carries the cached copy's `fetchedAt`, not now, so the app knows how
+// old the bundled lists are. No usable cached copy: the run fails as it would without --fallback.
 //
 // The checks — any miss exits 1 and writes nothing, so a short or changed file never replaces
 // a copy already staged:
@@ -59,7 +63,7 @@
 //   groups copy already on disk (no network) and dates it now, with `--islands` an islands copy too.
 //   --dry-run checks and prints the manifest, writes nothing.
 
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, lstatSync, readdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -187,38 +191,75 @@ export function checkIslands(bytes) {
 
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex')
 
+/** The files a cache directory may hold, each with its size limit: what this script writes. */
+export const CACHE_FILES = {
+  'iota_groups.json': MAX_BYTES,
+  'iota_islands.json': ISLANDS_MAX_BYTES,
+  'iota_groups.manifest.json': 64 * 1024,
+}
+
 /**
- * `get()`'s bytes once `checkFn` passes them; when either throws and `dir` is set, the copy of
- * `file` in `dir` instead, if it passes `checkFn`. Returns `{bytes, cached}`; with no usable
- * copy, throws the first failure with the copy's own reason added.
+ * The cached copy in `dir`, checked as a whole: `{groups, islands, fetchedAt}` (the bytes, read
+ * once), or `{miss}` naming why it cannot be used. See "Fallback" in the header.
  */
-export async function orCached(get, { file, checkFn, dir, log = (line) => console.error(line) }) {
+export function checkCacheDir(dir) {
+  try {
+    let st
+    try {
+      st = lstatSync(dir)
+    } catch (e) {
+      if (e.code === 'ENOENT') return { miss: `no cached copy in ${dir}` }
+      throw e
+    }
+    if (!st.isDirectory()) return { miss: `${dir} is not a directory` }
+    const names = readdirSync(dir)
+    const extra = names.filter((n) => !Object.hasOwn(CACHE_FILES, n))
+    if (extra.length) return { miss: `unexpected entries in ${dir}: ${extra.join(', ')}` }
+    if (names.length === 0) return { miss: `no cached copy in ${dir}` }
+    const bytes = {}
+    for (const [name, max] of Object.entries(CACHE_FILES)) {
+      const path = join(dir, name)
+      let f
+      try {
+        f = lstatSync(path)
+      } catch (e) {
+        if (e.code === 'ENOENT') return { miss: `${name} is missing from ${dir}` }
+        throw e
+      }
+      if (!f.isFile()) return { miss: `${name} in ${dir} is not a regular file` }
+      if (f.size > max) return { miss: `${name} in ${dir} is ${f.size} bytes, over ${max}` }
+      bytes[name] = readFileSync(path)
+      if (bytes[name].length > max) return { miss: `${name} in ${dir} is over ${max} bytes` }
+    }
+    check(bytes['iota_groups.json'])
+    checkIslands(bytes['iota_islands.json'])
+    const manifest = JSON.parse(bytes['iota_groups.manifest.json'].toString('utf8'))
+    if (manifest === null || typeof manifest !== 'object' || Array.isArray(manifest)) {
+      return { miss: `the cached manifest is not a JSON object` }
+    }
+    if (!Number.isInteger(manifest.fetchedAt) || manifest.fetchedAt <= 0) {
+      return { miss: `the cached manifest has no valid fetchedAt` }
+    }
+    return { groups: bytes['iota_groups.json'], islands: bytes['iota_islands.json'], fetchedAt: manifest.fetchedAt }
+  } catch (e) {
+    return { miss: `the cached copy in ${dir} failed its checks: ${e.message}` }
+  }
+}
+
+/**
+ * `get()`'s bytes once `checkFn` passes them; when either throws, `cached` (bytes already
+ * checked by `checkCacheDir`) instead, if there are any. Returns `{bytes, cached}`; with no
+ * cached bytes, throws the failure with `missWhy` (why there is no usable copy) added.
+ */
+export async function orCached(get, { file, checkFn, cached = null, missWhy = null, log = (line) => console.error(line) }) {
   try {
     const bytes = await get()
     checkFn(bytes)
     return { bytes, cached: false }
   } catch (e) {
-    if (!dir) throw e
-    const path = join(dir, file)
-    let bytes
-    try {
-      bytes = readFileSync(path)
-      checkFn(bytes)
-    } catch (c) {
-      throw new Error(`${e.message}; no usable cached copy (${path}: ${c.code === 'ENOENT' ? 'missing' : c.message})`)
-    }
-    log(`gen-iota-groups: ${e.message}; using the cached copy ${path} instead`)
-    return { bytes, cached: true }
-  }
-}
-
-/** The `fetchedAt` of the manifest in `dir`, or 0 (undated) when there is none to read. */
-function cachedFetchedAt(dir) {
-  try {
-    const at = JSON.parse(readFileSync(join(dir, 'iota_groups.manifest.json'), 'utf8')).fetchedAt
-    return Number.isInteger(at) && at > 0 ? at : 0
-  } catch {
-    return 0
+    if (!cached) throw missWhy ? new Error(`${e.message}; no usable cached copy (${missWhy})`) : e
+    log(`gen-iota-groups: ${e.message}; using the cached copy of ${file} instead`)
+    return { bytes: cached, cached: true }
   }
 }
 
@@ -237,13 +278,26 @@ async function main() {
   const args = argv.filter((a, i) => a !== '--dry-run' && !valued.has(i))
   const [src = '--download', outDir = 'src-tauri/resources/iota'] = args
   const download = src === '--download'
+  // The cache is read and checked once, up front; a miss is logged and the downloads decide.
+  let cache = null
+  let missWhy = null
+  if (fallbackDir) {
+    cache = checkCacheDir(fallbackDir)
+    if (cache.miss) {
+      missWhy = cache.miss
+      console.error(`gen-iota-groups: cache miss: ${missWhy}`)
+      cache = null
+    } else {
+      console.error(`gen-iota-groups: cached copy in ${fallbackDir} checked (fetched ${new Date(cache.fetchedAt * 1000).toISOString()})`)
+    }
+  }
   const fromCache = []
-  const take = async (file, get, checkFn) => {
-    const got = await orCached(get, { file, checkFn, dir: fallbackDir })
+  const take = async (file, get, checkFn, cached) => {
+    const got = await orCached(get, { file, checkFn, cached, missWhy })
     if (got.cached) fromCache.push(file)
     return got.bytes
   }
-  const bytes = await take('iota_groups.json', () => (download ? downloadWithRetry() : readFileSync(src)), check)
+  const bytes = await take('iota_groups.json', () => (download ? downloadWithRetry() : readFileSync(src)), check, cache?.groups)
   const groups = check(bytes)
   // The islands, checked before anything is written; a failure is kept for after the groups are.
   let islandBytes = null
@@ -257,6 +311,7 @@ async function main() {
             ? downloadWithRetry({ fetchOnce: () => downloadOnce(ISLANDS_URL, ISLANDS_MAX_BYTES) })
             : readFileSync(islandsFile),
         checkIslands,
+        cache?.islands,
       )
     } catch (e) {
       islandBytes = null
@@ -264,7 +319,7 @@ async function main() {
     }
   }
   // A list from the cache dates the whole manifest as that copy, so the app never takes it as new.
-  const now = fromCache.length ? new Date(cachedFetchedAt(fallbackDir) * 1000) : new Date()
+  const now = fromCache.length ? new Date(cache.fetchedAt * 1000) : new Date()
   const manifest = {
     source: GROUPS_URL,
     fetched: now.toISOString(),

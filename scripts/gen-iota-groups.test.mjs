@@ -10,21 +10,22 @@
 // The islands list's checks (`checkIslands`) are tested at the end, on made-up islands in IOTA's
 // islands.json shape: the real list is never in the repository.
 //
-// The cached-copy fallback (`orCached`, `--fallback`) is tested last: the release jobs restore the
-// last good lists from the Actions cache and the script falls back to them, and with no usable
-// copy the run fails, which fails the release job.
+// The cached-copy fallback (`checkCacheDir`, `orCached`, `--fallback`) is tested last: the release
+// jobs restore the last good lists from the Actions cache, which is untrusted input, so the
+// directory is refused as a whole for anything but the three files the script writes, valid; the
+// script falls back to it, and with no usable copy the run fails, which fails the release job.
 //
 // Run: node --test scripts/gen-iota-groups.test.mjs
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs'
+import { readdirSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { check, checkIslands, downloadWithRetry, orCached, RETRY_DELAYS_MS } from './gen-iota-groups.mjs'
+import { CACHE_FILES, check, checkCacheDir, checkIslands, downloadWithRetry, orCached, RETRY_DELAYS_MS } from './gen-iota-groups.mjs'
 
 /**
  * A fetch answering `statuses` in turn (200 carries `body`), and the calls it saw. `'net'` is a
@@ -191,43 +192,85 @@ const failing = (message) => async () => {
   throw new Error(message)
 }
 
-test('a failed download takes the cached copy, and says so', async (t) => {
-  const dir = cacheDir(t)
+test('the cache directory check accepts exactly what the script writes, read once', (t) => {
+  const got = checkCacheDir(cacheDir(t, 1_700_000_000))
+  assert.equal(got.miss, undefined, got.miss)
+  assert.deepEqual(got.groups, groups())
+  assert.deepEqual(got.islands, islands(10_000))
+  assert.equal(got.fetchedAt, 1_700_000_000)
+})
+
+test('the cache directory check takes anything else as a miss, saying why', (t) => {
+  const miss = (dir) => checkCacheDir(dir).miss ?? ''
+  assert.match(miss(join(tempDir(t), 'absent')), /no cached copy/)
+  assert.match(miss(tempDir(t)), /no cached copy/)
+
+  const extra = cacheDir(t)
+  writeFileSync(join(extra, 'build.rs'), 'fn main() {}')
+  assert.match(miss(extra), /unexpected entries .*build\.rs/)
+
+  const sub = cacheDir(t)
+  mkdirSync(join(sub, 'nested'))
+  assert.match(miss(sub), /unexpected entries .*nested/)
+
+  const short = cacheDir(t)
+  rmSync(join(short, 'iota_islands.json'))
+  assert.match(miss(short), /iota_islands\.json is missing/)
+
+  const linked = cacheDir(t)
+  const target = join(tempDir(t), 'elsewhere.json')
+  writeFileSync(target, groups())
+  rmSync(join(linked, 'iota_groups.json'))
+  symlinkSync(target, join(linked, 'iota_groups.json'))
+  assert.match(miss(linked), /iota_groups\.json .* not a regular file/)
+
+  const big = cacheDir(t)
+  writeFileSync(join(big, 'iota_groups.manifest.json'), ' '.repeat(CACHE_FILES['iota_groups.manifest.json'] + 1))
+  assert.match(miss(big), /iota_groups\.manifest\.json .* over 65536/)
+
+  const notJson = cacheDir(t)
+  writeFileSync(join(notJson, 'iota_groups.json'), '<html>maintenance</html>')
+  assert.match(miss(notJson), /failed its checks/)
+
+  const shape = cacheDir(t)
+  writeFileSync(join(shape, 'iota_islands.json'), '{"islands":[]}')
+  assert.match(miss(shape), /failed its checks: the IOTA islands list is not a JSON array/)
+
+  const undated = cacheDir(t)
+  writeFileSync(join(undated, 'iota_groups.manifest.json'), '{"fetchedAt":"yesterday"}')
+  assert.match(miss(undated), /no valid fetchedAt/)
+
+  const arrayManifest = cacheDir(t)
+  writeFileSync(join(arrayManifest, 'iota_groups.manifest.json'), '[1]')
+  assert.match(miss(arrayManifest), /not a JSON object/)
+})
+
+test('a failed download takes the cached bytes, and says so', async () => {
   const lines = []
-  const got = await orCached(failing('HTTP 202, after 4 attempts'), { file: 'iota_groups.json', checkFn: check, dir, log: (l) => lines.push(l) })
+  const got = await orCached(failing('HTTP 202, after 4 attempts'), { file: 'iota_groups.json', checkFn: check, cached: groups(), log: (l) => lines.push(l) })
   assert.equal(got.cached, true)
   assert.deepEqual(got.bytes, groups())
-  assert.equal(lines.length, 1)
-  assert.match(lines[0], /HTTP 202, after 4 attempts; using the cached copy .*iota_groups\.json instead/)
+  assert.deepEqual(lines, ['gen-iota-groups: HTTP 202, after 4 attempts; using the cached copy of iota_groups.json instead'])
 })
 
-test('a downloaded file that fails the checks takes the cached copy too', async (t) => {
-  const dir = cacheDir(t)
-  const got = await orCached(async () => Buffer.from('<html>maintenance</html>'), { file: 'iota_groups.json', checkFn: check, dir, log: quiet })
+test('a downloaded file that fails the checks takes the cached bytes too', async () => {
+  const got = await orCached(async () => Buffer.from('<html>maintenance</html>'), { file: 'iota_groups.json', checkFn: check, cached: groups(), log: quiet })
   assert.equal(got.cached, true)
 })
 
-test('with no usable cached copy the failure stands, naming why the copy was not used', async (t) => {
-  const empty = tempDir(t)
+test('with no cached bytes the failure stands, with the reason there were none', async () => {
   await assert.rejects(
-    orCached(failing('HTTP 202, after 4 attempts'), { file: 'iota_groups.json', checkFn: check, dir: empty, log: quiet }),
-    /HTTP 202, after 4 attempts; no usable cached copy \(.*iota_groups\.json: missing\)/,
+    orCached(failing('HTTP 202, after 4 attempts'), { file: 'iota_groups.json', checkFn: check, missWhy: 'no cached copy in /x', log: quiet }),
+    /^Error: HTTP 202, after 4 attempts; no usable cached copy \(no cached copy in \/x\)$/,
   )
-  writeFileSync(join(empty, 'iota_groups.json'), '[]')
-  await assert.rejects(
-    orCached(failing('HTTP 202'), { file: 'iota_groups.json', checkFn: check, dir: empty, log: quiet }),
-    /no usable cached copy .*only 0 island groups/,
-  )
-  // And without a cache directory the download's own failure is all there is.
   await assert.rejects(orCached(failing('HTTP 202'), { file: 'iota_groups.json', checkFn: check, log: quiet }), /^Error: HTTP 202$/)
 })
 
-test('CONTROL: a good download is used and the cached copy is not read', async (t) => {
-  const dir = tempDir(t)
-  writeFileSync(join(dir, 'iota_groups.json'), 'not json')
+test('CONTROL: a good download is used, not the cached bytes', async () => {
   const lines = []
-  const got = await orCached(async () => groups(), { file: 'iota_groups.json', checkFn: check, dir, log: (l) => lines.push(l) })
+  const got = await orCached(async () => groups(), { file: 'iota_groups.json', checkFn: check, cached: Buffer.from('stale'), log: (l) => lines.push(l) })
   assert.equal(got.cached, false)
+  assert.deepEqual(got.bytes, groups())
   assert.deepEqual(lines, [])
 })
 
@@ -240,8 +283,9 @@ test('the script stages the cached lists when its sources fail, dated as the cac
   const gone = join(out, 'no-such-file.json')
   const r = run(gone, out, '--islands', gone, '--fallback', cache)
   assert.equal(r.status, 0, r.stderr)
-  assert.match(r.stderr, /using the cached copy .*iota_groups\.json instead/)
-  assert.match(r.stderr, /using the cached copy .*iota_islands\.json instead/)
+  assert.match(r.stderr, /cached copy in .* checked \(fetched 2023-11-14T22:13:20\.000Z\)/)
+  assert.match(r.stderr, /using the cached copy of iota_groups\.json instead/)
+  assert.match(r.stderr, /using the cached copy of iota_islands\.json instead/)
   assert.match(r.stdout, /IOTA lists from the cached copy \(fetched 2023-11-14T22:13:20\.000Z\): iota_groups\.json, iota_islands\.json/)
   assert.deepEqual(readFileSync(join(out, 'iota_groups.json')), groups())
   assert.deepEqual(readFileSync(join(out, 'iota_islands.json')), islands(10_000))
@@ -251,13 +295,15 @@ test('the script stages the cached lists when its sources fail, dated as the cac
   assert.equal(manifest.islands, 10_000)
 })
 
-test('the cache directory may be the output directory itself, as the release jobs use it', (t) => {
-  const dir = cacheDir(t)
-  const gone = join(dir, 'no-such-file.json')
-  const r = run(gone, dir, '--islands', gone, '--fallback', dir)
-  assert.equal(r.status, 0, r.stderr)
-  assert.deepEqual(readFileSync(join(dir, 'iota_groups.json')), groups())
-  assert.equal(JSON.parse(readFileSync(join(dir, 'iota_groups.manifest.json'), 'utf8')).fetchedAt, 1_700_000_000)
+test('a cache directory with anything unexpected in it is a miss: the script fails and stages nothing', (t) => {
+  const cache = cacheDir(t)
+  writeFileSync(join(cache, 'postinstall.sh'), 'echo hi')
+  const out = tempDir(t)
+  const gone = join(out, 'no-such-file.json')
+  const r = run(gone, out, '--islands', gone, '--fallback', cache)
+  assert.equal(r.status, 1)
+  assert.match(r.stderr, /cache miss: unexpected entries .*postinstall\.sh/)
+  assert.deepEqual(readdirSync(out), [])
 })
 
 test('with neither a source nor a cached copy the script fails and stages nothing', (t) => {
@@ -266,6 +312,7 @@ test('with neither a source nor a cached copy the script fails and stages nothin
   const gone = join(out, 'no-such-file.json')
   const r = run(gone, out, '--islands', gone, '--fallback', empty)
   assert.equal(r.status, 1)
+  assert.match(r.stderr, /cache miss: no cached copy/)
   assert.match(r.stderr, /no usable cached copy/)
   assert.equal(existsSync(join(out, 'iota_groups.json')), false)
   assert.equal(existsSync(join(out, 'iota_groups.manifest.json')), false)
@@ -280,7 +327,7 @@ test('CONTROL: good sources are staged as new, with the cache directory unused',
   const before = Math.floor(Date.now() / 1000)
   const r = run(join(src, 'groups.json'), out, '--islands', join(src, 'islands.json'), '--fallback', cache)
   assert.equal(r.status, 0, r.stderr)
-  assert.doesNotMatch(r.stderr + r.stdout, /cached copy/)
+  assert.doesNotMatch(r.stderr + r.stdout, /using the cached copy|IOTA lists from the cached copy/)
   const manifest = JSON.parse(readFileSync(join(out, 'iota_groups.manifest.json'), 'utf8'))
   assert.ok(manifest.fetchedAt >= before, 'dated now')
   assert.equal(manifest.islands, 10_001)
