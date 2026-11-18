@@ -18906,6 +18906,8 @@ fn save_and_publish(
                 settings.lotw_last_qsl.clear();
             }
             keep_lotw_place_for_its_account(eng.settings(), &mut settings);
+            // QRZ's resume point and high-water are the sync's, the same way.
+            keep_qrz_fetch_place(eng.settings(), &mut settings);
             // Same for eQSL — its cursor is account-bound (see download_eqsl_report).
             keep_eqsl_cursor_for_its_account(eng.settings(), &mut settings);
             // A ClubLog credential change re-arms auto-push (clears the 403 suspend).
@@ -40061,6 +40063,16 @@ fn keep_lotw_place_for_its_account(held: &Settings, form: &mut Settings) {
     }
 }
 
+/// A save's place in QRZ's whole-book fetch and its delta high-water ([`save_and_publish`],
+/// [`sync_qrz_book`]): the sync's own, never the form's, so the held ones are kept. A form loaded
+/// before or during a fetch would otherwise put an older resume point back, and the next sync
+/// would fetch pages again or start the book over.
+fn keep_qrz_fetch_place(held: &Settings, form: &mut Settings) {
+    form.qrz_fetch_after_logid = held.qrz_fetch_after_logid;
+    form.qrz_fetch_started_unix = held.qrz_fetch_started_unix;
+    form.qrz_last_sync_unix = held.qrz_last_sync_unix;
+}
+
 /// Whether a finished eQSL InBox sync may move the cursor: only when its download is complete
 /// (a cut-off one must not skip the cards it never received), and only while Settings still name
 /// the account it read. The fetch runs without the engine lock, and a save meanwhile that names
@@ -41395,6 +41407,12 @@ const QRZ_SYNC_CUT_SHORT: ConnDetail = conn_detail!(
     "QRZ's logbook download stopped before its end. The pages that arrived before it are merged \
      and kept, and the next sync carries on from where it stopped."
 );
+/// A full page of QRZ's book that did not move past the page before it: QRZ answered from
+/// somewhere other than where it was asked to start. Nexus's own words.
+const QRZ_SYNC_NO_PROGRESS: ConnDetail = conn_detail!(
+    "QRZ's logbook download did not move past one of its pages. The pages that arrived before it \
+     are merged and kept, and the next sync starts the logbook again from its beginning."
+);
 /// QRZ answered and refused. The class; never QRZ's wording, which is the leak.
 const QRZ_SYNC_REFUSED: ConnDetail = conn_detail!(
     "QRZ took the request and refused it — check the Logbook API key in Settings ▸ Services ▸ \
@@ -41528,7 +41546,7 @@ fn qrz_book_pages(
     cut_short: &str,
     page: &mut QrzPageSink<'_>,
 ) -> Result<(), QrzSyncFailure> {
-    use tempo_core::qrz::FetchPage;
+    use tempo_core::qrz::{FetchPage, PageFault};
     loop {
         let resp = post(tempo_core::qrz::build_fetch_page_body(key, after)).map_err(|message| {
             QrzSyncFailure {
@@ -41540,9 +41558,12 @@ fn qrz_book_pages(
         let next = match tempo_core::qrz::fetch_page_verdict(&fetched, after) {
             Ok(FetchPage::Last) => None,
             Ok(FetchPage::Next(n)) => Some(n),
-            Err(_) => {
+            Err(fault) => {
                 return Err(QrzSyncFailure {
-                    detail: QRZ_SYNC_CUT_SHORT,
+                    detail: match fault {
+                        PageFault::CutShort => QRZ_SYNC_CUT_SHORT,
+                        PageFault::NoProgress => QRZ_SYNC_NO_PROGRESS,
+                    },
                     message: ScreenReason::new(cut_short.to_string()),
                 })
             }
@@ -41650,6 +41671,22 @@ fn sync_qrz_book(
         }
         save_qrz_fetch_cursor(engine, next, started);
         Ok(())
+    })
+    .map_err(|failure| {
+        if failure.detail != QRZ_SYNC_NO_PROGRESS {
+            return failure;
+        }
+        // Asking from the same place again would bring the same page back, every time: the next
+        // sync starts the book over instead (the pages merged so far merge again unchanged).
+        let mut eng = engine_lock(engine);
+        eng.set_qrz_fetch_cursor(0, 0);
+        persist_settings(eng.settings().clone(), |e| {
+            eprintln!("[qrz-sync] settings save failed: {e}")
+        });
+        QrzSyncFailure {
+            detail: QRZ_SYNC_NO_PROGRESS,
+            message: ScreenReason::new(QRZ_SYNC_NO_PROGRESS.as_str().to_string()),
+        }
     })?;
     // `qrz_book_pages` hands over at least one page before it returns Ok.
     Ok(total.unwrap_or_else(|| tempo_core::reconcile::ReconcileSummary::default().into()))
@@ -41947,6 +41984,52 @@ mod qrz_paged_sync_tests {
         assert_eq!(contacts(&engine), 250);
         assert_eq!(cursors(&engine).0, logid(249) + 1);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A QRZ that answers every page from the book's beginning, whatever AFTERLOGID asks, stops
+    /// the fetch on its second page. The resume point clears, so no sync keeps asking for that one
+    /// page, and the operator is told the next sync starts the book over.
+    #[test]
+    fn a_page_that_does_not_move_on_starts_the_book_over() {
+        let (dir, engine) = crate::durable_command_tests::engine_on_store("qrz-stuck", 0);
+        let qrz = FakeBook::of(620);
+        let from_the_start = |body: String| {
+            let (head, rest) = body.split_once("AFTERLOGID%3A").expect("a page FETCH");
+            let tail = rest.trim_start_matches(|c: char| c.is_ascii_digit());
+            qrz.post(format!("{head}AFTERLOGID%3A0{tail}"))
+        };
+        let failed = sync_qrz_with(&engine, KEY, &from_the_start, None, true)
+            .expect_err("the stuck page is refused");
+        assert!(
+            failed.message.on_screen().contains("from its beginning"),
+            "{}",
+            failed.message.on_screen()
+        );
+        assert_eq!(contacts(&engine), 250, "the first page is kept");
+        assert_eq!(cursors(&engine), (0, 0, 0), "no resume point to stick on");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The fetch's resume point and the delta high-water are the sync's own: a Settings save
+    /// from a form loaded before the fetch moved them keeps the engine's.
+    #[test]
+    fn a_settings_save_keeps_the_fetchs_place() {
+        let held = crate::Settings {
+            qrz_fetch_after_logid: 1_750,
+            qrz_fetch_started_unix: 1_763_000_000,
+            qrz_last_sync_unix: 1_762_000_000,
+            ..crate::Settings::default()
+        };
+        let mut stale = crate::Settings::default();
+        crate::keep_qrz_fetch_place(&held, &mut stale);
+        assert_eq!(
+            (
+                stale.qrz_fetch_after_logid,
+                stale.qrz_fetch_started_unix,
+                stale.qrz_last_sync_unix
+            ),
+            (1_750, 1_763_000_000, 1_762_000_000)
+        );
     }
 
     /// Check confirmations ▸ QRZ reads the whole book a page at a time too.
