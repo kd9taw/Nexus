@@ -159,48 +159,34 @@ jobs:
             --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" --sha "$tag_sha"
 
   # ---------------------------------------------------------------------------------------
-  # THE IOTA LISTS — downloaded, or the last good copy from the Actions cache, checked, and handed
-  # to the installer jobs as a workflow artifact.
+  # THE IOTA LISTS — downloaded once, checked, and handed to the installer jobs as a workflow
+  # artifact. No cache: a release run reads nothing a less trusted workflow could have written.
   #
   # The IOTA island-group and islands lists (© RSGB and IOTA Ltd) ship in the installer with
   # IOTA Ltd's permission and are never committed (src-tauri/resources/iota/README.md, NOTICE).
   # iota-world.org answers HTTP 202 with no file while it rebuilds them; the script asks again
-  # (15/30/60 s), and even so 1.25.0-beta.1's Linux x86_64 installer shipped without them, as
-  # 1.22.0's had. So the last good lists are kept in the Actions cache, and the script falls back
-  # to them ("using the cached copy" in its log), dated as that copy.
+  # (15/30/60 s). Even so, 1.25.0-beta.1's Linux x86_64 installer shipped without them, as
+  # 1.22.0's had, because each installer job downloaded on its own and only warned on a failure.
   #
-  # WHY A JOB OF ITS OWN. The Actions cache is not a trusted source, for two reasons:
-  #  - Who can write it: a tag run reads caches saved under its own tag and under main, and ANY
-  #    workflow run on main can save a main-scoped entry under any key: ci.yml, with every build
-  #    script and npm dev tool it runs, fd-rules.yml, and every scheduled workflow. The key
-  #    prefixes (iota-lists-main-*, written by iota-cache.yml; iota-lists-tag-*, written here)
-  #    name the intended writer and authenticate nothing.
-  #  - Where it lands: actions/cache extracts with `tar -P`, so an entry is NOT confined to the
-  #    `path` it names. A crafted entry can write anywhere the job user can (~/.cargo/bin, the
-  #    Node toolcache, ~/.gitconfig, ...), before any later step can inspect it.
-  # So a restore is never done in a job that builds an installer or holds a secret (the same rule
-  # as the macos job's tauri-cli note). It is done HERE, on a throwaway runner that builds
-  # nothing, holds no secret and has a read-only token. What leaves this job is only the three
-  # files the script wrote, after its checks (gen-iota-groups.mjs, "Fallback": exactly those
-  # files, regular files within size limits, both lists passing the download checks, the
-  # manifest a JSON object). The installer jobs fetch them with download-artifact, which refuses
-  # an entry that escapes its target path, and the script checks them again (--checked). The worst
-  # a hostile cache entry can do is hand over well-formed but wrong island data within the size
-  # limits: data, not code.
+  # FAIL CLOSED. This job is the one download. If it still fails after the retries, it fails,
+  # and every installer job, which needs it, does not run: no installer can ship without the
+  # lists. Re-run the workflow (or this job, then the rest) once the server answers.
   #
-  # Saves: here only on a tag run (iota-lists-tag-*, for this run's re-runs), and on main from
-  # iota-cache.yml. A workflow_dispatch dry run saves nothing, but it does read its own branch's
-  # entries; whoever dispatches on a branch already controls that branch's workflows, and a dry
-  # run publishes nothing.
+  # WHY NOT A CACHED FALLBACK. An Actions-cache copy of the last good lists was tried and
+  # refused in security review: any workflow run on main can save a main-scoped cache entry
+  # under any key, and actions/cache extracts with `tar -P`, so an entry is not confined to the
+  # `path` it names. A crafted entry could run code in whichever release job restored it, and
+  # every job holds the run's runtime token, which can upload an artifact that a later job
+  # downloads by pattern. So no job in this workflow restores an IOTA cache, and none should.
   #
-  # The artifact is kept one day. Each installer job's own artifact already carries the same lists
-  # inside the installer.
-  #
-  # FAIL CLOSED. With neither a download nor a usable cached copy this job fails, and every
-  # installer job, which needs it, does not run. Re-run the workflow once the server answers.
+  # The hand-over: one artifact by exact name, kept one day, holding only the three files the
+  # script wrote. Each installer job downloads it by name and the script checks it again
+  # (--checked: exactly those files, regular files within size limits, both lists passing the
+  # download checks, the manifest a JSON object). Each installer job's own artifact already
+  # carries the same lists inside the installer.
   # ---------------------------------------------------------------------------------------
   iota-lists:
-    name: IOTA lists (download, or the last good copy)
+    name: IOTA lists (download and check, once)
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # A job-level block REPLACES the workflow-level one; `contents: read` is for the checkout only.
@@ -215,48 +201,20 @@ jobs:
         with:
           node-version: 24
 
-      - name: Empty the IOTA cache directory
-        run: rm -rf ~/.nexus-iota-cache
-
-      - name: Restore the last good IOTA lists
-        id: iota-cache
-        uses: actions/cache/restore@v6
-        with:
-          path: ~/.nexus-iota-cache
-          key: iota-lists-tag-${{ github.run_id }}
-          restore-keys: |
-            iota-lists-tag-
-            iota-lists-main-
-
       # The output goes outside the workspace, into a directory only the script writes, so the
       # upload below can carry nothing else.
-      - name: Download the IOTA lists, or fall back to the cache
-        id: stage
+      - name: Download the IOTA lists
         run: |
           set -euo pipefail
-          out="$RUNNER_TEMP/iota-lists"
-          if ! node scripts/gen-iota-groups.mjs --download "$out" --fallback ~/.nexus-iota-cache; then
-            echo "::error::IOTA lists not staged: no download and no usable cached copy"
+          if ! node scripts/gen-iota-groups.mjs --download "$RUNNER_TEMP/iota-lists"; then
+            echo "::error::IOTA lists not downloaded, so no installer is built"
             {
-              echo "### IOTA lists: none to ship, so no installer is built"
-              echo "iota-world.org did not hand over the lists after every retry, and the Actions cache held"
-              echo "no usable copy (see this job's log). Re-run the workflow once the server answers."
+              echo "### IOTA lists: not downloaded, so no installer is built"
+              echo "iota-world.org did not hand over the lists after every retry (see this job's log)."
+              echo "Re-run the workflow once the server answers."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          # The lists' content names the cache entry; iota-cache.yml computes it the same way.
-          echo "hash=$(cat "$out/iota_groups.json" "$out/iota_islands.json" | sha256sum | cut -c1-64)" >> "$GITHUB_OUTPUT"
-          # What a save below stores: the checked files, and nothing restored.
-          rm -rf ~/.nexus-iota-cache
-          mkdir -p ~/.nexus-iota-cache
-          cp "$out/iota_groups.json" "$out/iota_islands.json" "$out/iota_groups.manifest.json" ~/.nexus-iota-cache/
-
-      - name: Keep the IOTA lists for this run's re-runs
-        if: github.ref_type == 'tag' && !endsWith(steps.iota-cache.outputs.cache-matched-key, format('-{0}', steps.stage.outputs.hash))
-        uses: actions/cache/save@v6
-        with:
-          path: ~/.nexus-iota-cache
-          key: iota-lists-tag-${{ steps.stage.outputs.hash }}
 
       - uses: actions/upload-artifact@v4
         with:
@@ -356,10 +314,9 @@ jobs:
           node-version: 24
 
       # The IOTA lists (© RSGB and IOTA Ltd; never committed, src-tauri/resources/iota/README.md)
-      # come from the iota-lists job as a workflow artifact, NOT from the Actions cache: no job that
-      # builds an installer or holds a secret restores a cache (see iota-lists for why). The
-      # script checks the three files again exactly as it checks a cache directory, and fails the
-      # job when they do not pass, so no installer ships without the lists.
+      # come from the iota-lists job, downloaded there once, as one artifact fetched by its exact
+      # name (never a pattern). The script checks the files again (--checked: exactly the three it
+      # writes) and fails the job when they do not pass, so no installer ships without the lists.
       - name: Download the checked IOTA lists
         uses: actions/download-artifact@v4
         with:
@@ -632,10 +589,9 @@ jobs:
           node-version: 24
 
       # The IOTA lists (© RSGB and IOTA Ltd; never committed, src-tauri/resources/iota/README.md)
-      # come from the iota-lists job as a workflow artifact, NOT from the Actions cache: no job that
-      # builds an installer or holds a secret restores a cache (see iota-lists for why). The
-      # script checks the three files again exactly as it checks a cache directory, and fails the
-      # job when they do not pass, so no installer ships without the lists.
+      # come from the iota-lists job, downloaded there once, as one artifact fetched by its exact
+      # name (never a pattern). The script checks the files again (--checked: exactly the three it
+      # writes) and fails the job when they do not pass, so no installer ships without the lists.
       - name: Download the checked IOTA lists
         uses: actions/download-artifact@v4
         with:
@@ -1064,10 +1020,9 @@ jobs:
           node-version: 24
 
       # The IOTA lists (© RSGB and IOTA Ltd; never committed, src-tauri/resources/iota/README.md)
-      # come from the iota-lists job as a workflow artifact, NOT from the Actions cache: no job that
-      # builds an installer or holds a secret restores a cache (see iota-lists for why). The
-      # script checks the three files again exactly as it checks a cache directory, and fails the
-      # job when they do not pass, so no installer ships without the lists.
+      # come from the iota-lists job, downloaded there once, as one artifact fetched by its exact
+      # name (never a pattern). The script checks the files again (--checked: exactly the three it
+      # writes) and fails the job when they do not pass, so no installer ships without the lists.
       - name: Download the checked IOTA lists
         uses: actions/download-artifact@v4
         with:
@@ -1569,10 +1524,9 @@ jobs:
           node-version: 24
 
       # The IOTA lists (© RSGB and IOTA Ltd; never committed, src-tauri/resources/iota/README.md)
-      # come from the iota-lists job as a workflow artifact, NOT from the Actions cache: no job that
-      # builds an installer or holds a secret restores a cache (see iota-lists for why). The
-      # script checks the three files again exactly as it checks a cache directory, and fails the
-      # job when they do not pass, so no installer ships without the lists.
+      # come from the iota-lists job, downloaded there once, as one artifact fetched by its exact
+      # name (never a pattern). The script checks the files again (--checked: exactly the three it
+      # writes) and fails the job when they do not pass, so no installer ships without the lists.
       - name: Download the checked IOTA lists
         uses: actions/download-artifact@v4
         with:
