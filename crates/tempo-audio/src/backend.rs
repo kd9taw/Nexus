@@ -109,6 +109,13 @@ pub trait AudioBackend {
     fn take_stream_error(&mut self) -> Option<String> {
         None
     }
+    /// Whether [`Self::capture`] is fed by a live stream whose callbacks keep coming, so that a
+    /// long run of empty captures means the card has stalled (the radio loop's no-delivery fuse,
+    /// `CAPTURE_STALL_MS` in `service.rs`). `false` for backends with no real capture stream
+    /// (mocks that hand back only the chunks a test scripted); the real sound card overrides it.
+    fn capture_is_streaming(&self) -> bool {
+        false
+    }
     /// Set the RX capture gain (a multiplier ≥ 1.0 applied to the captured samples
     /// before decode). Headroom for a low-output interface — e.g. a rig codec whose
     /// line-out reads quiet in Nexus. No-op default; the real sound card overrides it.
@@ -275,6 +282,10 @@ pub struct MockBackend {
     pub retunes: usize,
     /// `played.len()` at each [`AudioBackend::mark_unit_end`]: where each complete unit ended.
     pub unit_ends: Vec<usize>,
+    /// Make this mock stand for a live capture stream ([`AudioBackend::capture_is_streaming`]),
+    /// so a tick with nothing queued is a card that sent nothing. Off by default: most tests
+    /// script capture only where they need it, and a gap between chunks is not a stall there.
+    pub streaming: bool,
 }
 
 impl MockBackend {
@@ -327,6 +338,9 @@ impl AudioBackend for MockBackend {
     }
     fn take_stream_error(&mut self) -> Option<String> {
         self.stream_error.take()
+    }
+    fn capture_is_streaming(&self) -> bool {
+        self.streaming
     }
     fn play(&mut self, samples: &[f32]) {
         self.played.extend_from_slice(samples);

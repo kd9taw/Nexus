@@ -1469,6 +1469,31 @@ const AUDIO_DEATH_CONFIRM_MS: f64 = 1_500.0;
 /// diagnosing a dead mic within the operator's first "why is nothing decoding" minute.
 const SILENT_CAPTURE_CONFIRM_MS: f64 = 15_000.0;
 
+/// How long an open sound card may deliver NO buffer at all, with no stream error, before the
+/// loop names it and reopens it (the no-delivery fuse in `step`).
+///
+/// Why this exists: a cpal/WASAPI stream can open cleanly and then never call back, at launch
+/// (a radio's USB codec still settling, a device another program is still letting go of) or
+/// mid-session. No error ever arrives, so the death confirmation above never starts, and the
+/// operator got a blank waterfall, "Scope data unavailable" and nothing in the log, until a
+/// restart. A live card calls back every few tens of milliseconds and the loop drains it every
+/// tick, so 3 s of nothing is not a slow card. The window is held while Nexus transmits or
+/// while another source (Flex DAX, TCI) feeds the receiver, where the card is not what the
+/// operator is listening to.
+///
+/// Timed on the monotonic clock, not the UTC-steered loop clock: a clock-offset correction or an
+/// OS clock step of a few seconds landing on an empty tick would otherwise read a live card as
+/// stalled, or blind the fuse for the size of a backward step.
+const CAPTURE_STALL_MS: f64 = 3_000.0;
+
+/// How long a card must keep delivering, without a stall, before its back-off is forgotten.
+///
+/// One buffer is not a recovery: a card that sends its first buffer after every open and then
+/// stops calling back would otherwise reset the ladder on each reopen and be torn down every few
+/// seconds for the whole session (each reopen a device-graph teardown and a context halt). Only a
+/// card that has delivered this long since its last open or stall starts again at the first rung.
+const CAPTURE_SUSTAINED_MS: f64 = 10_000.0;
+
 /// After a device-death rebuild, how long before another one may run.
 ///
 /// THE DEBOUNCE BELONGS HERE, not on the banner. A card that FLAPS — dies, re-enumerates, dies
@@ -2817,6 +2842,14 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     let mut state = RadioLoop::new(applied, rigctld_proc, &cfg);
     state.remote_radio_id = Some(remote_radio_id);
     state.after_the_launch_open(&rig, init_ok);
+    // The launch open is held to the same standard as a reopen: it has to DELIVER. Before this
+    // only a mid-session reopen waited for samples, so a card that opened at launch and never
+    // called back left a blank waterfall with no line on the screen and nothing in the log.
+    tempo_core::applog::info(
+        "audio",
+        &format!("capture opened on {:?} (launch)", cfg.audio_in),
+    );
+    state.capture_opened();
     // Station-wide sinks live OUTSIDE the per-radio loop (multi-radio Phase 1 boundary):
     // one PSK buffer and one Field Day / club-board cursor for the whole station.
     let mut station = StationSinks::for_app(&cfg.app_version);
@@ -5440,6 +5473,25 @@ struct RadioLoop {
     /// on the first tick the card actually delivers (`card_delivered`, the same authority the
     /// death-confirmation path uses). Nothing here changes the rebuild itself.
     audio_awaiting_samples: bool,
+    /// The no-delivery fuse (`CAPTURE_STALL_MS`): monotonic time of the last evidence the card
+    /// is alive (a delivered buffer, or the first look after an open), or a tick spent
+    /// transmitting or on another receive source, which holds the window. None = disarmed: the
+    /// card has not been opened, or the fuse has already tripped and the reopen is what re-arms it.
+    capture_watch_from: Option<Instant>,
+    /// Monotonic time of the first buffer since the last open or stall: the start of the card's
+    /// current run of delivery. Past `CAPTURE_SUSTAINED_MS` it clears `capture_stalls`.
+    capture_delivering_since: Option<Instant>,
+    /// When the current capture was opened, for the "delivering after N ms" log line. Taken by
+    /// the first delivered buffer, so it is written once per open.
+    capture_opened_at: Option<Instant>,
+    /// Consecutive no-delivery trips without a sustained run of delivery (`CAPTURE_SUSTAINED_MS`)
+    /// in between. The second and later reopens
+    /// wait on the same back-off ladder as a failed open (`audio_retry_after`), so a card that
+    /// never delivers is not torn down every few seconds for the whole session.
+    capture_stalls: usize,
+    /// The fuse tripped and has not been answered by a reopen or a buffer yet. A buffer that
+    /// arrives first cancels the reopen and takes the line down.
+    capture_stalled: bool,
     /// When the sound card started delivering NON-EMPTY buffers of pure digital zeros
     /// (macOS only — the TCC mic-denial shape; see `SILENT_CAPTURE_CONFIRM_MS`). None while
     /// samples carry any signal at all. Sustained past the confirm window it raises the
@@ -5665,6 +5717,11 @@ impl RadioLoop {
             cw_radio_wpm: None,
             err_owner: ErrOwner::None,
             audio_awaiting_samples: false,
+            capture_watch_from: None,
+            capture_delivering_since: None,
+            capture_opened_at: None,
+            capture_stalls: 0,
+            capture_stalled: false,
             silent_capture_since: None,
             early_done_slot: None,
             full_done_slot: None,
@@ -9286,6 +9343,18 @@ impl RadioLoop {
         self.force_audio_rebuild = true;
     }
 
+    /// A capture stream has just opened: it has delivered nothing yet, so arm the wait for its
+    /// first buffer and the no-delivery fuse. Called for the launch open and for every reopen;
+    /// only the reopen also raises the "waiting for samples" line, because at launch a card
+    /// that is fine delivers long before anyone could read it.
+    fn capture_opened(&mut self) {
+        self.audio_awaiting_samples = true;
+        self.capture_watch_from = None;
+        self.capture_delivering_since = None;
+        self.capture_opened_at = Some(Instant::now());
+        self.capture_stalled = false;
+    }
+
     /// One radio-loop iteration: fold captured audio in, apply live reconfig
     /// (re-open the rig/sound card via the injected closures on a Settings
     /// change), drop the TX tail, run the slot (TX keying / RX decode), emit
@@ -9368,6 +9437,9 @@ impl RadioLoop {
         // OS clock is skewed — the difference between "decodes only on a
         // well-synced PC" and "decodes anywhere". Applied to ALL downstream `now`
         // uses (slot index, next-slot countdown, TX-hold deadlines) consistently.
+        // The monotonic instant of this tick, read before the steering below: the no-delivery
+        // fuse is timed on it (see CAPTURE_STALL_MS).
+        let mono = self.mono_now(now);
         let now = now - self.clock_offset_ms as f64;
 
         // An FT8/FT4 over's window, re-tested before anything else in the tick can wait.
@@ -9406,6 +9478,7 @@ impl RadioLoop {
             _ => None,
         };
         let dax_is_the_source = native_audio.is_some();
+        let tci_is_the_source = tci_audio.is_some();
         let captured = match native_audio {
             Some(mut dax_audio) => {
                 if !dax_audio.is_empty() {
@@ -10354,6 +10427,122 @@ impl RadioLoop {
                     self.err_owner = ErrOwner::None;
                 }
             }
+            // ⚠️ THE NO-DELIVERY FUSE: A CARD THAT OPENS, OR RUNS, AND THEN NEVER CALLS BACK.
+            // Every check above needs a stream ERROR or some DELIVERY to start from, and a
+            // cpal/WASAPI stream can give neither: it opens cleanly and then is simply silent,
+            // at launch or mid-session. The operator got a blank waterfall and "Scope data
+            // unavailable" with no line and no log entry until a restart. See CAPTURE_STALL_MS.
+            // The reopen this asks for goes through the same rebuild gate as a confirmed death
+            // below, so it never runs while the rig is keyed.
+            if card_delivered {
+                if let Some(opened) = self.capture_opened_at.take() {
+                    tempo_core::applog::info(
+                        "audio",
+                        &format!(
+                            "capture delivering on {:?} after {} ms",
+                            want.audio_in,
+                            opened.elapsed().as_millis()
+                        ),
+                    );
+                }
+                let since = *self.capture_delivering_since.get_or_insert(mono);
+                if mono.saturating_duration_since(since).as_secs_f64() * 1000.0
+                    >= CAPTURE_SUSTAINED_MS
+                {
+                    self.capture_stalls = 0;
+                }
+                if std::mem::take(&mut self.capture_stalled) {
+                    // It came back before its reopen ran (held by the key or the debounce).
+                    // A stream that delivers is not dead: drop the reopen and the line.
+                    self.audio_rebuild_pending = None;
+                    tempo_core::applog::info(
+                        "audio",
+                        &format!("capture on {:?} is delivering again", want.audio_in),
+                    );
+                    if self.err_owner == ErrOwner::Device {
+                        {
+                            let mut eng = engine_lock(engine);
+                            eng.set_audio_error(None);
+                        }
+                        self.err_owner = ErrOwner::None;
+                    }
+                }
+                self.capture_watch_from = Some(mono);
+            } else if transmitting
+                || dax_is_the_source
+                || tci_is_the_source
+                || !backend.capture_is_streaming()
+            {
+                // Not the card's silence to answer for: hold the window, do not start it. A
+                // backend with no live capture stream has no callbacks to miss.
+                if self.capture_watch_from.is_some() {
+                    self.capture_watch_from = Some(mono);
+                }
+            } else if self.audio_awaiting_samples
+                && self.capture_watch_from.is_none()
+                && !self.capture_stalled
+            {
+                // The first look at a freshly opened card starts its window.
+                self.capture_watch_from = Some(mono);
+            } else if let Some(from) = self.capture_watch_from {
+                // Not while another path already owns the card: a stream error on probation,
+                // a reopen already asked for, or a failed open on the retry ladder.
+                if mono.saturating_duration_since(from).as_secs_f64() * 1000.0 >= CAPTURE_STALL_MS
+                    && self.audio_suspect.is_none()
+                    && self.audio_rebuild_pending.is_none()
+                    && self.audio_retry_at.is_none()
+                {
+                    self.capture_watch_from = None;
+                    self.capture_delivering_since = None;
+                    self.capture_stalled = true;
+                    self.capture_stalls += 1;
+                    let (wait_ms, log) = audio_retry_after(self.capture_stalls);
+                    if self.capture_stalls > 1 {
+                        self.audio_rebuild_floor = self.audio_rebuild_floor.max(now + wait_ms);
+                    }
+                    let card = if want.audio_in.is_empty() {
+                        "The system default sound card".to_string()
+                    } else {
+                        format!("The sound card \"{}\"", want.audio_in)
+                    };
+                    let (said, logged) = if self.audio_awaiting_samples {
+                        (
+                            "opened but is sending no audio",
+                            "opened but delivered nothing",
+                        )
+                    } else {
+                        (
+                            "stopped sending audio",
+                            "stopped delivering, with no stream error,",
+                        )
+                    };
+                    {
+                        let mut eng = engine_lock(engine);
+                        eng.set_audio_error(Some((
+                            AudioErrorKind::NoReceiveAudio,
+                            format!(
+                                "{card} {said} — reopening it. If this keeps happening, check \
+                                 that no other program is using it."
+                            ),
+                        )));
+                    }
+                    // Logged on the first trip and each time the wait between reopens grows,
+                    // never once per reopen of a card that stays silent.
+                    if log {
+                        tempo_core::applog::warn(
+                            "audio",
+                            &format!(
+                                "capture on {:?} {logged} for {} s — reopening (attempt {})",
+                                want.audio_in,
+                                (CAPTURE_STALL_MS / 1000.0) as u64,
+                                self.capture_stalls
+                            ),
+                        );
+                    }
+                    self.err_owner = ErrOwner::Device;
+                    self.audio_rebuild_pending = Some(format!("capture {logged}"));
+                }
+            }
             // PURE-ZERO CAPTURE WATCH (macOS only — `card_all_zero` is compile-time false
             // elsewhere). A denied mic prompt (TCC) keeps the CoreAudio stream "healthy"
             // while delivering exact digital zeros forever: `card_delivered` stays true, no
@@ -10576,7 +10765,7 @@ impl RadioLoop {
                             )));
                         }
                         self.err_owner = ErrOwner::Device;
-                        self.audio_awaiting_samples = true;
+                        self.capture_opened();
                         self.audio_retry_at = None; // it opened — stop retrying
                         self.audio_retry_clock_at = None;
                         // The fresh backend has NO mic stream — a stale-true flag
@@ -45433,6 +45622,433 @@ mod tests {
             ErrOwner::None,
             "the audio-error line is released too, so a monitor/voice-mic notice can use it again"
         );
+    }
+
+    /// A mock that stands for a live capture stream: a tick with nothing queued is a card that
+    /// sent nothing.
+    fn streaming_mock() -> MockBackend {
+        let mut b = MockBackend::new();
+        b.streaming = true;
+        b
+    }
+
+    /// One `step` at `now` for the no-delivery fuse tests: `reopens` counts the sound-card
+    /// reopens the loop asks for, and `keyed` holds the key down for the tick.
+    fn fuse_step(
+        engine: &Arc<Mutex<Engine>>,
+        state: &mut RadioLoop,
+        backend: &mut MockBackend,
+        now: f64,
+        keyed: bool,
+        reopens: &std::cell::Cell<u32>,
+    ) {
+        let mut rig = Rig::vox();
+        if keyed {
+            let _ = rig.ptt(true);
+        }
+        let sinks = no_sinks();
+        let mut station = StationSinks::new();
+        let mut rr = |_t: &Transport, _c: bool| (Rig::vox(), None, CatProbe::status(None, "test"));
+        // The reopened card is a live (and, unless a test queues audio, silent) stream too.
+        let mut ra = |_t: &Transport| {
+            reopens.set(reopens.get() + 1);
+            Ok(streaming_mock())
+        };
+        state
+            .step(
+                engine,
+                backend,
+                &mut rig,
+                &sinks,
+                now,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+    }
+
+    /// A loop that has settled (so nothing but the fuse explains a reopen), with the line clear
+    /// and the capture just opened the way `run_radio` opens it at launch.
+    fn launched_loop(
+        engine: &Arc<Mutex<Engine>>,
+        backend: &mut MockBackend,
+        reopens: &std::cell::Cell<u32>,
+    ) -> RadioLoop {
+        let mut state = loop_state();
+        // The fuse is timed on the monotonic clock; this makes the test's loop clock drive it.
+        state.mono_origin = Some(Instant::now());
+        fuse_step(engine, &mut state, backend, 0.0, false, reopens);
+        engine.lock().unwrap().set_audio_error(None);
+        state.err_owner = ErrOwner::None;
+        state.capture_opened();
+        reopens.set(0);
+        state
+    }
+
+    /// ⚠️ THE TESTER REPORT THIS EXISTS FOR: a launch where the sound card opened, never sent a
+    /// buffer, and nothing said so. The launch open now waits for samples like a reopen does,
+    /// and ~3 s of nothing names the card and reopens it.
+    #[test]
+    fn a_launch_open_that_never_delivers_is_named_and_reopened() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = streaming_mock();
+        let reopens = std::cell::Cell::new(0);
+        let mut state = launched_loop(&engine, &mut backend, &reopens);
+        // Hold the reopen back for a moment so the line it raises can be read.
+        state.audio_rebuild_floor = f64::MAX;
+
+        fuse_step(&engine, &mut state, &mut backend, 100.0, false, &reopens);
+        fuse_step(&engine, &mut state, &mut backend, 3_000.0, false, &reopens);
+        assert_eq!(
+            engine.lock().unwrap().snapshot().radio.audio_error,
+            None,
+            "CONTROL: under the window the card has not failed yet"
+        );
+
+        fuse_step(&engine, &mut state, &mut backend, 3_200.0, false, &reopens);
+        let said = engine.lock().unwrap().snapshot().radio.audio_error;
+        assert!(
+            said.as_deref().is_some_and(
+                |m| m.contains("opened but is sending no audio") && m.contains("reopening")
+            ),
+            "a launch card that never delivers must be named on the line: {said:?}"
+        );
+        assert_eq!(line_kind(&engine), "noReceiveAudio");
+        assert!(
+            state.audio_rebuild_pending.is_some(),
+            "and a reopen must be asked for"
+        );
+
+        state.audio_rebuild_floor = 0.0;
+        fuse_step(&engine, &mut state, &mut backend, 3_220.0, false, &reopens);
+        assert_eq!(
+            reopens.get(),
+            1,
+            "the reopen runs on the existing rebuild path"
+        );
+        assert!(
+            state.audio_awaiting_samples,
+            "and the reopened card has to deliver in its turn"
+        );
+
+        // The reopened card is silent too: its wait times out and it is reopened again, on the
+        // back-off ladder rather than every tick.
+        fuse_step(&engine, &mut state, &mut backend, 3_240.0, false, &reopens);
+        fuse_step(&engine, &mut state, &mut backend, 6_300.0, false, &reopens);
+        assert!(
+            state.audio_rebuild_pending.is_some(),
+            "a reopen's wait for samples has a timeout too: {:?}",
+            engine.lock().unwrap().snapshot().radio.audio_error
+        );
+        for t in 0..150 {
+            fuse_step(
+                &engine,
+                &mut state,
+                &mut backend,
+                6_320.0 + f64::from(t) * 20.0,
+                false,
+                &reopens,
+            );
+        }
+        assert_eq!(reopens.get(), 1, "the second reopen waits out the back-off");
+        fuse_step(&engine, &mut state, &mut backend, 12_000.0, false, &reopens);
+        assert_eq!(reopens.get(), 2, "and then it runs");
+    }
+
+    /// CONTROL for the fuse: a launch card that delivers raises nothing and reopens nothing,
+    /// however long the session runs.
+    #[test]
+    fn a_launch_open_that_delivers_raises_no_alarm() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = streaming_mock();
+        let reopens = std::cell::Cell::new(0);
+        let mut state = launched_loop(&engine, &mut backend, &reopens);
+        for t in 1..=500 {
+            backend.queue_capture(vec![0.01_f32; 240]);
+            fuse_step(
+                &engine,
+                &mut state,
+                &mut backend,
+                f64::from(t) * 20.0,
+                false,
+                &reopens,
+            );
+        }
+        assert_eq!(engine.lock().unwrap().snapshot().radio.audio_error, None);
+        assert_eq!(reopens.get(), 0);
+        assert!(
+            !state.audio_awaiting_samples,
+            "the first buffer ends the wait"
+        );
+        assert!(
+            state.capture_opened_at.is_none(),
+            "and the delivery edge was taken (logged once)"
+        );
+    }
+
+    /// A card that was delivering and then stops calling back, with no stream error, is named
+    /// and reopened; one that comes back before its reopen runs takes the line down with it.
+    #[test]
+    fn a_card_that_goes_quiet_mid_session_is_named_and_reopened() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = streaming_mock();
+        let reopens = std::cell::Cell::new(0);
+        let mut state = launched_loop(&engine, &mut backend, &reopens);
+        backend.queue_capture(vec![0.01_f32; 240]);
+        fuse_step(&engine, &mut state, &mut backend, 100.0, false, &reopens);
+        // It goes quiet. No stream error ever arrives.
+        fuse_step(&engine, &mut state, &mut backend, 2_000.0, false, &reopens);
+        assert_eq!(engine.lock().unwrap().snapshot().radio.audio_error, None);
+        state.audio_rebuild_floor = f64::MAX;
+        fuse_step(&engine, &mut state, &mut backend, 3_200.0, false, &reopens);
+        let said = engine.lock().unwrap().snapshot().radio.audio_error;
+        assert!(
+            said.as_deref()
+                .is_some_and(|m| m.contains("stopped sending audio")),
+            "a card that stops calling back must be named: {said:?}"
+        );
+        assert!(state.audio_rebuild_pending.is_some());
+
+        // It comes back on its own before the reopen ran.
+        backend.queue_capture(vec![0.01_f32; 240]);
+        fuse_step(&engine, &mut state, &mut backend, 3_300.0, false, &reopens);
+        assert_eq!(engine.lock().unwrap().snapshot().radio.audio_error, None);
+        assert!(
+            state.audio_rebuild_pending.is_none(),
+            "a card that delivers is not reopened"
+        );
+
+        // Quiet again. One buffer was not a recovery, so this is the second stall running and
+        // its reopen waits out the second rung of the back-off, then runs.
+        state.audio_rebuild_floor = 0.0;
+        fuse_step(&engine, &mut state, &mut backend, 6_400.0, false, &reopens);
+        assert!(
+            state.audio_rebuild_pending.is_some(),
+            "the quiet card is named again"
+        );
+        assert_eq!(state.capture_stalls, 2);
+        assert_eq!(reopens.get(), 0, "and its reopen waits on the back-off");
+        fuse_step(&engine, &mut state, &mut backend, 10_500.0, false, &reopens);
+        assert_eq!(reopens.get(), 1, "the quiet card is reopened");
+    }
+
+    /// The fuse has asked for nothing: it never tripped, and there is no line and no reopen
+    /// pending. (The trip count is checked as well as the line because a reopen that has already
+    /// run replaces the line with its own.)
+    fn fuse_quiet(engine: &Arc<Mutex<Engine>>, state: &RadioLoop, why: &str) {
+        assert_eq!(state.capture_stalls, 0, "{why}: the fuse tripped");
+        let said = engine.lock().unwrap().snapshot().radio.audio_error;
+        assert!(
+            !said
+                .as_deref()
+                .is_some_and(|m| m.contains("sending no audio") || m.contains("stopped sending")),
+            "{why}: {said:?}"
+        );
+        assert!(
+            state.audio_rebuild_pending.is_none(),
+            "{why}: a reopen is pending"
+        );
+    }
+
+    /// ONE BUFFER IS NOT A RECOVERY. A card that sends its first buffer after every open and then
+    /// stops calling back must still climb the back-off to one reopen per ~30 s, not be torn down
+    /// every few seconds for the whole session.
+    #[test]
+    fn a_card_that_delivers_once_per_open_then_stalls_still_backs_off() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = streaming_mock();
+        let reopens = std::cell::Cell::new(0);
+        let mut state = launched_loop(&engine, &mut backend, &reopens);
+        backend.queue_capture(vec![0.01_f32; 240]);
+        let mut rig = Rig::vox();
+        let sinks = no_sinks();
+        let mut station = StationSinks::new();
+        let mut rr = |_t: &Transport, _c: bool| (Rig::vox(), None, CatProbe::status(None, "test"));
+        let at = std::cell::RefCell::new(Vec::new());
+        let clock = std::cell::Cell::new(0.0);
+        let mut ra = |_t: &Transport| {
+            at.borrow_mut().push(clock.get());
+            let mut b = streaming_mock();
+            b.queue_capture(vec![0.01_f32; 240]);
+            Ok(b)
+        };
+        let mut t = 100.0;
+        while t <= 300_000.0 {
+            clock.set(t);
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            t += 100.0;
+        }
+        let at = at.into_inner();
+        let gaps: Vec<f64> = at.windows(2).map(|w| w[1] - w[0]).collect();
+        assert!(
+            at.len() >= 3,
+            "premise: the card is reopened at all: {at:?}"
+        );
+        assert!(
+            gaps.last().is_some_and(|g| *g >= 30_000.0),
+            "a card that delivers one buffer per open must reach the 30 s rung: gaps {gaps:?}"
+        );
+        assert!(
+            at.len() <= 16,
+            "five minutes of a deliver-once card must not be dozens of reopens: {} at {at:?}",
+            at.len()
+        );
+    }
+
+    /// …while a card that DID recover (delivered for `CAPTURE_SUSTAINED_MS`) and then stalls is a
+    /// new problem, and gets the immediate first reopen again. CONTROL: a shorter run of delivery
+    /// keeps the climbed rung.
+    #[test]
+    fn only_sustained_delivery_starts_the_capture_backoff_over() {
+        for (delivered_ms, starts_over) in [(11_000.0, true), (5_000.0, false)] {
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            let mut backend = streaming_mock();
+            let reopens = std::cell::Cell::new(0);
+            let mut state = launched_loop(&engine, &mut backend, &reopens);
+            // A card that has stalled four times running.
+            state.capture_stalls = 4;
+            let mut t = 100.0;
+            while t <= 100.0 + delivered_ms {
+                backend.queue_capture(vec![0.01_f32; 240]);
+                fuse_step(&engine, &mut state, &mut backend, t, false, &reopens);
+                t += 100.0;
+            }
+            // Then it goes quiet, past the window.
+            fuse_step(
+                &engine,
+                &mut state,
+                &mut backend,
+                t + 3_200.0,
+                false,
+                &reopens,
+            );
+            let reopened = reopens.get() == 1;
+            assert_eq!(
+                reopened, starts_over,
+                "after {delivered_ms} ms of delivery: stalls {}",
+                state.capture_stalls
+            );
+        }
+    }
+
+    /// The window is timed on the monotonic clock: a clock-offset correction that moves the loop
+    /// clock seconds ahead on an empty tick is not a stalled card.
+    #[test]
+    fn a_clock_step_is_not_a_stalled_card() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = streaming_mock();
+        let reopens = std::cell::Cell::new(0);
+        let mut state = launched_loop(&engine, &mut backend, &reopens);
+        state.audio_rebuild_floor = f64::MAX;
+        backend.queue_capture(vec![0.01_f32; 240]);
+        fuse_step(&engine, &mut state, &mut backend, 100.0, false, &reopens);
+        // The first SNTP measurement finds this PC 5 s slow, on a tick the card had nothing for.
+        state.clock_offset_ms = -5_000;
+        fuse_step(&engine, &mut state, &mut backend, 120.0, false, &reopens);
+        fuse_quiet(&engine, &state, "a clock step read as a stall");
+        // CONTROL: real silence past the window still trips.
+        fuse_step(&engine, &mut state, &mut backend, 3_300.0, false, &reopens);
+        assert!(
+            state.audio_rebuild_pending.is_some(),
+            "control: 3.2 s of nothing trips"
+        );
+    }
+
+    /// The window holds for every reason the card's silence is not the operator's problem, and
+    /// stands down while another path owns the card. Each case: a card that delivered, then 4 s
+    /// of nothing under the condition, and no alarm.
+    #[test]
+    fn the_fuse_holds_and_stands_down_where_silence_is_not_a_stall() {
+        type Setup = fn(&mut RadioLoop, &mut MockBackend);
+        let cases: [(&str, Setup); 4] = [
+            (
+                "an over held to its deadline with the rig unkeyed",
+                |s, _| {
+                    s.tx_until_ms = Some(1.0e12);
+                },
+            ),
+            ("a stream error on probation", |s, _| {
+                // Never confirmed inside the test: its clock starts in the far future.
+                s.audio_suspect = Some((1.0e12, "probation".to_string()));
+            }),
+            ("a failed open on the retry ladder", |s, _| {
+                s.audio_retry_at = Some(1.0e12);
+            }),
+            ("a backend with no live capture stream", |_, b| {
+                b.streaming = false;
+            }),
+        ];
+        for (why, setup) in cases {
+            let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+            let mut backend = streaming_mock();
+            let reopens = std::cell::Cell::new(0);
+            let mut state = launched_loop(&engine, &mut backend, &reopens);
+            backend.queue_capture(vec![0.01_f32; 240]);
+            fuse_step(&engine, &mut state, &mut backend, 100.0, false, &reopens);
+            let mut t = 200.0;
+            while t <= 4_200.0 {
+                setup(&mut state, &mut backend);
+                fuse_step(&engine, &mut state, &mut backend, t, false, &reopens);
+                t += 100.0;
+            }
+            fuse_quiet(&engine, &state, why);
+            assert_eq!(reopens.get(), 0, "{why}: reopened");
+        }
+    }
+
+    /// The launch open is armed in `run_radio` itself (a thread that opens real devices, so it is
+    /// source-scanned): the call the tester's bug was missing.
+    #[test]
+    fn run_radio_arms_the_launch_capture() {
+        let src = include_str!("service.rs");
+        let rest = &src[src.find("\npub fn run_radio(").expect("run_radio") + 1..];
+        let body = &rest[..rest.find("\n}\n").expect("the end of run_radio")];
+        assert!(
+            body.contains("state.capture_opened();"),
+            "run_radio must arm the wait for the launch capture's first buffer"
+        );
+    }
+
+    /// NO REOPEN WHILE KEYED. The window is held while Nexus transmits (some cards pause their
+    /// capture for an over), and the reopen comes only once the key is up.
+    #[test]
+    fn a_quiet_card_is_not_reopened_while_keyed() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut backend = streaming_mock();
+        let reopens = std::cell::Cell::new(0);
+        let mut state = launched_loop(&engine, &mut backend, &reopens);
+        backend.queue_capture(vec![0.01_f32; 240]);
+        fuse_step(&engine, &mut state, &mut backend, 100.0, false, &reopens);
+        // A long over with the card silent throughout.
+        let mut t = 200.0;
+        while t <= 20_000.0 {
+            fuse_step(&engine, &mut state, &mut backend, t, true, &reopens);
+            t += 100.0;
+        }
+        assert_eq!(reopens.get(), 0, "never a reopen while keyed");
+        assert_eq!(
+            engine.lock().unwrap().snapshot().radio.audio_error,
+            None,
+            "and no alarm for silence while transmitting"
+        );
+        // Key up; the card is still silent.
+        fuse_step(&engine, &mut state, &mut backend, 20_100.0, false, &reopens);
+        fuse_step(&engine, &mut state, &mut backend, 22_000.0, false, &reopens);
+        assert_eq!(reopens.get(), 0, "the window starts again at the unkey");
+        fuse_step(&engine, &mut state, &mut backend, 23_200.0, false, &reopens);
+        assert_eq!(reopens.get(), 1, "then the silent card is reopened");
     }
 
     /// A card that dies, and then will not reopen, is named a SOUND CARD failure on the line at
