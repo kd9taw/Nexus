@@ -792,6 +792,118 @@ test('the publish jobs download every leg and every Pi base the builds upload', 
   assert.deepEqual(matrixUndownloaded(readWorkflow(thirdBase)), ['publish-pi does not download nexus-pi-forky']);
 });
 
+// ---- publish, run: what it gathers, and what it verifies before anything is published ----------
+
+// The steps of publish that take the artifacts from the store to dist/, in order. Each one's script
+// runs verbatim against a stand-in artifact store; a step missing from the workflow is reported.
+const GATHER = 'Check each artifact holds exactly the expected files, and gather them';
+const VERIFY_SIGS = 'Verify every updater signature against the key clients trust';
+const FIXTURE_SIG = path.join(ROOT, 'scripts', 'fixtures', 'updater-sig');
+const FIXTURE_FILE = 'Nexus_9.9.9_x64-setup.exe';
+function runPublishGather({ text = TEXT, legs = ['aarch64', 'x64'], key = true, tamper = null, dropSig = null } = {}) {
+  const wf = readWorkflow(text);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'publish-gather-'));
+  try {
+    const at = (...p) => path.join(dir, ...p);
+    fs.symlinkSync(path.join(ROOT, 'scripts'), at('scripts'));
+    fs.mkdirSync(at('src-tauri'));
+    // The fixture's key stands in for the one clients trust; its payload, signed by tauri-cli, for
+    // every signed installer and bundle.
+    fs.copyFileSync(path.join(FIXTURE_SIG, 'tauri.conf.json'), at('src-tauri', 'tauri.conf.json'));
+    const v = '9.9.9';
+    const put = (artifact, name, signed = false) => {
+      fs.mkdirSync(at('artifacts', artifact), { recursive: true });
+      if (signed) fs.copyFileSync(path.join(FIXTURE_SIG, FIXTURE_FILE), at('artifacts', artifact, name));
+      else fs.writeFileSync(at('artifacts', artifact, name), name);
+      if (name === tamper) fs.appendFileSync(at('artifacts', artifact, name), 'replaced after signing');
+    };
+    const sig = (artifact, name) => {
+      fs.mkdirSync(at('artifacts', artifact), { recursive: true });
+      if (name !== dropSig) fs.copyFileSync(path.join(FIXTURE_SIG, `${FIXTURE_FILE}.sig`), at('artifacts', artifact, `${name}.sig`));
+    };
+    put('nexus-linux-x86', `Nexus_${v}_amd64.AppImage`, key);
+    put('nexus-linux-x86', `Nexus_${v}_pc_amd64.deb`);
+    put('nexus-windows', `Nexus_${v}_x64-setup.exe`, key);
+    put('nexus-windows', `Nexus_${v}_x64.sym.gz`);
+    put('nexus-manual', 'Nexus-Manual.pdf');
+    put('nexus-manual', 'Nexus-Manual.epub');
+    for (const sfx of legs) {
+      put(`nexus-macos-${sfx}`, `Nexus_${v}_${sfx}.dmg`);
+      if (key) {
+        put(`nexus-macos-${sfx}`, `Nexus_${v}_${sfx}.app.tar.gz`, true);
+        sig(`nexus-macos-${sfx}`, `Nexus_${v}_${sfx}.app.tar.gz`);
+      }
+    }
+    if (key) {
+      sig('nexus-updater-sigs', `Nexus_${v}_x64-setup.exe`);
+      sig('nexus-updater-sigs', `Nexus_${v}_amd64.AppImage`);
+    }
+    const env = { ...process.env, GITHUB_REF_NAME: `v${v}`, SIGNING_KEY_PRESENT: String(key) };
+    const missing = [];
+    let status = 0;
+    let stderr = '';
+    for (const name of [GATHER, VERIFY_SIGS]) {
+      const step = wf.jobs.get('publish').steps.find((x) => x?.name === name);
+      if (!step) { missing.push(name); continue; }
+      const r = spawnSync('bash', ['-c', step.run], { cwd: dir, env, encoding: 'utf8' });
+      stderr += r.stderr;
+      if (r.status !== 0) { status = r.status; break; }
+    }
+    const dist = fs.existsSync(at('dist')) ? fs.readdirSync(at('dist')).sort() : [];
+    return { status, dist, stderr, missing };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+const expectedDist = (legs, key) => {
+  const v = '9.9.9';
+  const f = [`Nexus_${v}_amd64.AppImage`, `Nexus_${v}_pc_amd64.deb`, `Nexus_${v}_x64-setup.exe`, `Nexus_${v}_x64.sym.gz`];
+  if (key) f.push(`Nexus_${v}_amd64.AppImage.sig`, `Nexus_${v}_x64-setup.exe.sig`);
+  for (const sfx of legs) {
+    f.push(`Nexus_${v}_${sfx}.dmg`);
+    if (key) f.push(`Nexus_${v}_${sfx}.app.tar.gz`, `Nexus_${v}_${sfx}.app.tar.gz.sig`);
+  }
+  return f.sort();
+};
+
+test('publish gathers exactly the artifacts it always shipped, signed or not', () => {
+  for (const key of [true, false]) {
+    const r = runPublishGather({ key });
+    assert.deepEqual(r.missing, [], `publish has no step(s): ${r.missing.join(', ')}`);
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(r.dist, expectedDist(['aarch64', 'x64'], key));
+  }
+});
+
+test('publish refuses an installer or bundle that is not the one that was signed', () => {
+  for (const tamper of ['Nexus_9.9.9_x64-setup.exe', 'Nexus_9.9.9_amd64.AppImage', 'Nexus_9.9.9_x64.app.tar.gz']) {
+    const r = runPublishGather({ tamper });
+    assert.notEqual(r.status, 0, `publish passed ${tamper} replaced after signing`);
+    assert.match(r.stderr, /does not verify/);
+  }
+  const unsigned = runPublishGather({ dropSig: 'Nexus_9.9.9_aarch64.app.tar.gz' });
+  assert.notEqual(unsigned.status, 0, 'publish passed a macOS bundle with no signature');
+});
+
+test("the signature check refuses a missing signature, another key, and an edited trusted comment", () => {
+  const verify = (conf, file) => spawnSync('node', [path.join(ROOT, 'scripts', 'verify-updater-sigs.mjs'), conf, file], { encoding: 'utf8' });
+  const conf = path.join(FIXTURE_SIG, 'tauri.conf.json');
+  assert.equal(verify(conf, path.join(FIXTURE_SIG, FIXTURE_FILE)).status, 0, 'the tauri-cli fixture verifies');
+  assert.match(verify(path.join(ROOT, 'src-tauri', 'tauri.conf.json'), path.join(FIXTURE_SIG, FIXTURE_FILE)).stderr, /but clients trust/);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'updater-sig-'));
+  try {
+    const file = path.join(dir, FIXTURE_FILE);
+    fs.copyFileSync(path.join(FIXTURE_SIG, FIXTURE_FILE), file);
+    assert.match(verify(conf, file).stderr, /has no signature beside it/);
+    const lines = Buffer.from(fs.readFileSync(path.join(FIXTURE_SIG, `${FIXTURE_FILE}.sig`), 'utf8'), 'base64').toString().split('\n');
+    lines[2] = lines[2].replace('file:', 'version:9.9.10\tfile:');
+    fs.writeFileSync(`${file}.sig`, Buffer.from(lines.join('\n')).toString('base64'));
+    assert.match(verify(conf, file).stderr, /trusted comment does not verify/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ---- The artifact set check (scripts/check-artifact-set.sh) -------------------------------------
 
 function checkSet(files, expected) {

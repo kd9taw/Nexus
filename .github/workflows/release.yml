@@ -1751,6 +1751,27 @@ jobs:
             [ ! -d "artifacts/$d" ] || mv "artifacts/$d"/* dist/
           done
 
+      # TIE WHAT SHIPS TO WHAT WAS SIGNED. The installers and bundles were signed in other jobs and
+      # came back out of the artifact store; nothing above proves they are the bytes that were
+      # signed. A file replaced after signing would pass every other gate here and be published, and
+      # only self-updating clients would ever refuse it. So every signed file is verified against
+      # the public key compiled into every client (tauri.conf.json), with no secret: a mismatch or a
+      # missing .sig fails the release before it exists. The .debs, DMGs and symbol maps carry no
+      # updater signature and are not covered here.
+      - name: Verify every updater signature against the key clients trust
+        env:
+          # Whether the key exists, not the key: without it nothing was signed (a fork).
+          SIGNING_KEY_PRESENT: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        run: |
+          set -euo pipefail
+          if [ "$SIGNING_KEY_PRESENT" != true ]; then
+            echo "note: unsigned build (no signing key) — no updater signatures to verify"; exit 0
+          fi
+          ver="${GITHUB_REF_NAME#v}"
+          signed=("dist/Nexus_${ver}_x64-setup.exe" "dist/Nexus_${ver}_amd64.AppImage")
+          for t in dist/Nexus_"${ver}"_*.app.tar.gz; do signed+=("$t"); done
+          node scripts/verify-updater-sigs.mjs src-tauri/tauri.conf.json "${signed[@]}"
+
       - name: Derive + cross-check the version
         id: ver
         run: |
