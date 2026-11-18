@@ -310,3 +310,357 @@ fn an_unconfirmed_split_off_holds_transmit_until_it_is_settled() {
     e.rig_split_cleared();
     assert!(e.tx_allowed(), "settled: simplex at 14.300 keys");
 }
+
+/// The same for the other connection refusal: a station profile on another licensee's call while
+/// a licence class is set. It refuses Nexus's keys; it never approves a split.
+#[test]
+fn a_station_profile_refusal_never_approves_a_split() {
+    let mut e = Engine::new("KD9TAW", "EN52", 0);
+    assert!(e.set_license_class("extra"));
+    e.set_operating_mode("phone", false);
+    e.set_frequency(14.340, "20m", "USB");
+    let club = crate::settings::StationProfile {
+        name: "Club".into(),
+        call: "W9ABC".into(),
+        grid: "EN52".into(),
+        ..crate::settings::StationProfile::default()
+    };
+    let club = e.save_station_profile(club).unwrap();
+    e.switch_station_profile(&club).unwrap();
+    let _ = e.take_split_request();
+    assert_eq!(
+        e.connection_tx_refusal(),
+        Some(crate::settings::STATION_PROFILE_CALL_TX_REFUSED),
+        "precondition: the profile's call refuses keys"
+    );
+    assert!(!e.split_tx_allowed(14.349, ReceiverId::Main));
+    assert_eq!(
+        e.request_operator_split(Some(14.349)),
+        Err(SPLIT_REFUSED_PRIVILEGES.to_string())
+    );
+    assert_eq!(e.take_split_request(), None, "nothing queued");
+    assert!(
+        e.split_tx_allowed(14.345, ReceiverId::Main),
+        "control: in privileges"
+    );
+}
+
+/// ⛔ A REQUEST MADE AFTER A QSY, REFUSED WHILE KEYED, GIVES WAY TO THE QSY'S OWN RETURN TO
+/// SIMPLEX. The request had replaced that return, so discarding it alone would leave the radio
+/// on the old VFO B, on the old band, after the dial moves; keeping it would write a split the
+/// licence just refused into the radio at the unkey, where a front-panel PTT transmits on it.
+/// The acknowledgement the radio really has is put back meanwhile.
+#[test]
+fn a_refused_request_after_a_qsy_queues_the_qsys_return_to_simplex() {
+    let mut e = station();
+    e.rig_split_applied(14_345_000);
+    // Cross-band: a QSY to 40 m, then a split request there that the loop refuses while keyed.
+    e.set_frequency(7.200, "40m", "LSB");
+    e.request_split(Some(7.301));
+    assert_eq!(e.take_split_request(), Some(Some(7.301)));
+    e.split_refused_while_keyed(7.301);
+    assert_eq!(
+        e.tx_emission_mhz(),
+        14.345,
+        "the gate judges the VFO B the radio still has"
+    );
+    assert_eq!(
+        e.take_split_request(),
+        Some(None),
+        "the QSY's simplex is queued, never the refused split"
+    );
+}
+
+/// ⛔ …AND ONCE THE RADIO CONFIRMS THAT `S 0`, THE GATE JUDGES THE DIAL. The old VFO B was put
+/// back as the acknowledgement only while the radio still had it; kept past the confirmed
+/// simplex, a key on a 40 m dial outside a General's phone privileges was judged as the old,
+/// in-licence 20 m split, and passed. CONTROL: the same QSY with no refused request.
+#[test]
+fn after_the_qsys_simplex_is_confirmed_the_gate_judges_the_new_dial() {
+    fn general_split_at_14_305() -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.300, "20m", "USB");
+        let _ = e.take_split_request();
+        e.request_split(Some(14.305));
+        assert_eq!(e.take_split_request(), Some(Some(14.305)));
+        e.rig_split_applied(14_305_000);
+        assert!(e.tx_allowed(), "precondition: 14.305 keys for a General");
+        e
+    }
+    let mut e = general_split_at_14_305();
+    // A keyed QSY to 40 m below the General phone segment, then a split request there.
+    e.set_frequency(7.150, "40m", "LSB");
+    e.request_split(Some(7.301));
+    assert_eq!(e.take_split_request(), Some(Some(7.301)));
+    e.split_refused_while_keyed(7.301);
+    assert_eq!(
+        e.tx_emission_mhz(),
+        14.305,
+        "while the S 0 is pending the radio still transmits on its VFO B"
+    );
+    assert_eq!(e.take_split_request(), Some(None), "S 0 queued");
+    e.rig_split_cleared();
+    assert_eq!(
+        e.tx_emission_mhz(),
+        7.150,
+        "the radio is simplex on the dial"
+    );
+    assert!(
+        !e.tx_allowed(),
+        "7.150 phone is outside a General's privileges"
+    );
+
+    let mut c = general_split_at_14_305();
+    c.set_frequency(7.150, "40m", "LSB");
+    assert_eq!(c.take_split_request(), Some(None));
+    c.rig_split_cleared();
+    assert_eq!(c.tx_emission_mhz(), 7.150);
+    assert!(
+        !c.tx_allowed(),
+        "control: the plain QSY is refused the same"
+    );
+}
+
+/// The same for a satellite uplink: a confirmed simplex leaves no uplink acknowledged, so the
+/// gate judges the dial in the dial's own word.
+#[test]
+fn a_confirmed_simplex_retires_a_satellite_uplinks_acknowledgement() {
+    let mut e = ic9700_holding(super::tx_gate_table::RS44);
+    e.sat_tune_nominal(tempo_core::doppler::DownlinkClass::Usb, 1_000_000);
+    let up = e.split_tx_mhz().expect("precondition: the uplink queued");
+    let _ = e.take_split_request();
+    e.rig_split_applied_on((up * 1e6).round() as u64, ReceiverId::Sub);
+    assert_eq!(e.tx_source(), ReceiverId::Sub, "precondition");
+    e.rig_split_cleared();
+    assert_eq!(e.tx_source(), ReceiverId::Main);
+    assert!((e.tx_emission_mhz() - e.settings().dial_mhz).abs() < 1e-9);
+    assert_eq!(e.sat_uplink_word(), None);
+}
+
+/// …and a newer request made since the loop took the refused one is left queued for its own
+/// judgement at the write: the refusal answers only for its own request.
+#[test]
+fn a_refused_request_after_a_qsy_leaves_a_newer_request_queued() {
+    let mut e = station();
+    e.rig_split_applied(14_345_000);
+    e.set_frequency(7.200, "40m", "LSB");
+    e.request_split(Some(7.301));
+    assert_eq!(e.take_split_request(), Some(Some(7.301)));
+    e.request_split(Some(7.205));
+    e.split_refused_while_keyed(7.301);
+    assert_eq!(e.take_split_request(), Some(Some(7.205)));
+}
+
+/// An IC-9700 on the native daemon, Main = downlink / Sub = uplink confirmed, General, Phone,
+/// holding `tp`: a pass about to be picked.
+fn ic9700_holding(tp: tempo_core::doppler::Transponder) -> Engine {
+    let mut e = Engine::new("W9XYZ", "EN52", 0);
+    e.settings.ensure_radio_profiles();
+    e.settings.rig_model = 3081;
+    e.settings.rig_conn = "serial".to_string();
+    e.settings.rig_addr = String::new();
+    e.settings.icom_native_cat = true;
+    e.settings.sync_active_from_flat();
+    let ids: Vec<u32> = e.settings.radios.iter().map(|p| p.id).collect();
+    for id in ids {
+        e.settings
+            .confirm_sat_uplink(id, crate::settings::SatVfoMap::MainDownSubUp);
+    }
+    e.set_license_class("general");
+    e.set_operating_mode("phone", false);
+    e.set_sat_transponder(Some(("TEST|linear".into(), 0, tp)));
+    e
+}
+
+/// ⛔ A PICK'S FIRST UPLINK IS JUDGED WHEN IT IS ASKED, on the receiver it rides. A bird whose
+/// uplink sits in 2 m's CW-only bottom (144.05) has no phone uplink a General may use: the pick
+/// queues no split and the rail says why. RS-44's uplink is queued as before.
+#[test]
+fn a_picks_first_uplink_outside_the_licence_is_refused_when_asked() {
+    let edge = tempo_core::doppler::Transponder {
+        uplink_centre_hz: 144_050_000,
+        downlink_centre_hz: 435_640_000,
+        invert: true,
+        half_width_hz: 0,
+    };
+    let mut e = ic9700_holding(edge);
+    let binding = e.sat_tune_nominal(tempo_core::doppler::DownlinkClass::Usb, 1_000_000);
+    assert_eq!(e.split_tx_mhz(), None, "no uplink queued");
+    assert!(
+        !matches!(e.take_split_request(), Some(Some(_))),
+        "nothing for the radio loop to write"
+    );
+    assert_eq!(binding.pending_uplink_mhz, None);
+    assert_eq!(binding.note.as_deref(), Some(SPLIT_REFUSED_PRIVILEGES));
+
+    // The same bird through the unjudged harness constructor: the uplink is queued, and the KEY
+    // refuses it. So the request-time refusal is the gate's own answer, given earlier.
+    let mut un = ic9700_holding(edge);
+    un.sat_tune_nominal_unjudged(tempo_core::doppler::DownlinkClass::Usb, 1_000_000);
+    let up = un.split_tx_mhz().expect("unjudged: queued");
+    un.rig_split_applied_on((up * 1e6).round() as u64, ReceiverId::Sub);
+    assert!(
+        !un.tx_allowed(),
+        "the key-time gate refuses that uplink too"
+    );
+
+    let mut rs = ic9700_holding(super::tx_gate_table::RS44);
+    let binding = rs.sat_tune_nominal(tempo_core::doppler::DownlinkClass::Usb, 1_000_000);
+    assert!(
+        binding.pending_uplink_mhz.is_some(),
+        "control: an in-band uplink is queued"
+    );
+    assert!(matches!(rs.take_split_request(), Some(Some(_))));
+}
+
+/// ⛔ AT THE INVERTING EDGE THE PICK JUDGES THE UPLINK AS THE KEY WILL: on the Sub, in the
+/// uplink's own word. An inverting bird under a USB downlink keys its uplink in LSB, and LSB
+/// voice at 144.101 runs into 2 m's CW-only bottom (below 144.100): a General may not key it.
+/// Judged before the pick recorded it as the uplink sent, the check took it for a terrestrial
+/// split, on Main and in the downlink's USB, and queued it for the radio loop to write unkeyed.
+#[test]
+fn a_picks_uplink_at_the_inverting_edge_is_judged_on_the_sub_in_its_own_word() {
+    use super::tx_gate_table::EDGE_BIRD;
+    use tempo_core::doppler::DownlinkClass;
+    let mut e = ic9700_holding(EDGE_BIRD);
+    let binding = e.sat_tune_nominal(DownlinkClass::Usb, 1_000_000);
+    assert_eq!(e.split_tx_mhz(), None, "no uplink queued");
+    assert!(
+        !matches!(e.take_split_request(), Some(Some(_))),
+        "nothing for the radio loop to write"
+    );
+    assert_eq!(binding.pending_uplink_mhz, None);
+    assert_eq!(binding.note.as_deref(), Some(SPLIT_REFUSED_PRIVILEGES));
+
+    // POSITIVE CONTROL: the same uplink queued without the pick's check is written to the Sub,
+    // in LSB, and the key-time gate refuses it there.
+    let mut un = ic9700_holding(EDGE_BIRD);
+    un.sat_tune_nominal_unjudged(DownlinkClass::Usb, 1_000_000);
+    let up_hz = (un.split_tx_mhz().expect("unjudged: queued") * 1e6).round() as u64;
+    assert_eq!(
+        un.sat_split_tx_vfo(up_hz, SatCatBackend::NativeCiv),
+        Ok("Sub"),
+        "the receiver the loop writes it to"
+    );
+    un.rig_split_applied_on(up_hz, ReceiverId::Sub);
+    assert_eq!(un.tx_mode_effective(), "LSB", "the uplink's own word");
+    assert!(!un.tx_allowed(), "the key refuses it");
+
+    // CONTROL: the same uplink frequency on a NON-inverting bird keys USB, up and away from the
+    // edge, and the pick queues it.
+    let upright = tempo_core::doppler::Transponder {
+        invert: false,
+        ..EDGE_BIRD
+    };
+    let mut ok = ic9700_holding(upright);
+    let binding = ok.sat_tune_nominal(DownlinkClass::Usb, 1_000_000);
+    assert!(binding.pending_uplink_mhz.is_some(), "control: queued");
+    assert!(matches!(ok.take_split_request(), Some(Some(_))));
+}
+
+/// The pick's check leaves the Doppler record as the pick's own seed writes it: with the uplink
+/// refused, no uplink is recorded as sent, so the first tick corrects from nothing, judged
+/// again when it asks.
+#[test]
+fn a_refused_picks_uplink_is_not_recorded_as_sent() {
+    let mut e = ic9700_holding(super::tx_gate_table::EDGE_BIRD);
+    e.sat_tune_nominal(tempo_core::doppler::DownlinkClass::Usb, 1_000_000);
+    let sent = e.sat_tune.as_ref().expect("a pass is held").sent;
+    assert_eq!(sent.uplink_hz, 0, "the refused uplink was not sent");
+    assert_eq!(sent.downlink_hz, 435_640_000, "the downlink was");
+}
+
+/// Under an UPLINK-ONLY mapping a refused pick writes neither leg, and the rail names the
+/// licence, not the mapping (which is confirmed).
+#[test]
+fn an_uplink_only_picks_refusal_names_the_licence() {
+    let mut e = Engine::new("W9XYZ", "EN52", 0);
+    e.settings.ensure_radio_profiles();
+    // A rig outside the Main/Sub satellite Icoms, whose A/B split carries a cross-band uplink.
+    e.settings.rig_model = 1035;
+    e.settings.sync_active_from_flat();
+    let ids: Vec<u32> = e.settings.radios.iter().map(|p| p.id).collect();
+    for id in ids {
+        e.settings
+            .confirm_sat_uplink(id, crate::settings::SatVfoMap::UplinkOnly);
+    }
+    e.set_license_class("general");
+    e.set_operating_mode("phone", false);
+    let edge = tempo_core::doppler::Transponder {
+        uplink_centre_hz: 144_050_000,
+        downlink_centre_hz: 435_640_000,
+        invert: true,
+        half_width_hz: 0,
+    };
+    e.set_sat_transponder(Some(("TEST|linear".into(), 0, edge)));
+    let binding = e.sat_tune_nominal(tempo_core::doppler::DownlinkClass::Usb, 1_000_000);
+    assert_eq!(binding.pending_uplink_mhz, None);
+    assert_eq!(binding.pending_downlink_mhz, None);
+    assert_eq!(binding.note.as_deref(), Some(SPLIT_REFUSED_PRIVILEGES));
+
+    // CONTROL: RS-44 under the same mapping is queued, with the mapping's own note.
+    let mut rs = Engine::new("W9XYZ", "EN52", 0);
+    rs.settings = e.settings.clone();
+    rs.set_sat_transponder(Some(("TEST|linear".into(), 0, super::tx_gate_table::RS44)));
+    let binding = rs.sat_tune_nominal(tempo_core::doppler::DownlinkClass::Usb, 1_000_000);
+    assert!(binding.pending_uplink_mhz.is_some(), "control: queued");
+    assert_ne!(binding.note.as_deref(), Some(SPLIT_REFUSED_PRIVILEGES));
+}
+
+/// A DOPPLER STEER IS NOT A QSY. Mid-pass the dial is steered every few seconds without the
+/// split being touched, so a keyed refusal of a later uplink step puts the uplink the radio has
+/// back, and queues nothing: neither the refused step nor a return to simplex, which would put
+/// the transmitter on the bird's own downlink.
+#[test]
+fn a_keyed_refusal_mid_pass_keeps_the_standing_uplink() {
+    let mut e = ic9700_holding(super::tx_gate_table::RS44);
+    e.sat_dial_owner = Some(("TEST|linear".into(), 0));
+    e.sat_tune_nominal(tempo_core::doppler::DownlinkClass::Usb, 1_000_000);
+    let up = e.split_tx_mhz().expect("precondition: the uplink queued");
+    assert_eq!(e.take_split_request(), Some(Some(up)));
+    let up_hz = (up * 1e6).round() as u64;
+    e.rig_split_applied_on(up_hz, ReceiverId::Sub);
+    assert!(e.tx_allowed(), "precondition: the uplink keys");
+    // A Doppler step moves the dial, and a later uplink step is refused at the write.
+    let dial = e.settings().dial_mhz;
+    e.steer_sat_dial(dial + 0.001);
+    assert!(
+        (e.settings().dial_mhz - dial - 0.001).abs() < 1e-9,
+        "precondition: the steer moved the dial"
+    );
+    e.request_split(Some(up + 0.002));
+    assert_eq!(e.take_split_request(), Some(Some(up + 0.002)));
+    e.split_refused_while_keyed(up + 0.002);
+    assert_eq!(e.take_split_request(), None, "nothing queued");
+    assert_eq!(e.split_tx_mhz(), Some(up), "the radio's uplink stands");
+    assert_eq!(e.tx_source(), ReceiverId::Sub);
+    assert!(e.tx_allowed(), "and it is what the gate judges");
+}
+
+/// THE OPERATOR'S DECISION (2026-11-18): a pick whose uplink is refused leaves the radio where
+/// its downlink leg put it, on the downlink with no split, and nothing out of the licence
+/// queued. The rail says why. Nexus's own keys are judged on that dial, which a General may
+/// key, as after a split the rig rejected; a held pass with no uplink does not refuse the key
+/// (see `a_transponder_pick_has_never_been_what_stopped_the_mic`).
+#[test]
+fn a_refused_pick_leaves_the_radio_simplex_on_the_downlink() {
+    let mut e = ic9700_holding(super::tx_gate_table::EDGE_BIRD);
+    let binding = e.sat_tune_nominal(tempo_core::doppler::DownlinkClass::Usb, 1_000_000);
+    assert_eq!(binding.note.as_deref(), Some(SPLIT_REFUSED_PRIVILEGES));
+    assert!(
+        (e.settings().dial_mhz - 435.640).abs() < 1e-9,
+        "on the downlink"
+    );
+    assert_eq!(e.split_tx_mhz(), None, "Nexus shows no split");
+    assert!(
+        !matches!(e.take_split_request(), Some(Some(_))),
+        "and asks the radio for none"
+    );
+    assert_eq!(e.tx_source(), ReceiverId::Main);
+    assert!(
+        e.tx_allowed(),
+        "the dial is judged: inside the licence (the disclosed state)"
+    );
+}

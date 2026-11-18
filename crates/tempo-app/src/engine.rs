@@ -2313,6 +2313,11 @@ struct StandingSplit {
     hz: u64,
     rx: crate::dualrx::ReceiverId,
     sat_uplink_acked_hz: Option<u64>,
+    /// [`Engine::split_qsy_gen`] when the rig acknowledged it: a QSY since then returned the
+    /// split to simplex, and a keyed refusal of the request that replaced that return gives the
+    /// return back ([`Engine::split_refused_while_keyed`]). A count, never the dial: a Doppler
+    /// steer moves the dial every few seconds of a pass and leaves the split standing.
+    qsy_gen: u64,
 }
 
 /// The engine seen with a PROPOSED split in place of the acknowledged one, for the key-time gate
@@ -4887,6 +4892,10 @@ pub struct Engine {
     /// ([`TxFreqVerdict::SplitUnverified`]) until a split write settles it. A QSY sends `S 0`
     /// again for it.
     split_unknown: bool,
+    /// Bumped by every QSY that returns the radio to simplex (an app-commanded retune, a knob
+    /// QSY, a radio handoff), and by nothing else: what [`StandingSplit::qsy_gen`] is compared
+    /// with.
+    split_qsy_gen: u64,
     /// What the RIG last said about its own split, and when (unix secs): `(on, tx_hz, at)`.
     ///
     /// Written only from a capability-verified NATIVE read (`SplitDetect::Native`) — never from
@@ -8022,6 +8031,7 @@ impl Engine {
             sat_uplink_acked_hz: None,
             split_standing: None,
             split_unknown: false,
+            split_qsy_gen: 0,
             observed_split: None,
             observed_split_held_since: None,
             split_dirty: false,
@@ -9916,6 +9926,7 @@ impl Engine {
         self.observed_split = None; // …and what the rig said about the OLD dial says nothing here
         self.split_standing = None; // …and the split the OLD radio had is not the new one's
                                     // The new radio gets `S 0` (below) when either was in doubt.
+        self.split_qsy_gen = self.split_qsy_gen.wrapping_add(1);
         let was_unknown = std::mem::take(&mut self.split_unknown);
         if self.split_tx_mhz.take().is_some() || was_unknown {
             self.split_dirty = true;
@@ -10561,6 +10572,7 @@ impl Engine {
         // A plain QSY always returns the rig to SIMPLEX — leftover split from a
         // pile-up must never silently shift TX on the next frequency.
         self.tx_split_confirmed_hz = None; // the radio moved — the confirmation is void
+        self.split_qsy_gen = self.split_qsy_gen.wrapping_add(1);
         self.observed_split = None; // …and what the rig said about the OLD dial says nothing here
         if self.split_tx_mhz.take().is_some() || self.split_unknown {
             self.split_dirty = true;
@@ -10677,6 +10689,7 @@ impl Engine {
         // (set_frequency): otherwise a manual split's TX VFO would be left on the OLD dial —
         // transmitting off-frequency — and the SPLIT badge would lie about the offset.
         self.tx_split_confirmed_hz = None; // the radio moved — the confirmation is void
+        self.split_qsy_gen = self.split_qsy_gen.wrapping_add(1);
         self.observed_split = None; // …and what the rig said about the OLD dial says nothing here
         if self.split_tx_mhz.take().is_some() || self.split_unknown {
             self.split_dirty = true;
@@ -12609,14 +12622,11 @@ impl Engine {
     }
 
     /// The receiver a satellite split at `tx_hz` rides, for judging it before it is written: the
-    /// one the acknowledged split rides when there is one (a Doppler step moves the same VFO),
-    /// otherwise the Sub where the native daemon would put it there
-    /// ([`Self::sat_split_tx_vfo`]); behind Hamlib such a split is refused before the wire, so
-    /// judging it as the Sub refuses nothing that could be sent.
+    /// answer [`Self::sat_split_tx_vfo`] gives the radio loop, Sub for "Sub", Main otherwise.
+    /// Asked as the native daemon, the one backend that writes a Sub uplink; behind Hamlib such
+    /// a split is refused before the wire, so judging it as the Sub refuses nothing that could
+    /// be sent.
     fn sat_split_rx_for(&self, tx_hz: u64) -> crate::dualrx::ReceiverId {
-        if self.tx_split_confirmed_hz.is_some() {
-            return self.tx_split_confirmed_rx;
-        }
         match self.sat_split_tx_vfo(tx_hz, SatCatBackend::NativeCiv) {
             Ok("Sub") => crate::dualrx::ReceiverId::Sub,
             _ => crate::dualrx::ReceiverId::Main,
@@ -12634,10 +12644,26 @@ impl Engine {
     ///
     /// A request made since the loop took this one stays queued; the acknowledgement is put back
     /// either way, because the radio did not move.
+    ///
+    /// ⛔ AFTER A QSY THE REFUSED REQUEST GIVES WAY TO THE QSY'S OWN RETURN TO SIMPLEX, queued
+    /// for the next write. The QSY returned the split to simplex and the request replaced that
+    /// return: discarding the request alone lost both, and the radio kept transmitting on the
+    /// old VFO B after the dial moved, on a cross-band spot the old band; keeping it wrote a
+    /// split the licence had just refused into the radio at the unkey, where a front-panel PTT
+    /// transmits on it. Simplex is what the QSY asked for, and the acknowledgement names the
+    /// old VFO B until the radio confirms it ([`Self::rig_split_cleared`] retires it then). A
+    /// Doppler steer is not a QSY
+    /// ([`StandingSplit::qsy_gen`]): mid-pass the uplink the radio has stands.
     pub fn split_refused_while_keyed(&mut self, tx_mhz: f64) {
         let standing = self.split_standing;
+        let qsy_since = standing.is_some_and(|s| s.qsy_gen != self.split_qsy_gen);
         if !self.split_dirty {
-            self.split_tx_mhz = standing.map(|s| s.hz as f64 / 1e6);
+            if qsy_since {
+                self.split_tx_mhz = None;
+                self.split_dirty = true;
+            } else {
+                self.split_tx_mhz = standing.map(|s| s.hz as f64 / 1e6);
+            }
         }
         self.tx_split_confirmed_hz = standing.map(|s| s.hz);
         if let Some(s) = standing {
@@ -12654,10 +12680,19 @@ impl Engine {
         }
     }
 
-    /// The radio loop put the radio back to simplex: no split stands any more.
+    /// The radio loop put the radio back to simplex: no split stands any more, and the radio
+    /// transmits on its dial.
+    ///
+    /// ⛔ THE ACKNOWLEDGEMENT GOES WITH IT, so the key-time gate judges the dial. A keyed refusal
+    /// after a QSY puts the old VFO B back as the acknowledgement while the radio still has it
+    /// and queues the QSY's `S 0` ([`Self::split_refused_while_keyed`]); kept past the confirmed
+    /// simplex, a key on a new dial outside the licence was judged as the old split, and passed.
+    /// Any split asked since is unacknowledged either way, so nothing confirmed is lost.
     pub fn rig_split_cleared(&mut self) {
         self.split_standing = None;
         self.split_unknown = false;
+        self.tx_split_confirmed_hz = None;
+        self.sat_uplink_acked_hz = None;
     }
 
     /// The radio loop's `S 0` was not confirmed (no answer, or refused): the split is UNKNOWN,
@@ -24869,10 +24904,39 @@ Pick the one you operate from on the Contesting tab in Settings.",
     ///
     /// `now_ms` stamps the seed described below; pass the same clock the track
     /// loop feeds [`Self::sat_doppler_tick`].
+    ///
+    /// # The uplink is judged when it is asked
+    ///
+    /// ⛔ Like every other split ([`Self::split_tx_allowed`]): a pick whose first uplink the
+    /// licence would refuse queues no split, and the rail says why. Before, the uplink was
+    /// written and judged only at the key and, while keyed, at the write; in the gap before the
+    /// radio loop polls a front-panel key it went out to a transmitting radio.
     pub fn sat_tune_nominal(
         &mut self,
         class: tempo_core::doppler::DownlinkClass,
         now_ms: u64,
+    ) -> SatBinding {
+        self.sat_tune_nominal_with(class, now_ms, true)
+    }
+
+    /// [`Self::sat_tune_nominal`] with the request-time judgement of the uplink skipped: the
+    /// key-time gate's own tests build an acknowledged out-of-licence uplink through the real pick
+    /// to prove the gate refuses it, which the request-time judgement no longer lets a pick do.
+    /// Test-only; nothing in the app can reach it.
+    #[cfg(test)]
+    pub(crate) fn sat_tune_nominal_unjudged(
+        &mut self,
+        class: tempo_core::doppler::DownlinkClass,
+        now_ms: u64,
+    ) -> SatBinding {
+        self.sat_tune_nominal_with(class, now_ms, false)
+    }
+
+    fn sat_tune_nominal_with(
+        &mut self,
+        class: tempo_core::doppler::DownlinkClass,
+        now_ms: u64,
+        judge_uplink: bool,
     ) -> SatBinding {
         let fm = class.is_fm();
         // `simplex: false` here is not a claim about the bird: this refusal
@@ -25087,6 +25151,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
             self.sideband_override = None;
             binding.pending_downlink_mhz = Some(down_mhz);
         }
+        // The licence refused the uplink (below): the rail says so, whatever else the pick did.
+        let mut uplink_refused = false;
         // A SIMPLEX bird (145.825 up AND down) is ONE channel on ONE dial: there
         // is no second frequency to put on a split, and asking for one is
         // actively harmful. `sat_split_tx_vfo` answers "Sub" under a Main/Sub
@@ -25109,8 +25175,36 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // rig to simplex (leftover pile-up split must not shift the next
             // frequency), which would drop a split written first.
             let up_mhz = want.uplink_hz as f64 / 1_000_000.0;
-            self.request_split(Some(up_mhz));
-            binding.pending_uplink_mhz = Some(up_mhz);
+            // ⛔ JUDGED AS THE KEY WILL JUDGE IT: with `sent` naming it the uplink, as the seed
+            // below will and as the Doppler tick does for its steps. Both the receiver
+            // (`sat_split_tx_vfo`) and the mode word (`sat_uplink_acked_for`) read `sent`; judged
+            // before it, the uplink passed as a terrestrial split, on Main and in the
+            // downlink's word, which on an inverting bird is the wrong side of the carrier. The
+            // record is put back after the check: the seed below writes what was really done.
+            let held = self.sat_tune.as_ref().map(|st| st.sent);
+            if let Some(st) = self.sat_tune.as_mut() {
+                st.sent = tempo_core::doppler::SentTuning {
+                    downlink_hz: if binding.pending_downlink_mhz.is_some() {
+                        want.downlink_hz
+                    } else {
+                        0
+                    },
+                    uplink_hz: want.uplink_hz,
+                    at_ms: now_ms,
+                    sent: true,
+                };
+            }
+            let rx = self.sat_split_rx_for(want.uplink_hz);
+            let allowed = !judge_uplink || self.split_tx_allowed(up_mhz, rx);
+            if let (Some(st), Some(sent)) = (self.sat_tune.as_mut(), held) {
+                st.sent = sent;
+            }
+            if allowed {
+                self.request_split(Some(up_mhz));
+                binding.pending_uplink_mhz = Some(up_mhz);
+            } else {
+                uplink_refused = true;
+            }
         }
         // Name the rig the writes are ACTUALLY headed to, not the one routing
         // picked. The two come apart under an uplink-only mapping: no downlink
@@ -25138,7 +25232,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
             // Both can be true at once — an unconfirmed mapping over a beacon
             // — and pointing the operator at the confirm there is a dead end:
             // confirming would drive nothing on this bird.
-            binding.note = Some(if self.sat_uplink_leg_undrivable() {
+            binding.note = Some(if uplink_refused {
+                SPLIT_REFUSED_PRIVILEGES.to_string()
+            } else if self.sat_uplink_leg_undrivable() {
                 "Your VFO mapping drives no leg this transponder has — nothing was tuned."
                     .to_string()
             } else {
@@ -25153,6 +25249,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
             binding.note = Some(
                 "Uplink-only mapping — the transmit VFO is set; the dial stays yours.".to_string(),
             );
+        } else if uplink_refused {
+            // The downlink was tuned; the uplink the licence refused was not queued.
+            binding.note = Some(SPLIT_REFUSED_PRIVILEGES.to_string());
         } else if binding.simplex && self.settings.sat_doppler_uplink() {
             // ONE leg, on purpose. The operator's mapping asked for an uplink and
             // got a single frequency instead, so say why in place of leaving them
@@ -25388,6 +25487,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             hz: tx_hz,
             rx,
             sat_uplink_acked_hz: self.sat_uplink_acked_hz,
+            qsy_gen: self.split_qsy_gen,
         });
         if let Some(b) = self.sat_binding.as_mut() {
             if b.pending_uplink_mhz
@@ -84442,7 +84542,9 @@ mod digital_side_licence_tests {
     /// daemon — which VFO the uplink rides, and the rig's acknowledgement. Returns that VFO.
     fn work_pass(e: &mut Engine, tp: Transponder, down: DownlinkClass) -> &'static str {
         e.set_sat_transponder(Some(("TEST|linear".into(), 0, tp)));
-        e.sat_tune_nominal(down, 1_000_000);
+        // Unjudged: these sweeps build out-of-licence uplinks on purpose, to prove the KEY
+        // refuses them (the pick itself now refuses them when asked).
+        e.sat_tune_nominal_unjudged(down, 1_000_000);
         let up_mhz = e
             .split_tx_mhz()
             .expect("the pick queued the uplink on the split");
