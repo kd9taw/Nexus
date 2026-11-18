@@ -4151,6 +4151,20 @@ const PTT_UNCONFIRMED: (AudioErrorKind, &str) = (
     "The rig did not answer the PTT key in time — check the CAT link to the radio.",
 );
 
+/// What an over's key is called when Nexus's own daemon (native CI-V, Icom network, Flex or TCI)
+/// answered it with no answer ([`RadioLoop::daemon_said_no_answer`]): the radio's ack never came,
+/// or the link or session went away under the key. The over is dropped, as when those daemons
+/// answered it as a refusal; [`KeyUp::Refused`] carries these words first, for the log and the PTT
+/// line ([`PTT_UNCONFIRMED_DROPPED`]).
+const DAEMON_NO_ANSWER: &str = "the radio didn't confirm PTT";
+
+/// The PTT line for an over dropped because Nexus's own daemon had no answer to its key
+/// ([`DAEMON_NO_ANSWER`]): not confirmed, and nothing was sent.
+const PTT_UNCONFIRMED_DROPPED: (AudioErrorKind, &str) = (
+    AudioErrorKind::PttUnconfirmed,
+    "The radio didn't confirm PTT, so nothing was sent — check the CAT link to the radio.",
+);
+
 /// The PTT line for a key that is not a slot over, refused because Split Operation could not put
 /// the radio's TX VFO back on the dial first (`RadioLoop::split_ready_for_a_non_slot_key`).
 const PTT_SPLIT_NOT_READY: (AudioErrorKind, &str) = (
@@ -7198,6 +7212,11 @@ impl RadioLoop {
     fn report_key(&mut self, engine: &Arc<Mutex<Engine>>, key: &KeyUp) {
         if *key == KeyUp::NoAnswer {
             self.report_ptt_as(engine, Some(PTT_UNCONFIRMED));
+        } else if matches!(key, KeyUp::Refused(why) if why.starts_with(DAEMON_NO_ANSWER)) {
+            // Dropped for a daemon's no answer: said as not confirmed, not as not accepted.
+            if !std::mem::take(&mut self.key_refused_for_split) {
+                self.report_ptt_as(engine, Some(PTT_UNCONFIRMED_DROPPED));
+            }
         } else {
             self.report_ptt(engine, key.warns());
         }
@@ -7653,6 +7672,26 @@ impl RadioLoop {
         ms
     }
 
+    /// Whether `e`, a key's error, is Nexus's own daemon answering it with no answer (`RPRT -5`
+    /// from the native CI-V daemon, the Icom network client, the Flex client or the TCI client:
+    /// the radio's ack lost, or the link or session gone under the key), rather than Hamlib's
+    /// rigctld saying the rig did not answer, or Nexus's own deadline passing. The radio may be
+    /// keyed either way, so receive is held for it ([`Rig::key_definitely_refused`] is false); it
+    /// differs only in what an over does with it ([`Self::key_up`]).
+    fn daemon_said_no_answer(&self, e: &std::io::Error) -> bool {
+        crate::rig::no_answer_in_time(e)
+            && !crate::rig::deadline_passed(e)
+            && matches!(
+                self.rigctld_proc,
+                Some(
+                    CatDaemon::Native(_)
+                        | CatDaemon::IcomLan(_)
+                        | CatDaemon::Flex(_)
+                        | CatDaemon::Tci(_)
+                )
+            )
+    }
+
     /// [`Self::key_over`]'s second half: the key itself, once Rig split is ready for it.
     fn key_up(&self, rig: &mut Rig, plain: bool) -> KeyUp {
         let held = self.holds_tx();
@@ -7666,6 +7705,12 @@ impl RadioLoop {
         match key {
             Ok(()) => KeyUp::Keyed,
             Err(_) if held => KeyUp::Held,
+            // ⛔ A daemon of Nexus's own with no answer to the key drops the over, as it did when
+            // those daemons answered the silence as a refusal. Only Hamlib's own no answer, and
+            // Nexus's deadline passing, still play with the warning.
+            Err(e) if self.daemon_said_no_answer(&e) => {
+                KeyUp::Refused(format!("{DAEMON_NO_ANSWER} ({e})"))
+            }
             Err(e) if crate::rig::no_answer_in_time(&e) => KeyUp::NoAnswer,
             // Nexus's TCI client says why it kept the key off the air, in place of the rigctld
             // answer (`RPRT -1`), which carries no reason.

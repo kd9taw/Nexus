@@ -933,3 +933,64 @@ fn a_ptt_key_the_radio_never_acks_keeps_receive_held_and_an_ng_lets_it_go() {
         }
     }
 }
+
+/// ⛔ AN OVER WHOSE KEY THE RADIO NEVER ACKS IS DROPPED, as it was when Nexus's CI-V daemon answered
+/// that silence as a refusal. The daemon now answers it `RPRT -5`, Hamlib's no answer, so other
+/// programs and the receive hold hear the truth; but where Hamlib's own no answer plays the over
+/// with its warning, an over through Nexus's own daemon plays nothing, the PTT line says the radio
+/// didn't confirm PTT, and the release still unkeys. The control in the same test: a radio that
+/// acks the key gets the message.
+#[test]
+fn a_voice_message_whose_key_the_radio_never_acks_is_dropped() {
+    for silent in [true, false] {
+        let mut s = Scene::new(IcomModel::Ic905, 3090, (144.2, "2m"), &[]);
+        {
+            let mut r = s.regs.lock().unwrap();
+            r.drop_ptt_writes = if silent { u32::MAX } else { 0 };
+            r.ack_ptt = !silent;
+        }
+        let n = s.wire_len();
+        {
+            let mut e = s.engine.lock().unwrap();
+            e.set_operating_mode("phone", true);
+            e.send_voice(vec![0.05; 12_000]).unwrap();
+        }
+        s.settle(|s| {
+            s.regs.lock().unwrap().wire[n..]
+                .iter()
+                .any(|f| f.get(4) == Some(&0x1C) && f.get(6) == Some(&0x00))
+        });
+        let wire: Vec<Vec<u8>> = s.regs.lock().unwrap().wire[n..].to_vec();
+        let keyed = wire
+            .iter()
+            .any(|f| f.get(4) == Some(&0x1C) && f.get(5) == Some(&0x00) && f.get(6) == Some(&0x01));
+        let released = wire
+            .iter()
+            .any(|f| f.get(4) == Some(&0x1C) && f.get(5) == Some(&0x00) && f.get(6) == Some(&0x00));
+        assert!(
+            keyed && released,
+            "silent={silent}: the key and its release went out"
+        );
+        let banner = s.engine.lock().unwrap().snapshot().radio.audio_error;
+        if silent {
+            assert!(
+                s.backend.played.is_empty(),
+                "an unconfirmed key played the message"
+            );
+            assert_eq!(
+                banner.as_deref(),
+                Some(
+                    "The radio didn't confirm PTT, so nothing was sent — check the CAT link to \
+                     the radio."
+                )
+            );
+        } else {
+            assert_eq!(
+                s.backend.played.len(),
+                12_000,
+                "control: the message did not play"
+            );
+            assert_eq!(banner, None, "control: no line");
+        }
+    }
+}
