@@ -55,6 +55,15 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// leaves it. A caller that needs more creation flags must OR them with `CREATE_NO_WINDOW`,
 /// because `creation_flags` replaces the value rather than adding to it.
 pub fn command(program: impl AsRef<OsStr>) -> Command {
+    command_in(program, std::env::vars_os())
+}
+
+/// [`command`], with `vars` standing in for this process's environment: what a caller that
+/// decides from that environment itself, or a test, hands over so the spawn follows the same one.
+pub fn command_in(
+    program: impl AsRef<OsStr>,
+    vars: impl IntoIterator<Item = (OsString, OsString)>,
+) -> Command {
     let program = program.as_ref();
     let mut cmd = Command::new(program);
     #[cfg(windows)]
@@ -62,7 +71,7 @@ pub fn command(program: impl AsRef<OsStr>) -> Command {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    for (key, value) in host_env_changes(program, std::env::vars_os()) {
+    for (key, value) in host_env_changes(program, vars) {
         match value {
             Some(v) => cmd.env(key, v),
             None => cmd.env_remove(key),

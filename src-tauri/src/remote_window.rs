@@ -106,10 +106,9 @@ fn route_lan(target: &Url, page: &Url) -> Route {
 /// Hand a web address to the operator's default browser. Off this thread: it is called from
 /// inside WebView2's own navigation event, which must not wait on the shell.
 fn open_in_browser(app: &tauri::AppHandle, url: &Url) {
-    use tauri_plugin_opener::OpenerExt;
     let (app, url) = (app.clone(), url.to_string());
     std::thread::spawn(move || {
-        let _ = app.opener().open_url(url, None::<&str>);
+        let _ = crate::open_on_host(&app, url);
     });
 }
 
@@ -155,18 +154,13 @@ fn reach(app: &tauri::AppHandle) -> Reach {
             Arc::new(move |station: Option<String>, choose, ask| {
                 let (app, stations) = (app.clone(), Arc::clone(&stations));
                 Box::pin(async move {
-                    use tauri_plugin_opener::OpenerExt;
                     let env = crate::lan_client::account::Env::new(
                         stations,
                         Arc::new(tempo_stream::lan::dnssd::find),
                         Arc::new(tempo_stream::lan::lookup),
                         computer_name(),
                     )?;
-                    let open = |url: &str| {
-                        app.opener()
-                            .open_url(url, None::<&str>)
-                            .map_err(|e| e.to_string())
-                    };
+                    let open = |url: &str| crate::open_on_host(&app, url);
                     crate::lan_client::account::sign_in(&env, station, open, choose, ask).await
                 })
             })
