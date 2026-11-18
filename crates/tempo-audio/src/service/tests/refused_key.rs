@@ -703,7 +703,9 @@ fn a_phone_ptt_not_answered_in_time_reads_not_confirmed_and_a_refusal_not_accept
         });
         s.run_to(300.0);
         assert!(s.keys() >= 1, "premise: the PTT tried the key");
-        assert_eq!(s.banner().as_deref(), Some(words));
+        // A refusal says what the radio answered after the advice.
+        let banner = s.banner().unwrap_or_default();
+        assert!(banner.starts_with(words), "{banner}");
         assert_eq!(s.kind(), kind);
         assert!(s.backend.played.is_empty(), "Nexus played under the mic");
     }
@@ -1405,4 +1407,148 @@ fn a_late_start_under_a_broker_clients_key_sends_nothing_and_the_next_slot_sends
         "from the next free slot the CQ did not go out as with no client, every over once"
     );
     assert!(s.armed() && s.slot_key_refused().is_none());
+}
+
+/// What the receive display shows now: an audio row published this instant, and whether it got
+/// through. A row is dropped while the loop holds receive for a key (`SpectrumFeed::set_tx_hold`).
+fn receive_shown(s: &Scene) -> bool {
+    s.state
+        .spectrum_feed
+        .publish_audio(tempo_app::dto::Spectrum {
+            row: vec![0.5; 8],
+            lo_hz: 0.0,
+            hi_hz: 4_000.0,
+            source: "audio".into(),
+        });
+    s.state.spectrum_feed.row().is_some()
+}
+
+/// ⭐ A PHONE PTT THE RADIO REFUSES, HELD (the dock's Lock), DOES NOT HOLD RECEIVE. It put nothing
+/// on the air, but it counted as keyed for the receive hold, so the scope froze and, past the
+/// hold's six-minute fuse, read "Scope data unavailable" over a radio that was receiving. The
+/// status line also says what the radio answered, after the advice. The key is still not tried
+/// again while it is held, and the release still unkeys.
+///
+/// The control in the same scene: a key the radio accepts holds receive and keys exactly once.
+#[test]
+fn a_refused_phone_ptt_held_shows_receive_and_says_what_the_radio_answered() {
+    let mut s = Scene::new(Key::Answers(-11), |e| {
+        phone(e);
+        e.set_ptt(true);
+    });
+    s.run_to(1_000.0);
+    assert_eq!(s.keys(), 1, "the refused key was tried again while held");
+    assert_eq!(
+        s.banner().as_deref(),
+        Some(
+            "The rig didn't accept PTT — check your PTT method and CAT/port. \
+             Hamlib answered: Feature not available (RPRT -11)."
+        )
+    );
+    assert_eq!(s.kind(), "ptt");
+    assert!(s.state.manual_ptt_applied, "premise: the press is applied");
+    assert!(receive_shown(&s), "a refused key held receive");
+    s.engine.lock().unwrap().set_ptt(false);
+    s.run_to(1_100.0);
+    let log = s.log.lock().unwrap().clone();
+    let key = log.iter().position(|l| l == "T 1").unwrap();
+    assert!(
+        log[key..].iter().any(|l| l == "T 0"),
+        "the release did not unkey: {log:?}"
+    );
+
+    // The control: an accepted key holds receive while it is held, and only then.
+    let mut s = Scene::new(Key::Accepts, |e| {
+        phone(e);
+        e.set_ptt(true);
+    });
+    s.run_to(1_000.0);
+    assert_eq!(s.keys(), 1, "control: the key went out once");
+    assert_eq!(s.banner(), None, "control: no line");
+    assert!(
+        !receive_shown(&s),
+        "control: a key that keyed did not hold receive"
+    );
+    s.engine.lock().unwrap().set_ptt(false);
+    s.run_to(1_100.0);
+    assert!(
+        receive_shown(&s),
+        "control: the release did not let receive go"
+    );
+}
+
+/// ⛔ FAIL SAFE: A KEY WHOSE OUTCOME IS NOT KNOWN STILL HOLDS RECEIVE. A key answered after the
+/// deadline, or with Hamlib's own "the rig did not answer", may have keyed the radio, so it is
+/// treated as keyed. Only a definite refusal lets receive go.
+#[test]
+fn a_phone_ptt_not_answered_in_time_still_holds_receive() {
+    for key in [Key::AnswersLate, Key::Answers(-5)] {
+        let mut s = Scene::new(key, |e| {
+            phone(e);
+            e.set_ptt(true);
+        });
+        s.run_to(300.0);
+        assert!(s.keys() >= 1, "premise: the PTT tried the key");
+        assert_eq!(s.banner().as_deref(), Some(UNCONFIRMED), "premise");
+        assert!(
+            !receive_shown(&s),
+            "a key that may have keyed let receive go"
+        );
+    }
+}
+
+/// ⭐ A SERIAL PTT PORT THAT WILL NOT OPEN raised no line, so it holds no receive either, and the
+/// status line says what the port said, naming it by its last path segment only.
+#[cfg(feature = "serial")]
+#[test]
+fn a_serial_ptt_port_that_will_not_open_shows_receive_and_says_why() {
+    let port = "/dev/nexus-no-such-ptt-port";
+    let mut s = Scene::new(Key::Accepts, |e| {
+        phone(e);
+        e.set_ptt(true);
+    });
+    s.rig.set_ptt_mode(PttMode::Serial {
+        port: port.into(),
+        line: SerialLine::Rts,
+    });
+    s.run_to(1_000.0);
+    assert_eq!(s.keys(), 0, "premise: no CAT key for serial PTT");
+    let banner = s.banner().unwrap_or_default();
+    assert!(
+        banner.starts_with(REFUSED) && banner.contains("The PTT port said:"),
+        "{banner}"
+    );
+    assert!(
+        banner.contains("nexus-no-such-ptt-port") && !banner.contains("/dev/"),
+        "the port's path: {banner}"
+    );
+    assert!(receive_shown(&s), "a port that never opened held receive");
+}
+
+/// ⛔ FAIL SAFE for serial PTT: a port that opened but refused the line write may have left the
+/// line anywhere, so receive stays held as for a key.
+#[cfg(feature = "serial")]
+#[test]
+fn a_serial_ptt_line_write_the_port_refused_still_holds_receive() {
+    use crate::control_line::{fake_ports, SharedControlLines};
+    let port = "COMPTTFAKE";
+    fake_ports::install(port);
+    // Another holder has the port open, so the key joins its handle and only writes the line.
+    let _other = SharedControlLines::open(port).expect("the fake port opens");
+    fake_ports::fail_next_write(port);
+    let mut s = Scene::new(Key::Accepts, |e| {
+        phone(e);
+        e.set_ptt(true);
+    });
+    s.rig.set_ptt_mode(PttMode::Serial {
+        port: port.into(),
+        line: SerialLine::Rts,
+    });
+    s.run_to(300.0);
+    let banner = s.banner().unwrap_or_default();
+    assert!(banner.starts_with(REFUSED), "premise: {banner}");
+    assert!(
+        !receive_shown(&s),
+        "a line write of unknown outcome let receive go"
+    );
 }
