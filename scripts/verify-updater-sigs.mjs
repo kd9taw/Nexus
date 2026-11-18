@@ -64,8 +64,10 @@ const flag = (name) => {
   return args.splice(i, 2)[1];
 };
 const version = flag('--version');
-const notBefore = Number(flag('--not-before'));
-if (!Number.isInteger(notBefore)) fail('--not-before is not a unix time');
+// Digits only: Number('') is 0, which would switch the age check off without a word.
+const notBeforeRaw = flag('--not-before');
+if (!/^[0-9]+$/.test(notBeforeRaw)) fail(`--not-before ${JSON.stringify(notBeforeRaw)} is not a unix time`);
+const notBefore = Number(notBeforeRaw);
 const [conf, ...files] = args;
 if (!conf || !files.length) fail('usage: verify-updater-sigs.mjs --version <ver> --not-before <unix time> <tauri.conf.json> <file>...');
 const BUNDLER_TARBALL = 'Nexus.app.tar.gz';

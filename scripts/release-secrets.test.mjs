@@ -969,6 +969,12 @@ test('the signature check reads the trusted comment it verified: file, version a
       assert.match(r.stderr, why);
     }
     assert.match(check(exe, '', { sign: false }).stderr, /has no signature beside it/);
+    // An empty or non-numeric --not-before must not switch the age check off.
+    check(exe, tauriComment(exe, '9.9.9'));
+    for (const bad of ['', '1e9', ' 5', '-1', '0x10']) {
+      const r = spawnSync('node', [VERIFY, '--version', '9.9.9', '--not-before', bad, conf, path.join(dir, exe)], { encoding: 'utf8' });
+      assert.notEqual(r.status, 0, `--not-before ${JSON.stringify(bad)} was accepted`);
+    }
     // An edited trusted comment: the global signature no longer covers it.
     const file = path.join(dir, exe);
     check(exe, tauriComment(exe, '9.9.9'));
