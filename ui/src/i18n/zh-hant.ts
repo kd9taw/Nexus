@@ -515,6 +515,7 @@ export const ZH_HANT: PartialCatalog = {
   "shell.lane.audio.soundCard": "音效卡故障",
   "shell.lane.audio.noReceiveAudio": "無接收音訊",
   "shell.lane.audio.ptt": "PTT 未被接受",
+  "shell.lane.audio.ptt.brief": "PTT 未被接受：請檢查 PTT 方式和連線埠（設定 ▸ 電台 ▸ 電台與 CAT）",
   "shell.lane.audio.flexAudio": "無 FLEX 音訊",
   "shell.lane.audio.flexAddress": "無 FLEX 電台 IP",
   "shell.lane.audio.monitor": "耳機監聽關閉",

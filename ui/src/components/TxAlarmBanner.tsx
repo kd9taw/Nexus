@@ -18,7 +18,9 @@
 // "Never wraps, alarms also shown by Stop", so every CRITICAL lane item is shown here as well and is
 // never hidden anywhere):
 //   1. the station's transmitter alarm, oldest first, with its Dismiss (✕, named "Dismiss");
-//   2. the critical status-lane items (status.ts), in the lane's order;
+//   2. the critical status-lane items (status.ts), in the lane's order, each as `headline — detail`, or as
+//      its shorter `brief` where it has one (a refused PTT: the advice first, as the line otherwise
+//      repeated the headline and its ellipsis cut the advice), whole on hover either way;
 //   3. "+N" when there are more ("1 of N" to a screen reader, as hidden text), every other entry whole on hover.
 // THE FLOOR THE WORDS GET (cockpit-panes.css): beside the TX state the cell's minimum is 4.5em, the room
 // that line has at 900x600 175 %, so it never takes a line of its own (a 13em floor did, and the taller sticky strip
@@ -71,20 +73,23 @@ export function TxAlarmBanner({
 }) {
   const critical = useCriticalLane()
   const shown = alarms?.[0]
-  const entries: string[] = [
-    ...(alarms ?? []).map(alarmWords),
-    ...critical.map((i) => (i.detail ? `${i.message} — ${i.detail}` : i.message)),
+  const whole = (i: StatusItem) => (i.detail ? `${i.message} — ${i.detail}` : i.message)
+  // Each entry's words on the line, and whole for the hover: a lane item may carry shorter words for the
+  // line (`brief`, a refused PTT's advice first) where `message — detail` would repeat itself.
+  const entries: { line: string; whole: string }[] = [
+    ...(alarms ?? []).map((a) => ({ line: alarmWords(a), whole: alarmWords(a) })),
+    ...critical.map((i) => ({ line: i.brief ?? whole(i), whole: whole(i) })),
   ]
   const first = entries[0]
-  const rest = entries.slice(1)
+  const rest = entries.slice(1).map((e) => e.whole)
   return (
     // The always-drawn cell is no alert itself (an empty one would be a standing alert region); the words
     // are, so each alarm is announced as it arrives.
     <div className={ownLine ? 'ch-txalarm ch-txalarm-own' : 'ch-txalarm'}>
       {first != null && (
-        <span className="ch-txalarm-text" role="alert" title={first}>
+        <span className="ch-txalarm-text" role="alert" title={first.whole}>
           <span aria-hidden="true">⚠ </span>
-          {first}
+          {first.line}
         </span>
       )}
       {rest.length > 0 && (

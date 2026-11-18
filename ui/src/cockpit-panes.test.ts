@@ -256,7 +256,7 @@ describe('the fence: styles.css never names a structural class', () => {
     // The listening level's button in the top bar (#468), the RX meter itself: a styles.css padding or
     // border on it would widen the bar's line, which has no slack at 1366x768 on FT.
     'listen-trigger',
-    'ch-overflow', 'ch-overflow-panel', 'ch-overflow-open', 'cw-wpm-compact',
+    'ch-overflow', 'ch-overflow-panel', 'ch-overflow-open', 'ch-overflow-start', 'cw-wpm-compact',
     // The My station picker in the top bar (2026-11-03): it stands over the callsign, out of the bar's
     // line; a styles.css margin or width on it would put it back in the line and wrap the bar.
     'mycall-picker', 'station-profile-picker',
@@ -1870,6 +1870,14 @@ describe('THE ONE-ROW TOP BAR AND HEADER (1080p pass): what the folds show and h
     // Out of flow, so opening it moves no control in the header, the strip or the dock.
     expect(classChainWinner([['ch-overflow'], ['ch-overflow-panel']], 'position')?.value).toBe('absolute')
     expect(classChainWinner([['ch-overflow']], 'position')?.value).toBe('relative')
+  })
+
+  it('the header’s ⋯ group opens leftward from its button by default, rightward (and slid back inside) on the start side', () => {
+    expect(classChainWinner([['ch-overflow'], ['ch-overflow-panel', 'ch-overflow-open']], 'right')?.value).toBe('0')
+    expect(classChainWinner([['ch-overflow'], ['ch-overflow-panel', 'ch-overflow-open']], 'left')).toBeNull()
+    const start = [['ch-overflow'], ['ch-overflow-panel', 'ch-overflow-open', 'ch-overflow-start']]
+    expect(classChainWinner(start, 'left')?.value).toBe('var(--ch-overflow-offset, 0px)')
+    expect(classChainWinner(start, 'right')?.value, 'the base rule’s right: 0 would pin both edges').toBe('auto')
   })
 
   it('FT8 Roster’s rail gives Band Activity three shares to Rx Frequency’s one by default (a stored share still wins)', () => {

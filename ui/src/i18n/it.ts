@@ -546,6 +546,7 @@ export const IT: PartialCatalog = {
   "shell.lane.audio.soundCard": "SCHEDA AUDIO GUASTA",
   "shell.lane.audio.noReceiveAudio": "NESSUN AUDIO RICEVUTO",
   "shell.lane.audio.ptt": "PTT NON ACCETTATO",
+  "shell.lane.audio.ptt.brief": "PTT NON ACCETTATO: controlla metodo PTT e porta (Impostazioni ▸ Radio ▸ Radio e CAT)",
   "shell.lane.audio.pttUnconfirmed": "PTT NON CONFERMATO",
   "shell.lane.audio.flexAudio": "NESSUN AUDIO FLEX",
   "shell.lane.audio.flexAddress": "NESSUN IP RADIO FLEX",

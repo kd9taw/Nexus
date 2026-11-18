@@ -10,6 +10,7 @@ import { audioErrorLane } from './audioError'
 import type { AudioErrorKind } from '../types'
 
 const PTT = "The rig didn't accept PTT — check your PTT method and CAT/port."
+const PTT_BRIEF = 'PTT NOT ACCEPTED: check PTT method & port (Settings ▸ Radio ▸ Rig & CAT)'
 const PTT_UNCONFIRMED = 'The rig did not answer the PTT key in time — check the CAT link to the radio.'
 
 // Each kind the station names (crates/tempo-app/src/dto.rs, AudioErrorKind, by its wire name):
@@ -60,7 +61,26 @@ const KINDS: [AudioErrorKind, string, string, 'critical' | 'warning'][] = [
 
 describe('the status lane for the station audio-error line', () => {
   it.each(KINDS)('%s: heads the sentence with its own words and tier, the sentence whole', (kind, sentence, words, tier) => {
-    expect(audioErrorLane(sentence, kind)).toEqual({ tier, message: words, detail: sentence })
+    // Only the refusal's own sentence carries the TX strip's shorter line (below).
+    const brief = sentence === PTT ? { brief: PTT_BRIEF } : {}
+    expect(audioErrorLane(sentence, kind)).toEqual({ tier, message: words, detail: sentence, ...brief })
+  })
+
+  // The TX strip's one line read "PTT NOT ACCEPTED — The rig didn't accept PTT — check your…", and the
+  // ellipsis cut the advice. It leads with the advice and where the setting is; any other sentence the
+  // station puts on the PTT line, and a refusal under any other kind, gets no shorter line.
+  it('a refused PTT carries the advice first for the one-line cell, and only that sentence does', () => {
+    expect(audioErrorLane(PTT, 'ptt')?.brief).toBe(PTT_BRIEF)
+    // A station that knows why appends the radio's answer to the same sentence: the same shorter line, and
+    // the answer kept whole in the detail (the hover).
+    for (const answer of ['Hamlib answered: Feature not available (RPRT -11).', 'The PTT port said: Access is denied.']) {
+      const lane = audioErrorLane(`${PTT} ${answer}`, 'ptt')
+      expect(lane?.brief, answer).toBe(PTT_BRIEF)
+      expect(lane?.detail, answer).toBe(`${PTT} ${answer}`)
+    }
+    expect(audioErrorLane('Not keyed: Split Operation could not put the radio’s TX VFO back on the dial', 'ptt')?.brief).toBeUndefined()
+    expect(audioErrorLane(PTT, null)?.brief).toBeUndefined()
+    expect(audioErrorLane(PTT_UNCONFIRMED, 'pttUnconfirmed')?.brief).toBeUndefined()
   })
 
   it('a PTT the rig did not accept reads PTT NOT ACCEPTED, not RADIO STOPPED', () => {

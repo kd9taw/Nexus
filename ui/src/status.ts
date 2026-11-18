@@ -12,6 +12,9 @@ export interface StatusItem {
   tier: StatusTier
   message: string
   detail?: string
+  /** What the TX strip's one-line alarm cell shows in place of `message — detail`, where that line
+   *  would spend its room repeating itself (TxAlarmBanner). The whole `message — detail` stays its hover. */
+  brief?: string
 }
 
 type Listener = (items: StatusItem[]) => void
@@ -37,7 +40,7 @@ export function setStatus(id: string, item: Omit<StatusItem, 'id'> | null): void
   }
   const next = { id, ...item }
   const prev = items.get(id)
-  if (!prev || prev.tier !== next.tier || prev.message !== next.message || prev.detail !== next.detail) {
+  if (!prev || prev.tier !== next.tier || prev.message !== next.message || prev.detail !== next.detail || prev.brief !== next.brief) {
     items.set(id, next)
     emit()
   }

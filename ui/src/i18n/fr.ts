@@ -9502,6 +9502,7 @@ export const FR: PartialCatalog = {
   "shell.lane.audio.soundCard": "CARTE SON EN ÉCHEC",
   "shell.lane.audio.noReceiveAudio": "PAS D'AUDIO DE RÉCEPTION",
   "shell.lane.audio.ptt": "PTT NON ACCEPTÉ",
+  "shell.lane.audio.ptt.brief": "PTT NON ACCEPTÉ : vérifiez la méthode PTT et le port (Réglages ▸ Radio ▸ Radio et CAT)",
   "shell.lane.audio.pttUnconfirmed": "PTT NON CONFIRMÉ",
   "shell.lane.audio.flexAudio": "PAS D'AUDIO FLEX",
   "shell.lane.audio.flexAddress": "PAS D'IP DE LA RADIO FLEX",
