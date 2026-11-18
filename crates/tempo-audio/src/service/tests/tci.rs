@@ -334,6 +334,8 @@ struct Card {
     mon_tx_mute: Arc<std::sync::atomic::AtomicBool>,
     /// The monitor's way in for audio other than the card's own, at the card's 48 kHz.
     monitor: crate::monitor::MonitorFeed,
+    /// While set, the card is a live stream that has stopped calling back: `capture` is empty.
+    quiet: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Default for Card {
@@ -351,13 +353,20 @@ impl Default for Card {
             ),
             mon_enabled,
             mon_tx_mute,
+            quiet: Arc::default(),
         }
     }
 }
 
 impl AudioBackend for Card {
     fn capture(&mut self) -> Vec<f32> {
+        if self.quiet.load(std::sync::atomic::Ordering::SeqCst) {
+            return Vec::new();
+        }
         vec![0.0; 240]
+    }
+    fn capture_is_streaming(&self) -> bool {
+        true
     }
     fn play(&mut self, samples: &[f32]) {
         match self.tee.lock().unwrap().as_ref() {
@@ -1900,4 +1909,30 @@ fn an_over_the_sdr_program_ends_by_itself_halts_transmit_and_says_why() {
     );
     s.run(500);
     assert_eq!(s.sent(0, "trx:0,true"), 1, "nothing keyed again by itself");
+}
+
+/// The sound card going quiet while the SDR program's audio is the receive source is not a stalled
+/// receiver: the operator hears the SDR program. The no-delivery fuse holds, and nothing is
+/// reopened.
+#[test]
+fn a_quiet_card_under_tci_audio_is_not_a_stall() {
+    let mut s = TciScene::new([], waits(), listen).on_a_made_up_clock();
+    // The fuse is timed on the monotonic clock; the made-up clock drives it here.
+    s.state.mono_origin = Some(Instant::now());
+    s.run_until("TCI audio never became the receive source", |s| {
+        s.state.tci_rx.is_some()
+    });
+    // The card delivered up to here, so the fuse is armed; now it stops calling back.
+    s.step();
+    s.card
+        .quiet
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    for _ in 0..250 {
+        s.step();
+    }
+    assert!(
+        s.state.tci_rx.is_some(),
+        "premise: TCI audio is still the source"
+    );
+    super::fuse_quiet(&s.engine, &s.state, "a quiet card under TCI audio");
 }

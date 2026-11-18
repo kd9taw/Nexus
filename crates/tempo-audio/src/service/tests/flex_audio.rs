@@ -37,6 +37,8 @@ struct TeeBackend {
     monitor: crate::monitor::MonitorFeed,
     /// The computer's microphone (`tempo_app::engine::pc_mic`), as a sound card's capture.
     pc_mic: Arc<Mutex<PcMicDevice>>,
+    /// Stand for a live capture stream that sends nothing (`AudioBackend::capture_is_streaming`).
+    streaming: bool,
 }
 
 /// The computer's microphone behind [`TeeBackend`]: while open, each read hands over the audio
@@ -70,6 +72,7 @@ impl Default for TeeBackend {
                 level: 0.2,
                 ..PcMicDevice::default()
             })),
+            streaming: false,
         }
     }
 }
@@ -77,6 +80,9 @@ impl Default for TeeBackend {
 impl AudioBackend for TeeBackend {
     fn capture(&mut self) -> Vec<f32> {
         Vec::new()
+    }
+    fn capture_is_streaming(&self) -> bool {
+        self.streaming
     }
     fn play(&mut self, samples: &[f32]) {
         self.played.lock().unwrap().push(Instant::now());
@@ -4881,4 +4887,26 @@ fn on_dax_an_rr73_only_the_late_full_pass_finds_turns_the_report_on_the_air_into
         [msgsent(TX2), msgsent(BYE73)],
         "the logger is told the report as keyed, then the 73"
     );
+}
+
+/// A sound card that sends nothing while the Flex's DAX audio is the receive source is not a
+/// stalled receiver: the operator hears the radio over DAX. The no-delivery fuse holds, and
+/// nothing is reopened.
+#[test]
+fn a_silent_card_under_dax_audio_is_not_a_stall() {
+    let mut s = FlexScene::new(true);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while s.state.dax_last_audio.is_none() {
+        assert!(Instant::now() < deadline, "DAX receive audio never arrived");
+        s.run(100);
+    }
+    // A live card, armed as if it had just delivered, that never calls back again.
+    s.backend.streaming = true;
+    s.state.capture_watch_from = Some(Instant::now());
+    s.run(4_000);
+    assert!(
+        s.state.dax_last_audio.is_some(),
+        "premise: DAX is still the source"
+    );
+    super::fuse_quiet(&s.engine, &s.state, "a silent card under DAX audio");
 }
