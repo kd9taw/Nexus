@@ -44147,6 +44147,15 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         const HAMLIB_SAYS: &str = "read_block_generic(): Timed out 1.109 seconds after 0 chars";
+        // The opens run in a child run of this one test, with the stand-ins first on the child's
+        // own PATH. Setting PATH here would hand them to every test in this binary that resolves
+        // a rigctld while this one runs or after it (the wfview scenes): a Hamlib check that asks
+        // the stand-in for its version fails, so those scenes skip, and one that had already
+        // passed it launches a stand-in that never answers.
+        const CHILD: &str = "NEXUS_TEST_OPENCAT_SAID";
+        if std::env::var_os(CHILD).is_some() {
+            return ordinary_connect_failure_opens(HAMLIB_SAYS);
+        }
 
         let dir = std::env::temp_dir().join(format!("nexus-opencat-said-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
@@ -44187,25 +44196,48 @@ mod tests {
         .expect("write stand-in rigctl");
         std::fs::set_permissions(&rigctl, std::fs::Permissions::from_mode(0o755)).expect("chmod");
         // `resolve_rigctld` prefers a binary bundled beside the executable and falls back to
-        // PATH; a test binary has no bundle, so this is the path it takes. Prepend-only, and
-        // this is the only test in this binary that resolves a rigctld.
-        std::env::set_var(
-            "PATH",
-            format!(
-                "{}:{}",
-                dir.display(),
-                std::env::var("PATH").unwrap_or_default()
-            ),
+        // PATH; a test binary has no bundle, so this is the path it takes. Prepend-only.
+        let me = format!(
+            "{}::an_ordinary_connect_failure_carries_what_the_daemon_said",
+            module_path!().split_once("::").map_or("", |(_, rest)| rest)
         );
+        // The child's output goes to a file, not a pipe: the stand-in daemon it launches lives
+        // on for its 30 s holding the child's stdout and stderr, and a pipe would wait for it.
+        let said = dir.join("child.log");
+        let log = std::fs::File::create(&said).expect("child log");
+        let status = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([me.as_str(), "--exact", "--test-threads=1"])
+            .env(CHILD, "1")
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    dir.display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
+            .stdout(log.try_clone().expect("child log"))
+            .stderr(log)
+            .status()
+            .expect("run the child");
+        let shown = std::fs::read_to_string(&said).unwrap_or_default();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            shown.contains("running 1 test"),
+            "control: the child ran no test, so it proved nothing:\n{shown}"
+        );
+        assert!(status.success(), "the child failed:\n{shown}");
+    }
 
+    /// The opens of [`an_ordinary_connect_failure_carries_what_the_daemon_said`], in its child run,
+    /// where the stand-in `rigctld` and `rigctl` are first on PATH.
+    #[cfg(unix)]
+    fn ordinary_connect_failure_opens(hamlib_says: &str) {
         // A port with nothing on it: the daemon we launch will not bind it either, so the
-        // control connection is refused and the probe fails — an ordinary connect failure.
-        let port = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-        let (_rig, proc, probe) = open_rig(&cat_transport(port, None), true);
+        // control connection is refused and the probe fails — an ordinary connect failure. It is
+        // held bound and never listened on: a port let go can be handed to the next `:0` bind
+        // anywhere on this computer, and another test's rigctld there once answered the open.
+        let (_rig, proc, probe) = open_rig(&cat_transport(refused_port(), None), true);
 
         assert_eq!(
             probe.ok,
@@ -44214,7 +44246,7 @@ mod tests {
             probe.detail
         );
         assert!(
-            probe.detail.contains("Hamlib said:") && probe.detail.contains(HAMLIB_SAYS),
+            probe.detail.contains("Hamlib said:") && probe.detail.contains(hamlib_says),
             "an ordinary connect failure must carry the daemon's OWN diagnosis — this is the \
              delivery site the operator hits first and it had no test at all. got: {}",
             probe.detail
@@ -44222,14 +44254,9 @@ mod tests {
         drop(proc);
 
         // ...and a NET rigctl radio given a COM port leads with what is wrong and what to do, with
-        // Hamlib's words still behind them. In this test because it is the one that may resolve a
-        // rigctld (it sets PATH).
-        let port = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-        let mut wrong = cat_transport(port, None);
+        // Hamlib's words still behind them. Here because this child run is where the stand-ins
+        // are on PATH.
+        let mut wrong = cat_transport(refused_port(), None);
         wrong.rig_model = 2;
         wrong.rig_conn = "serial".into();
         wrong.serial_port = "COM4".into();
@@ -44238,12 +44265,11 @@ mod tests {
         assert!(
             probe.detail.starts_with(
                 &crate::rigctld_proc::NET_RIGCTL_ON_A_SERIAL_PORT.replace("{{port}}", "COM4")
-            ) && probe.detail.contains(HAMLIB_SAYS),
+            ) && probe.detail.contains(hamlib_says),
             "got: {}",
             probe.detail
         );
         drop(proc);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A NET rigctl radio given a serial port name is told so; nothing else is. A real address, an

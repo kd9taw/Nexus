@@ -13,7 +13,7 @@ use crate::client_mode::tests::{ask, eventually, scratch, screens};
 use crate::client_mode::{Afar, Client, Find, Phase, ThisComputer, Timing};
 use crate::lan_client::audio_road::{Headset, CUSHION_MS, INTERNET_CUSHION_MS};
 use crate::lan_client::link::{Internet, Link};
-use crate::lan_client::tests::where_nothing_listens;
+use crate::lan_client::tests::listener_below_the_ephemeral_range;
 use crate::remote_service::tunnel::Approved;
 use crate::remote_service::vault::PairedStation;
 use std::future::Future;
@@ -245,7 +245,13 @@ impl Afield {
         client.reach_afar(Arc::clone(&service) as Arc<dyn Afar>);
         client.time_with(timing);
         let screens = screens(&client);
-        let lan = where_nothing_listens(Ipv4Addr::LOCALHOST);
+        // Let go, not held: the station's listener on this network binds it later.
+        let std::net::SocketAddr::V4(lan) = listener_below_the_ephemeral_range(Ipv4Addr::LOCALHOST)
+            .local_addr()
+            .unwrap()
+        else {
+            unreachable!()
+        };
         let find: Find = {
             // This network's own record: the device id the station's LAN listener gave.
             let (key, pkcs8, device) = (

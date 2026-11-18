@@ -5353,6 +5353,21 @@ mod tests {
         drop(vox);
     }
 
+    /// A loopback address where a connect is refused, held for as long as the socket returned with
+    /// it lives: bound and never listened on, so the kernel refuses a connect there and no other
+    /// socket can take the port. A port bound and let go is free for the next `:0` bind on this
+    /// computer, and a mock rigctld given it there answers, or resets, the connect a test expected
+    /// to be refused.
+    fn refused_addr() -> (socket2::Socket, String) {
+        use socket2::{Domain, Socket, Type};
+        let socket = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
+        socket
+            .bind(&std::net::SocketAddr::from(([127, 0, 0, 1], 0)).into())
+            .unwrap();
+        let at = socket.local_addr().unwrap().as_socket().unwrap();
+        (socket, at.to_string())
+    }
+
     /// A listening port that never completes another connection: its accept queue is shrunk to
     /// nothing and filled, so the kernel drops every further SYN and a connect to it waits out the
     /// OS SYN retries (~127 s), exactly as one to a firewalled or switched-off network rigctld
@@ -5464,9 +5479,7 @@ mod tests {
         let (addr, _log) = mock_rigctld(|_l| "RPRT -1\n".to_string());
         let e = Rig::rigctld(&addr).set_mode("USB", -1).unwrap_err();
         assert!(!cat_unreachable(&e), "{e:?}");
-        let l = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = l.local_addr().unwrap().to_string();
-        drop(l);
+        let (_held, addr) = refused_addr();
         let e = Rig::rigctld(&addr).read_freq().unwrap_err();
         assert_eq!(e.kind(), std::io::ErrorKind::ConnectionRefused, "{e}");
         assert!(!cat_unreachable(&e), "{e:?}");
@@ -5481,10 +5494,8 @@ mod tests {
 
     #[test]
     fn read_freq_errors_when_rigctld_unreachable() {
-        // Grab then drop a port so nothing is listening → connection refused.
-        let l = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = l.local_addr().unwrap().to_string();
-        drop(l);
+        // A port nothing is listening on → connection refused.
+        let (_held, addr) = refused_addr();
         let mut rig = Rig::rigctld(&addr);
         assert!(rig.read_freq().is_err());
     }

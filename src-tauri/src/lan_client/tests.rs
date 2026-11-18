@@ -182,18 +182,36 @@ pub(crate) fn record(station: &str, addresses: &[&str]) -> PairedStation {
 /// refused. Its port is BELOW the kernel's ephemeral range. A port a `:0` bind took and let go is
 /// free for the next `:0` bind anywhere in the test binary, and another test's listener was once
 /// handed one and answered there. Below the range only a bind that names the port can land
-/// (`freePortOutsideEphemeralRange` in `remote/test/runtime.mjs` makes the same choice).
+/// (`freePortOutsideEphemeralRange` in `remote/test/runtime.mjs` makes the same choice). The port
+/// is held bound, never listened on, until the test binary exits: no other bind can land there
+/// either, and the kernel refuses a connect at it. A port let go does not stay refused everywhere:
+/// under WSL2's mirrored networking a connect there is handed to Windows some time after the
+/// release (measured: still refused at 40 s, dropped at 80 s), its firewall drops it, and the
+/// connect waits out its timeout instead.
 pub(crate) fn where_nothing_listens(ip: std::net::Ipv4Addr) -> std::net::SocketAddrV4 {
-    let std::net::SocketAddr::V4(at) = listener_below_the_ephemeral_range(ip).local_addr().unwrap()
-    else {
-        unreachable!()
-    };
+    static HELD: std::sync::Mutex<Vec<tokio::net::TcpSocket>> = std::sync::Mutex::new(Vec::new());
+    let (socket, at) = ports_below_the_ephemeral_range()
+        .find_map(|port| {
+            let at = std::net::SocketAddrV4::new(ip, port);
+            let socket = tokio::net::TcpSocket::new_v4().unwrap();
+            socket.bind(at.into()).ok()?;
+            Some((socket, at))
+        })
+        .expect("a free port below the ephemeral range");
+    HELD.lock().unwrap().push(socket);
     at
 }
 
-/// A listener on `ip` at a free port below the kernel's ephemeral range, for
-/// [`where_nothing_listens`]'s reason: once it is let go, no `:0` bind can be handed its port.
+/// A listener on `ip` at a free port below the kernel's ephemeral range: once it is let go, no
+/// `:0` bind can be handed its port.
 pub(crate) fn listener_below_the_ephemeral_range(ip: std::net::Ipv4Addr) -> std::net::TcpListener {
+    ports_below_the_ephemeral_range()
+        .find_map(|port| std::net::TcpListener::bind((ip, port)).ok())
+        .expect("a free port below the ephemeral range")
+}
+
+/// 64 ports drawn at random below the kernel's ephemeral range, for a test to try in turn.
+fn ports_below_the_ephemeral_range() -> impl Iterator<Item = u16> {
     use std::hash::BuildHasher;
     let low = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
         .ok()
@@ -201,13 +219,10 @@ pub(crate) fn listener_below_the_ephemeral_range(ip: std::net::Ipv4Addr) -> std:
         .unwrap_or(32_768u16);
     let (floor, ceiling) = (20_000u16, low.min(32_768));
     assert!(ceiling > floor, "the ephemeral range starts at {low}");
-    (0..64u8)
-        .map(|attempt| {
-            let r = std::hash::RandomState::new().hash_one(attempt);
-            floor + (r % u64::from(ceiling - floor)) as u16
-        })
-        .find_map(|port| std::net::TcpListener::bind((ip, port)).ok())
-        .expect("a free port below the ephemeral range")
+    (0..64u8).map(move |attempt| {
+        let r = std::hash::RandomState::new().hash_one(attempt);
+        floor + (r % u64::from(ceiling - floor)) as u16
+    })
 }
 
 /// ★ The code as typed: sixteen hexadecimal characters, either case, spaces anywhere, gives the

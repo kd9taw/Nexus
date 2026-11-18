@@ -696,6 +696,29 @@ fn free_port() -> u16 {
     }
 }
 
+/// A free loopback port BELOW the kernel's ephemeral range, for a port a later bind names: a rigctld
+/// TCP Port that Nexus's own rigctld will bind, or the address a wfview started later listens at. A
+/// [`free_port`] is let go, and in the seconds before that bind another test's rigctld (or mock)
+/// given the same number by a `:0` bind can be listening there: the open then shares it instead of
+/// starting its own, or the later bind fails as in use. Below the range only a bind that names
+/// the port can land (the LAN tests' `listener_below_the_ephemeral_range` makes the same choice).
+fn launch_port() -> u16 {
+    use std::hash::BuildHasher;
+    let low = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
+        .ok()
+        .and_then(|range| range.split_whitespace().next()?.parse().ok())
+        .unwrap_or(32_768u16);
+    let (floor, ceiling) = (20_000u16, low.min(32_768));
+    assert!(ceiling > floor, "the ephemeral range starts at {low}");
+    (0..64u8)
+        .map(|attempt| {
+            let r = std::hash::RandomState::new().hash_one(attempt);
+            floor + (r % u64::from(ceiling - floor)) as u16
+        })
+        .find(|&port| std::net::TcpListener::bind(("127.0.0.1", port)).is_ok())
+        .expect("a free port below the ephemeral range")
+}
+
 /// A loopback port with nothing listening on it that no other socket can take: bound, never
 /// listened on, so a connect to it is refused as at a free port. A port drawn by [`free_port`] is
 /// let go, and until a test binds it again any socket in the process (another test's `:0` bind,
@@ -995,7 +1018,7 @@ fn nexus_starts_its_own_rigctld_where_the_network_address_is_not_one_to_share() 
         return;
     }
     let wf = FakeWfview::start(true);
-    let net = |addr: &str| station(addr, free_port()).1;
+    let net = |addr: &str| station(addr, launch_port()).1;
     let mut dummy = net(&wf.addr);
     dummy.rig_model = 1;
     let rows = [
@@ -1440,7 +1463,7 @@ fn two_monitored_radios_never_cross_through_a_net_rigctl_address() {
         return;
     }
     let wf = FakeWfview::start(true);
-    let x = free_port();
+    let x = launch_port();
     let engine = Engine::new("W9XYZ", "EN37", 0);
     let engine = Arc::new(Mutex::new(engine));
     {
@@ -1506,7 +1529,7 @@ fn two_monitored_radios_never_cross_through_a_net_rigctl_address() {
 /// status), and once shared the address the rig dials too.
 #[test]
 fn the_manual_net_rigctl_station_started_before_its_rigctld_shares_it_once_it_is_up() {
-    let port = free_port();
+    let port = launch_port();
     let addr = format!("127.0.0.1:{port}");
     let (engine, settings) = station(&addr, port);
     let applied = Transport::from_settings(&settings);
