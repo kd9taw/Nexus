@@ -569,6 +569,7 @@ export const RU: PartialCatalog = {
   "shell.lane.audio.soundCard": "ОШИБКА ЗВУКОВОЙ КАРТЫ",
   "shell.lane.audio.noReceiveAudio": "НЕТ ЗВУКА ПРИЁМА",
   "shell.lane.audio.ptt": "PTT НЕ ПРИНЯТ",
+  "shell.lane.audio.ptt.brief": "PTT НЕ ПРИНЯТ: проверьте способ PTT и порт (Настройки ▸ Трансивер ▸ Трансивер и CAT)",
   "shell.lane.audio.pttUnconfirmed": "PTT НЕ ПОДТВЕРЖДЁН",
   "shell.lane.audio.flexAudio": "НЕТ ЗВУКА FLEX",
   "shell.lane.audio.flexAddress": "НЕТ IP ТРАНСИВЕРА FLEX",

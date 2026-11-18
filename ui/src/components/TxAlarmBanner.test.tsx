@@ -207,6 +207,35 @@ describe('every critical status-lane item is shown by Stop TX too', () => {
   })
 })
 
+// A REFUSED PTT SPENDS ITS ONE LINE ON THE ADVICE (a beta tester's report): "PTT NOT ACCEPTED — The rig
+// didn't accept PTT — check your …" said the same thing twice, and the ellipsis cut exactly the half that
+// tells the operator what to do. The line leads with the advice and where to find the setting; the
+// station's whole sentence stays on hover. Any other sentence on the PTT line keeps its own words.
+describe('a refused PTT on the one line', () => {
+  const REFUSED = "The rig didn't accept PTT — check your PTT method and CAT/port."
+  it('reads the advice, not the headline twice, and keeps the station’s whole sentence on hover', () => {
+    mount(snapWith(undefined))
+    act(() => setStatus('audio', audioErrorLane(REFUSED, 'ptt')))
+    const line = words()!
+    expect(line.textContent).toBe('⚠ PTT NOT ACCEPTED: check PTT method & port (Settings ▸ Radio ▸ Rig & CAT)')
+    expect(line.textContent).not.toContain("didn't accept PTT")
+    expect(line.title).toBe(`PTT NOT ACCEPTED — ${REFUSED}`)
+  })
+
+  it('in the +N hover too, the whole sentence', () => {
+    mount(snapWith([alarm(7, UNCONFIRMED, AT)]))
+    act(() => setStatus('audio', audioErrorLane(REFUSED, 'ptt')))
+    expect(document.querySelector<HTMLElement>('.ch-txalarm-queue')!.title).toContain(`PTT NOT ACCEPTED — ${REFUSED}`)
+  })
+
+  it('another sentence on the PTT line (a split not ready, a late key) keeps its own words', () => {
+    const SPLIT = "Not keyed: Split Operation could not put the radio's TX VFO back on the dial — check the CAT link, or set Split Operation to None."
+    mount(snapWith(undefined))
+    act(() => setStatus('audio', audioErrorLane(SPLIT, 'ptt')))
+    expect(words()!.textContent).toBe(`⚠ PTT NOT ACCEPTED — ${SPLIT}`)
+  })
+})
+
 // STOP TX STAYS PUT: the header stands above the strip, so the alarm may not be drawn there.
 describe('the cockpit header', () => {
   it('draws no alarm, whatever the station sends', () => {

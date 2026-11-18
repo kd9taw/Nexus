@@ -513,6 +513,7 @@ export const ZH: PartialCatalog = {
   "shell.lane.audio.soundCard": "声卡故障",
   "shell.lane.audio.noReceiveAudio": "无接收音频",
   "shell.lane.audio.ptt": "PTT 未被接受",
+  "shell.lane.audio.ptt.brief": "PTT 未被接受：请检查 PTT 方式和端口（设置 ▸ 电台 ▸ 电台与 CAT）",
   "shell.lane.audio.flexAudio": "无 FLEX 音频",
   "shell.lane.audio.flexAddress": "无 FLEX 电台 IP",
   "shell.lane.audio.monitor": "耳机监听关闭",

@@ -37,6 +37,13 @@ const KINDS: Record<AudioErrorKind, { tier: StatusTier; headline: () => string }
   decodeCrash: { tier: 'warning', headline: () => t('shell.lane.audio.decodeCrash') },
 }
 
+/** The station's sentence for a key the rig refused (crates/tempo-audio/src/service.rs, `report_ptt`).
+ *  Under the PTT NOT ACCEPTED headline it repeats the headline before its advice, so on the TX strip's
+ *  one line (TxAlarmBanner) the ellipsis cut exactly the advice: that line leads with the advice and
+ *  where the setting is instead, the sentence whole on hover. Matched whole, so any other sentence the
+ *  station puts on the PTT line (a split not ready, a late key) keeps its own words. */
+const PTT_REFUSED = "The rig didn't accept PTT — check your PTT method and CAT/port."
+
 /** The status-lane item for the station's audio-error line, or null while there is none. A
  *  station older than the kinds names none, and a newer one may name a kind this page does not
  *  know: either gets the plain headline, critical, because nothing says the radio works through
@@ -48,5 +55,6 @@ export function audioErrorLane(
   if (!message) return null
   const known = kind != null && Object.prototype.hasOwnProperty.call(KINDS, kind) ? KINDS[kind] : null
   if (!known) return { tier: 'critical', message: t('shell.lane.audio.other'), detail: message }
-  return { tier: known.tier, message: known.headline(), detail: message }
+  const item = { tier: known.tier, message: known.headline(), detail: message }
+  return kind === 'ptt' && message === PTT_REFUSED ? { ...item, brief: t('shell.lane.audio.ptt.brief') } : item
 }
