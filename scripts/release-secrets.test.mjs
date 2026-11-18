@@ -831,7 +831,7 @@ const now = () => Math.floor(Date.now() / 1000);
 const tauriComment = (name, ver, ts = now()) =>
   `timestamp:${ts}\tfile:${name.endsWith('.app.tar.gz') ? 'Nexus.app.tar.gz' : name}\tversion:${ver}`;
 
-function runPublishGather({ text = TEXT, legs = ['aarch64', 'x64'], key = true, tamper = null, dropSig = null, comments = {}, runStarted = now() - 600 } = {}) {
+function runPublishGather({ text = TEXT, legs = ['aarch64', 'x64'], key = true, tamper = null, dropSig = null, comments = {}, runStarted = now() - 600, swapMacLegs = false, macShas = null } = {}) {
   const wf = readWorkflow(text);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'publish-gather-'));
   try {
@@ -862,8 +862,29 @@ function runPublishGather({ text = TEXT, legs = ['aarch64', 'x64'], key = true, 
       if (name !== dropSig) fs.writeFileSync(path.join(sigDir, `${name}.sig`), k.sign(fs.readFileSync(file), comments[name] ?? tauriComment(name, v)));
       if (name === tamper) fs.appendFileSync(file, 'replaced after signing');
     }
+    // What the macos legs report as job outputs: the sha256 of the files each one uploaded.
+    const sha = (f) => crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex');
+    const outputs = {};
+    for (const sfx of legs) {
+      const d = at('artifacts', `nexus-macos-${sfx}`);
+      outputs[`sha256-${sfx}-dmg`] = sha(path.join(d, `Nexus_${v}_${sfx}.dmg`));
+      outputs[`sha256-${sfx}-tar`] = key ? sha(path.join(d, `Nexus_${v}_${sfx}.app.tar.gz`)) : '';
+    }
+    // Another job re-uploads each macOS artifact with the other leg's genuine, signed files under
+    // this leg's names: right names, right version, signatures that verify.
+    if (swapMacLegs) {
+      const [a, b] = legs.map((sfx) => at('artifacts', `nexus-macos-${sfx}`));
+      for (const ext of key ? ['.dmg', '.app.tar.gz', '.app.tar.gz.sig'] : ['.dmg']) {
+        const fa = path.join(a, `Nexus_${v}_${legs[0]}${ext}`);
+        const fb = path.join(b, `Nexus_${v}_${legs[1]}${ext}`);
+        const t = fs.readFileSync(fa);
+        fs.writeFileSync(fa, fs.readFileSync(fb));
+        fs.writeFileSync(fb, t);
+      }
+    }
     const env = {
       ...process.env,
+      MACOS_SHA256: JSON.stringify(macShas ?? outputs),
       GITHUB_REF_NAME: `v${v}`,
       SIGNING_KEY_PRESENT: String(key),
       RUN_STARTED: String(runStarted),
@@ -939,6 +960,42 @@ function runStartWiring(wf) {
   if (verify?.env.get('RUN_STARTED') !== '${{ needs.ci-evidence.outputs.started }}') v.push("publish's signature step is not handed the run start as RUN_STARTED");
   return v;
 }
+
+// The macOS legs' sha256 outputs: one dmg and one tarball key per matrix leg, each from the step
+// that sums what the leg uploads, and publish's gather step is handed all of them.
+function macShaWiring(wf) {
+  const v = [];
+  const outputs = wf.entries.filter((e) => e.path.length === 4 && e.path[0] === 'jobs' && e.path[1] === 'macos' && e.path[2] === 'outputs');
+  const want = matrixLegs(wf, 'macos').flatMap(({ suffix }) => [`sha256-${suffix}-dmg`, `sha256-${suffix}-tar`]).sort();
+  const have = outputs.map((e) => e.path[3]).sort();
+  if (have.join() !== want.join()) v.push(`macos outputs ${have.join(',') || '(none)'}, not ${want.join(',')}`);
+  for (const e of outputs) {
+    if (e.value !== `\${{ steps.sum.outputs.${e.path[3]} }}`) v.push(`macos output ${e.path[3]} is ${e.value}, not the sum step's`);
+  }
+  const steps = wf.jobs.get('macos').steps;
+  const sum = steps.findIndex((s) => stepId(s) === 'sum');
+  const upload = steps.findIndex((s) => /^actions\/upload-artifact@/.test(s?.uses ?? ''));
+  if (sum < 0 || sum !== upload - 1) v.push('the sum step is not the step right before the macos upload');
+  const gather = wf.jobs.get('publish').steps.find((s) => s?.name === GATHER);
+  if (gather?.env.get('MACOS_SHA256') !== '${{ toJSON(needs.macos.outputs) }}') v.push("publish's gather step is not handed the macos outputs as MACOS_SHA256");
+  return v;
+}
+
+test('the macOS sha256 outputs cover every leg, and publish is handed them', () => {
+  assert.deepEqual(macShaWiring(WF), []);
+  const thirdLeg = plant(TEXT, '            suffix: x64 ', '            suffix: x64b ');
+  assert.match(macShaWiring(readWorkflow(thirdLeg)).join('\n'), /not sha256-aarch64-dmg,sha256-aarch64-tar,sha256-x64b-dmg/);
+});
+
+test('publish refuses the macOS legs swapped for each other, and a leg its build did not report', () => {
+  for (const key of [true, false]) {
+    const r = runPublishGather({ key, swapMacLegs: true });
+    assert.notEqual(r.status, 0, `publish passed the two macOS legs swapped (key ${key})`);
+    assert.match(r.stderr, /is not the file the macos job built/);
+  }
+  const unreported = runPublishGather({ macShas: {} });
+  assert.notEqual(unreported.status, 0, 'publish passed a macOS leg with no sha256 from its build');
+});
 
 test('publish is handed the time this run started, from ci-evidence', () => {
   assert.deepEqual(runStartWiring(WF), []);

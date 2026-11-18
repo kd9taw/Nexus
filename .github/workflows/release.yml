@@ -836,6 +836,18 @@ jobs:
     # release run reaches this. Prove a change here with a workflow_dispatch of this file.
     env:
       NODE_OPTIONS: --max-old-space-size=4096
+    # WHICH BYTES EACH LEG BUILT. Both legs' updater tarballs are signed as Nexus.app.tar.gz for the
+    # same version in the same run, so their signatures cannot tell them apart: an artifact
+    # re-uploaded with the other leg's genuine files under this leg's names would pass every check
+    # in publish, and send each architecture's installs the other's app. Each leg reports the
+    # sha256 of its DMG and tarball here, under keys of its own (a matrix job's outputs combine when
+    # the keys differ), and publish checks the bytes it ships against them. Another job cannot
+    # rewrite a job output. release-secrets.test.mjs holds these keys to the matrix's legs.
+    outputs:
+      sha256-aarch64-dmg: ${{ steps.sum.outputs.sha256-aarch64-dmg }}
+      sha256-aarch64-tar: ${{ steps.sum.outputs.sha256-aarch64-tar }}
+      sha256-x64-dmg: ${{ steps.sum.outputs.sha256-x64-dmg }}
+      sha256-x64-tar: ${{ steps.sum.outputs.sha256-x64-tar }}
     strategy:
       # One leg failing must not cancel the other: a dry run should say which architecture broke.
       fail-fast: false
@@ -1294,6 +1306,20 @@ jobs:
           fi
           ( cd out && shasum -a 256 ./* )
 
+      # This leg's sha256 outputs (see the job's `outputs`), from exactly the files uploaded next.
+      # No tarball (a fork without the key) leaves the tarball key empty.
+      - name: Report the sha256 of what this leg uploads
+        id: sum
+        run: |
+          set -euo pipefail
+          ver=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
+          sfx=${{ matrix.suffix }}
+          f="out/Nexus_${ver}_${sfx}"
+          echo "sha256-${sfx}-dmg=$(shasum -a 256 "$f.dmg" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          tar=''
+          [ ! -f "$f.app.tar.gz" ] || tar=$(shasum -a 256 "$f.app.tar.gz" | cut -d' ' -f1)
+          echo "sha256-${sfx}-tar=$tar" >> "$GITHUB_OUTPUT"
+
       - uses: actions/upload-artifact@v4
         with:
           name: nexus-macos-${{ matrix.suffix }}
@@ -1735,6 +1761,8 @@ jobs:
         env:
           # Whether the key exists, not the key: with it, every updater bundle and signature ships.
           SIGNING_KEY_PRESENT: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          # Each macOS leg's sha256 of its DMG and tarball (see the macos job's `outputs`).
+          MACOS_SHA256: ${{ toJSON(needs.macos.outputs) }}
         run: |
           set -euo pipefail
           # The version every file name carries; the next step proves it against tauri.conf.json.
@@ -1752,6 +1780,18 @@ jobs:
               check "nexus-macos-$sfx" "$f.dmg" "$f.app.tar.gz" "$f.app.tar.gz.sig"
             else
               check "nexus-macos-$sfx" "$f.dmg"
+            fi
+            # And they are the bytes this leg built, not the other leg's (see the macos job).
+            built() { jq -r --arg k "sha256-$sfx-$1" '.[$k] // ""' <<<"$MACOS_SHA256"; }
+            same() {
+              [ -n "$2" ] && [ "$(sha256sum "$1" | cut -d' ' -f1)" = "$2" ] \
+                || { echo "$1 is not the file the macos job built for $sfx (sha256 ${2:-not reported})"; exit 1; }
+            }
+            same "$d/$f.dmg" "$(built dmg)"
+            if [ "$SIGNING_KEY_PRESENT" = true ]; then
+              same "$d/$f.app.tar.gz" "$(built tar)"
+            else
+              [ -z "$(built tar)" ] || { echo "the macos job built a $sfx tarball with no signing key"; exit 1; }
             fi
           done
           if [ "$SIGNING_KEY_PRESENT" = true ]; then
