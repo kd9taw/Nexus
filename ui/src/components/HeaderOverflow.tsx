@@ -41,13 +41,20 @@ export interface Span {
 /**
  * Where the group opens, from the button's box, the group's width and the box it must stay inside (all
  * viewport px): `start` (its left edge on the button's, opening rightward) when that fits, else `end`
- * (its right edge on the button's, as before) when that fits, else `start` slid back by `offset` px so
- * its far edge meets the bound's, never past the bound's start.
+ * (its right edge on the button's, as before) when that fits, else `start` slid back so its far edge
+ * meets the bound's, never past the bound's start. `offset` is that slide in the GROUP'S OWN px (what its
+ * CSS `left` takes): the screen distance divided by `scale`, the screen px one of its px draws at under
+ * the app's zoom.
  */
-export function placeOverflow(anchor: Span, panelW: number, bound: Span): { side: 'start' | 'end'; offset: number } {
+export function placeOverflow(
+  anchor: Span,
+  panelW: number,
+  bound: Span,
+  scale = 1,
+): { side: 'start' | 'end'; offset: number } {
   if (anchor.left + panelW <= bound.right) return { side: 'start', offset: 0 }
   if (anchor.right - panelW >= bound.left) return { side: 'end', offset: 0 }
-  return { side: 'start', offset: Math.max(bound.left, bound.right - panelW) - anchor.left }
+  return { side: 'start', offset: (Math.max(bound.left, bound.right - panelW) - anchor.left) / scale }
 }
 
 export function HeaderOverflow({
@@ -84,13 +91,11 @@ export function HeaderOverflow({
       if (p.width === 0) return
       const main = box.closest('main')?.getBoundingClientRect()
       const bound = { left: Math.max(0, main?.left ?? 0), right: Math.min(window.innerWidth, main?.right ?? window.innerWidth) }
-      const next = placeOverflow(a, p.width, bound)
-      // The slide is written in the group's own units: its laid-out width against its width on screen.
-      const cs = getComputedStyle(panel)
-      const px = (v: string) => parseFloat(v) || 0
-      const laidOut = px(cs.width) + px(cs.paddingLeft) + px(cs.paddingRight) + px(cs.borderLeftWidth) + px(cs.borderRightWidth)
-      const offset = next.offset && laidOut > 0 ? (next.offset * laidOut) / p.width : 0
-      setPlace((old) => (old && old.side === next.side && Math.abs(old.offset - offset) < 0.5 ? old : { side: next.side, offset }))
+      // The group's scale on screen: its width there against its laid-out border-box width (`offsetWidth`,
+      // its own px, the units its CSS `left` takes; the app is border-box, so padding and border are in it).
+      const scale = panel.offsetWidth > 0 ? p.width / panel.offsetWidth : 1
+      const next = placeOverflow(a, p.width, bound, scale)
+      setPlace((old) => (old && old.side === next.side && Math.abs(old.offset - next.offset) < 0.5 ? old : next))
     }
     measure()
     window.addEventListener('resize', measure)
