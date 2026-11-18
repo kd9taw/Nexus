@@ -1911,6 +1911,9 @@ impl ServedRig {
 ///
 /// `output()` drains the pipes while it waits; the bound lives on the receive, so a wedged child
 /// still cannot hold up a rig open (the thread is left to finish on its own).
+///
+/// Unix only, as its one caller, [`daemon_serving_port`], is.
+#[cfg(unix)]
 fn capture_bounded(cmd: &mut Command, timeout: std::time::Duration) -> Option<String> {
     let mut owned = tempo_core::process::command(cmd.get_program());
     owned.args(cmd.get_args());
