@@ -804,7 +804,7 @@ test('the publish jobs download every leg and every Pi base the builds upload', 
 const GATHER = 'Check each artifact holds exactly the expected files, and gather them';
 const VERIFY_SIGS = 'Verify every updater signature against the key clients trust';
 const FIXTURE_SIG = path.join(ROOT, 'scripts', 'fixtures', 'updater-sig');
-const FIXTURE_FILE = 'Nexus_9.9.9_x64-setup.exe';
+const FIXTURE_FILE = 'payload.txt'; // not .exe: .gitignore drops those, and the signature covers the bytes, not the name
 function runPublishGather({ text = TEXT, legs = ['aarch64', 'x64'], key = true, tamper = null, dropSig = null } = {}) {
   const wf = readWorkflow(text);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'publish-gather-'));
