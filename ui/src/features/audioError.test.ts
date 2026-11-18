@@ -71,6 +71,13 @@ describe('the status lane for the station audio-error line', () => {
   // station puts on the PTT line, and a refusal under any other kind, gets no shorter line.
   it('a refused PTT carries the advice first for the one-line cell, and only that sentence does', () => {
     expect(audioErrorLane(PTT, 'ptt')?.brief).toBe(PTT_BRIEF)
+    // A station that knows why appends the radio's answer to the same sentence: the same shorter line, and
+    // the answer kept whole in the detail (the hover).
+    for (const answer of ['Hamlib answered: Feature not available (RPRT -11).', 'The PTT port said: Access is denied.']) {
+      const lane = audioErrorLane(`${PTT} ${answer}`, 'ptt')
+      expect(lane?.brief, answer).toBe(PTT_BRIEF)
+      expect(lane?.detail, answer).toBe(`${PTT} ${answer}`)
+    }
     expect(audioErrorLane('Not keyed: Split Operation could not put the radio’s TX VFO back on the dial', 'ptt')?.brief).toBeUndefined()
     expect(audioErrorLane(PTT, null)?.brief).toBeUndefined()
     expect(audioErrorLane(PTT_UNCONFIRMED, 'pttUnconfirmed')?.brief).toBeUndefined()

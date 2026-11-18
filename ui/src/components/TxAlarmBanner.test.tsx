@@ -222,6 +222,15 @@ describe('a refused PTT on the one line', () => {
     expect(line.title).toBe(`PTT NOT ACCEPTED — ${REFUSED}`)
   })
 
+  it('with the radio’s answer appended: the same advice on the line, the answer in the hover', () => {
+    const WITH_ANSWER = `${REFUSED} Hamlib answered: Feature not available (RPRT -11).`
+    mount(snapWith(undefined))
+    act(() => setStatus('audio', audioErrorLane(WITH_ANSWER, 'ptt')))
+    const line = words()!
+    expect(line.textContent).toBe('⚠ PTT NOT ACCEPTED: check PTT method & port (Settings ▸ Radio ▸ Rig & CAT)')
+    expect(line.title).toBe(`PTT NOT ACCEPTED — ${WITH_ANSWER}`)
+  })
+
   it('in the +N hover too, the whole sentence', () => {
     mount(snapWith([alarm(7, UNCONFIRMED, AT)]))
     act(() => setStatus('audio', audioErrorLane(REFUSED, 'ptt')))
