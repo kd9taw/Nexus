@@ -22,7 +22,10 @@
 //      holds it: the updater key signs the Windows and Linux installers in a job of its own, on a
 //      runner that builds nothing. macOS is the one exception (see SIGNS_IN_BUNDLER).
 //   6. Every artifact a job downloads is uploaded by a job it needs, so splitting a job cannot
-//      leave a later step reading a file nothing hands it.
+//      leave a later step reading a file nothing hands it. And it is downloaded by its exact
+//      name, never by a pattern or merged with others: any job in the run holds a token that can
+//      upload an artifact, and the builds run third-party code, so a pattern would take in
+//      whatever such code uploaded under a matching name and smoke or publish it.
 //   7. The updater signing step's script, run against a stand-in signer, signs both installers
 //      and refuses every signature a client would reject (see "The signing step's own checks").
 //
@@ -392,18 +395,24 @@ function violations(wf) {
     for (const n of wf.jobs.get(id)?.needs ?? []) if (!seen.has(n)) upstream(n, seen.add(n));
     return seen;
   };
-  const glob = (p) => new RegExp(`^${p.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`);
+  // An upload named with an expression (`nexus-pi-${{ matrix.base }}`) is one artifact per value,
+  // and a download named with one (`nexus-macos-${{ matrix.suffix }}`) is one artifact per leg.
+  const EXPR_IN_NAME = /\$\{\{[^}]*\}\}/g;
+  const named = (p) => new RegExp(`^${p.split(EXPR_IN_NAME).map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[^/]+')}$`);
   for (const j of wf.jobs.values()) {
     const needed = upstream(j.id);
     for (const s of j.steps) {
       if (!s || !/^actions\/download-artifact@/.test(s.uses ?? '')) continue;
-      const want = s.with.get('name') ?? s.with.get('pattern');
+      if (s.with.has('pattern') || s.with.has('merge-multiple')) {
+        v.push(`job ${j.id}, step "${s.label}": downloads by pattern; name the one artifact it reads, since any job can upload one a pattern matches`);
+        continue;
+      }
+      const want = s.with.get('name');
       if (!want) {
         v.push(`job ${j.id}, step "${s.label}": downloads every artifact of the run; name the ones it reads`);
         continue;
       }
-      // An upload named with an expression (`nexus-pi-${{ matrix.base }}`) is one artifact per value.
-      const from = uploads.filter((u) => glob(want).test(u.name.replace(/\$\{\{[^}]*\}\}/g, 'X')));
+      const from = uploads.filter((u) => named(u.name).test(want.replace(EXPR_IN_NAME, 'X')));
       if (!from.length) v.push(`job ${j.id}, step "${s.label}": downloads "${want}", which no job uploads`);
       else if (!from.some((u) => needed.has(u.job))) {
         v.push(`job ${j.id}, step "${s.label}": downloads "${want}" from job ${[...new Set(from.map((u) => u.job))].join(', ')}, which job ${j.id} does not need`);
@@ -729,8 +738,62 @@ test('a third-party step added to the signing job is reported', () => {
 test('an artifact downloaded from a job not needed, or from no job at all, is reported', () => {
   const unneeded = plant(TEXT, 'smoke-windows, sign-updaters, macos', 'smoke-windows, macos');
   reported(unneeded, 'downloads "nexus-updater-sigs" from job sign-updaters, which job publish does not need');
-  const typo = plant(TEXT, '          pattern: nexus-updater-sigs\n', '          pattern: nexus-updater-sig\n');
+  const typo = plant(TEXT, '          path: artifacts/nexus-updater-sigs\n          name: nexus-updater-sigs\n', '          path: artifacts/nexus-updater-sigs\n          name: nexus-updater-sig\n');
   reported(typo, 'downloads "nexus-updater-sig", which no job uploads');
+});
+
+test('an artifact downloaded by pattern, or merged with others, is reported', () => {
+  const anchor = '          path: artifacts/nexus-macos-x64\n          name: nexus-macos-x64\n';
+  const byPattern = plant(TEXT, anchor, '          path: artifacts/nexus-macos-x64\n          pattern: nexus-macos-*\n');
+  reported(byPattern, 'job publish, step "actions/download-artifact@v4": downloads by pattern');
+  const merged = plant(TEXT, anchor, `${anchor}          merge-multiple: true\n`);
+  reported(merged, 'job publish, step "actions/download-artifact@v4": downloads by pattern');
+});
+
+// What each publish job downloads, by name. With a pattern gone, a leg or a Pi base added to a
+// build matrix and not downloaded here would build, pass every gate, and never be published.
+const downloadedBy = (wf, jobId) =>
+  wf.jobs.get(jobId).steps.filter((s) => s && /^actions\/download-artifact@/.test(s.uses ?? '')).map((s) => s.with.get('name'));
+function matrixUndownloaded(wf) {
+  const v = [];
+  const pi = wf.entries.find((e) => e.path.join('.') === 'jobs.pi.strategy.matrix.base')?.value ?? '';
+  const bases = pi.replace(/^\[|\]$/g, '').split(',').map((x) => x.trim()).filter(Boolean);
+  if (!bases.length) v.push('no Pi bases read from the pi job matrix');
+  for (const b of bases) if (!downloadedBy(wf, 'publish-pi').includes(`nexus-pi-${b}`)) v.push(`publish-pi does not download nexus-pi-${b}`);
+  for (const { suffix } of matrixLegs(wf, 'macos')) {
+    if (!downloadedBy(wf, 'publish').includes(`nexus-macos-${suffix}`)) v.push(`publish does not download nexus-macos-${suffix}`);
+  }
+  return v;
+}
+
+test('the publish jobs download every leg and every Pi base the builds upload', () => {
+  assert.deepEqual(matrixUndownloaded(WF), []);
+  const thirdBase = plant(TEXT, 'base: [bookworm, trixie]', 'base: [bookworm, trixie, forky]');
+  assert.deepEqual(matrixUndownloaded(readWorkflow(thirdBase)), ['publish-pi does not download nexus-pi-forky']);
+});
+
+// ---- The artifact set check (scripts/check-artifact-set.sh) -------------------------------------
+
+function checkSet(files, expected) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'artifact-set-'));
+  try {
+    for (const f of files) {
+      if (f.endsWith('/')) fs.mkdirSync(path.join(dir, f));
+      else fs.writeFileSync(path.join(dir, f), 'x');
+    }
+    return spawnSync('bash', [path.join(ROOT, 'scripts', 'check-artifact-set.sh'), dir, ...expected], { encoding: 'utf8' }).status;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('the artifact set check passes exactly the expected files and refuses anything else', () => {
+  const want = ['Nexus_1.25.0_x64-setup.exe', 'Nexus_1.25.0_x64.sym.gz'];
+  assert.equal(checkSet(want, want), 0);
+  assert.equal(checkSet([...want, 'Nexus_1.25.0_x64-setup.exe.sig'], want), 1, 'an extra file');
+  assert.equal(checkSet([want[0]], want), 1, 'a missing file');
+  assert.equal(checkSet([...want, 'extra/'], want), 1, 'a subdirectory');
+  assert.equal(checkSet(['other.exe', want[1]], want), 1, 'a file swapped for another');
 });
 
 test('the signing certificate imported before the builds is reported', () => {
