@@ -46535,6 +46535,56 @@ mod tests {
         );
     }
 
+    /// ⛔ …AND THE GATE FOLLOWS THE RADIO TO SIMPLEX. A General split at 14.305, a keyed QSY to
+    /// 7.150 (below the General 40 m phone segment) and a refused request there: once the loop's
+    /// `S 0` is confirmed the radio transmits on 7.150, and that is what Nexus's key is judged on.
+    #[test]
+    fn after_the_qsys_s0_lands_the_gate_judges_the_new_dial() {
+        let (addr, seen) = recording_rigctld_stub();
+        let engine = engine_on(3073);
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.license_class = tempo_app::settings::LicenseClass::General;
+            e.apply_settings(s);
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.300, "20m", "USB");
+        }
+        split_ticks(
+            &engine,
+            Rig::rigctld(&addr),
+            vec![
+                |_, _| {},
+                |e, _| e.request_operator_split(Some(14.305)).unwrap(),
+                |e, s| {
+                    s.rig_keyed = true;
+                    e.set_frequency(7.150, "40m", "LSB");
+                    e.request_split(Some(7.301));
+                },
+                |_, s| s.rig_keyed = true,
+                |_, s| s.rig_keyed = false,
+            ],
+        );
+        let wire: Vec<String> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|l| l.trim().to_string())
+            .filter(|l| l.starts_with("S ") || l.starts_with("I "))
+            .collect();
+        assert_eq!(wire, vec!["S 1 VFOB", "I 14305000", "S 0 VFOA"]);
+        let e = engine.lock().unwrap();
+        assert_eq!(e.split_tx_mhz(), None, "Nexus is simplex, as the radio is");
+        assert!(
+            (e.snapshot().radio.tx_emission_mhz.unwrap_or(0.0) - 7.150).abs() < 1e-9,
+            "the gate judges the dial the radio transmits on"
+        );
+        assert!(
+            !e.tx_allowed(),
+            "7.150 phone is outside a General's privileges"
+        );
+    }
+
     /// CONTROL: an in-privilege press under the same held PTT is written at once, as before.
     #[test]
     fn a_held_ptt_still_gets_an_in_band_split_at_once() {

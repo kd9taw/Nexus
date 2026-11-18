@@ -371,6 +371,74 @@ fn a_refused_request_after_a_qsy_queues_the_qsys_return_to_simplex() {
     );
 }
 
+/// ⛔ …AND ONCE THE RADIO CONFIRMS THAT `S 0`, THE GATE JUDGES THE DIAL. The old VFO B was put
+/// back as the acknowledgement only while the radio still had it; kept past the confirmed
+/// simplex, a key on a 40 m dial outside a General's phone privileges was judged as the old,
+/// in-licence 20 m split, and passed. CONTROL: the same QSY with no refused request.
+#[test]
+fn after_the_qsys_simplex_is_confirmed_the_gate_judges_the_new_dial() {
+    fn general_split_at_14_305() -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN52", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.300, "20m", "USB");
+        let _ = e.take_split_request();
+        e.request_split(Some(14.305));
+        assert_eq!(e.take_split_request(), Some(Some(14.305)));
+        e.rig_split_applied(14_305_000);
+        assert!(e.tx_allowed(), "precondition: 14.305 keys for a General");
+        e
+    }
+    let mut e = general_split_at_14_305();
+    // A keyed QSY to 40 m below the General phone segment, then a split request there.
+    e.set_frequency(7.150, "40m", "LSB");
+    e.request_split(Some(7.301));
+    assert_eq!(e.take_split_request(), Some(Some(7.301)));
+    e.split_refused_while_keyed(7.301);
+    assert_eq!(
+        e.tx_emission_mhz(),
+        14.305,
+        "while the S 0 is pending the radio still transmits on its VFO B"
+    );
+    assert_eq!(e.take_split_request(), Some(None), "S 0 queued");
+    e.rig_split_cleared();
+    assert_eq!(
+        e.tx_emission_mhz(),
+        7.150,
+        "the radio is simplex on the dial"
+    );
+    assert!(
+        !e.tx_allowed(),
+        "7.150 phone is outside a General's privileges"
+    );
+
+    let mut c = general_split_at_14_305();
+    c.set_frequency(7.150, "40m", "LSB");
+    assert_eq!(c.take_split_request(), Some(None));
+    c.rig_split_cleared();
+    assert_eq!(c.tx_emission_mhz(), 7.150);
+    assert!(
+        !c.tx_allowed(),
+        "control: the plain QSY is refused the same"
+    );
+}
+
+/// The same for a satellite uplink: a confirmed simplex leaves no uplink acknowledged, so the
+/// gate judges the dial in the dial's own word.
+#[test]
+fn a_confirmed_simplex_retires_a_satellite_uplinks_acknowledgement() {
+    let mut e = ic9700_holding(super::tx_gate_table::RS44);
+    e.sat_tune_nominal(tempo_core::doppler::DownlinkClass::Usb, 1_000_000);
+    let up = e.split_tx_mhz().expect("precondition: the uplink queued");
+    let _ = e.take_split_request();
+    e.rig_split_applied_on((up * 1e6).round() as u64, ReceiverId::Sub);
+    assert_eq!(e.tx_source(), ReceiverId::Sub, "precondition");
+    e.rig_split_cleared();
+    assert_eq!(e.tx_source(), ReceiverId::Main);
+    assert!((e.tx_emission_mhz() - e.settings().dial_mhz).abs() < 1e-9);
+    assert_eq!(e.sat_uplink_word(), None);
+}
+
 /// …and a newer request made since the loop took the refused one is left queued for its own
 /// judgement at the write: the refusal answers only for its own request.
 #[test]
@@ -571,11 +639,11 @@ fn a_keyed_refusal_mid_pass_keeps_the_standing_uplink() {
     assert!(e.tx_allowed(), "and it is what the gate judges");
 }
 
-/// DISCLOSED, NOT CHANGED: a pick whose uplink is refused leaves the radio where its downlink
-/// leg put it, on the downlink with no split, and nothing out of the licence queued. The rail
-/// says why. Nexus's own keys are judged on that dial, which a General may key, as after a
-/// split the rig rejected: whether a held pass with no uplink should refuse the key is the
-/// operator's ruling (see `a_transponder_pick_has_never_been_what_stopped_the_mic`).
+/// THE OPERATOR'S DECISION (2026-11-18): a pick whose uplink is refused leaves the radio where
+/// its downlink leg put it, on the downlink with no split, and nothing out of the licence
+/// queued. The rail says why. Nexus's own keys are judged on that dial, which a General may
+/// key, as after a split the rig rejected; a held pass with no uplink does not refuse the key
+/// (see `a_transponder_pick_has_never_been_what_stopped_the_mic`).
 #[test]
 fn a_refused_pick_leaves_the_radio_simplex_on_the_downlink() {
     let mut e = ic9700_holding(super::tx_gate_table::EDGE_BIRD);

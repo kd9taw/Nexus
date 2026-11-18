@@ -12643,7 +12643,8 @@ impl Engine {
     /// old VFO B after the dial moved, on a cross-band spot the old band; keeping it wrote a
     /// split the licence had just refused into the radio at the unkey, where a front-panel PTT
     /// transmits on it. Simplex is what the QSY asked for, and the acknowledgement names the
-    /// old VFO B until the radio confirms it. A Doppler steer is not a QSY
+    /// old VFO B until the radio confirms it ([`Self::rig_split_cleared`] retires it then). A
+    /// Doppler steer is not a QSY
     /// ([`StandingSplit::qsy_gen`]): mid-pass the uplink the radio has stands.
     pub fn split_refused_while_keyed(&mut self, tx_mhz: f64) {
         let standing = self.split_standing;
@@ -12671,10 +12672,19 @@ impl Engine {
         }
     }
 
-    /// The radio loop put the radio back to simplex: no split stands any more.
+    /// The radio loop put the radio back to simplex: no split stands any more, and the radio
+    /// transmits on its dial.
+    ///
+    /// ⛔ THE ACKNOWLEDGEMENT GOES WITH IT, so the key-time gate judges the dial. A keyed refusal
+    /// after a QSY puts the old VFO B back as the acknowledgement while the radio still has it
+    /// and queues the QSY's `S 0` ([`Self::split_refused_while_keyed`]); kept past the confirmed
+    /// simplex, a key on a new dial outside the licence was judged as the old split, and passed.
+    /// Any split asked since is unacknowledged either way, so nothing confirmed is lost.
     pub fn rig_split_cleared(&mut self) {
         self.split_standing = None;
         self.split_unknown = false;
+        self.tx_split_confirmed_hz = None;
+        self.sat_uplink_acked_hz = None;
     }
 
     /// The radio loop's `S 0` was not confirmed (no answer, or refused): the split is UNKNOWN,
