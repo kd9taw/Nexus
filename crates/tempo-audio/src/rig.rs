@@ -936,15 +936,25 @@ pub fn key_refusal_code(e: &std::io::Error) -> Option<i32> {
         .map(|refused| refused.code)
 }
 
-/// Whether a Hamlib refusal code says the rig rejected the command WITHOUT carrying it out, so a
-/// key answered with it keyed nothing (`rig.h`): an invalid, unconfigured, unimplemented,
-/// rejected, unavailable or out-of-range command, a VFO not targetable, a security or power
-/// refusal, a limit or access refusal. ⛔ Not the codes that can come after the command reached the
-/// radio: -3 ENOMEM, -7 EINTERNAL, -8 EPROTO (a reply that did not parse) and -10 ETRUNC
-/// ("Command performed"), nor the link faults ([`rprt_is_link_fault`]), nor any code Hamlib does
-/// not name. Those leave it unknown whether the radio keyed.
+/// Whether a Hamlib refusal code says, by Hamlib's own definition, that the command was rejected
+/// WITHOUT being carried out, so a key answered with it keyed nothing. From Hamlib 4.6.5 `rig.h`
+/// (`enum rig_errcode_e`): Hamlib's own "soft" errors (`RIG_IS_SOFT_ERRCODE`, "caused by invalid
+/// parameters and software/hardware features") except ETRUNC, and the two that say the port or
+/// its configuration could not be used at all:
+///
+/// - -1 EINVAL "invalid parameter", -4 ENIMPL "function not implemented", -9 ERJCTED "Command
+///   rejected by the rig", -11 ENAVAIL "Function not available", -12 ENTARGET "VFO not
+///   targetable", -16 EVFO "Invalid VFO", -17 EDOM "Argument out of domain of func",
+///   -18 EDEPRECATED "Function deprecated", -19 ESECURITY "Security error", -20 EPOWER "Rig not
+///   powered on";
+/// - -2 ECONF "invalid configuration (serial,..)", -22 EACCESS "Access denied -- e.g. port
+///   already in use".
+///
+/// ⛔ Every other code leaves it unknown whether the radio keyed: -3 ENOMEM, -7 EINTERNAL,
+/// -8 EPROTO "Protocol error", -10 ETRUNC "Command performed, but arg truncated", -15 EARG,
+/// -21 ELIMIT, the link faults ([`rprt_is_link_fault`]) and any code Hamlib does not name.
 fn rprt_keyed_nothing(code: i32) -> bool {
-    matches!(code, -1 | -2 | -4 | -9 | -11 | -12 | -22..=-15)
+    matches!(code, -1 | -2 | -4 | -9 | -11 | -12 | -20..=-16 | -22)
 }
 
 /// Hamlib's own words for one of its error codes (`rigerror`, Hamlib 4.x `rig.c`), for a refusal
@@ -5357,7 +5367,7 @@ mod tests {
     #[test]
     fn only_a_refusal_answered_is_a_key_known_to_have_keyed_nothing() {
         let rig = Rig::rigctld("127.0.0.1:1");
-        for code in [-1, -9, -11] {
+        for code in [-1, -2, -4, -9, -11, -12, -16, -17, -18, -19, -20, -22] {
             let e = super::ptt_reply(&format!("RPRT {code}\n")).expect_err("premise: not keyed");
             assert_eq!(super::key_refusal_code(&e), Some(code));
             assert!(rig.key_definitely_refused(&e), "RPRT {code}");
@@ -5377,7 +5387,7 @@ mod tests {
         }
         // ⛔ Refusals that can come after the command reached the radio: their words are kept for
         // the operator, but the key is not known to have keyed nothing.
-        for code in [-3, -7, -8, -10] {
+        for code in [-3, -7, -8, -10, -15, -21] {
             let e = super::ptt_reply(&format!("RPRT {code}\n")).expect_err("premise: not keyed");
             assert_eq!(super::key_refusal_code(&e), Some(code));
             assert!(!rig.key_definitely_refused(&e), "RPRT {code} is not known");

@@ -1499,8 +1499,8 @@ fn a_phone_ptt_not_answered_in_time_still_holds_receive() {
 
 /// Each class of Hamlib refusal through the loop: a code that says the rig rejected the command
 /// without carrying it out (an invalid or rejected command, a feature not available) lets receive
-/// go; ⛔ a code that can come after the command reached the radio (-3 ENOMEM, -7 EINTERNAL,
-/// -8 EPROTO, -10 ETRUNC "Command performed") keeps it held, as for a key. Every one of them is
+/// go; ⛔ any other code (-3 ENOMEM, -7 EINTERNAL, -8 EPROTO, -10 ETRUNC "Command performed",
+/// -15 EARG, -21 ELIMIT; Hamlib 4.6.5 `rig.h`) keeps it held, as for a key. Every one of them is
 /// still not accepted on the status line, with Hamlib's words.
 #[test]
 fn only_a_hamlib_code_that_keyed_nothing_lets_receive_go() {
@@ -1512,6 +1512,9 @@ fn only_a_hamlib_code_that_keyed_nothing_lets_receive_go() {
         (-7, false),
         (-8, false),
         (-10, false),
+        (-15, false),
+        (-21, false),
+        (-22, true),
     ] {
         let mut s = Scene::new(Key::Answers(code), |e| {
             phone(e);
