@@ -868,7 +868,7 @@ function runPublishGather({ text = TEXT, legs = ['aarch64', 'x64'], key = true, 
     for (const sfx of legs) {
       const d = at('artifacts', `nexus-macos-${sfx}`);
       outputs[`sha256-${sfx}-dmg`] = sha(path.join(d, `Nexus_${v}_${sfx}.dmg`));
-      outputs[`sha256-${sfx}-tar`] = key ? sha(path.join(d, `Nexus_${v}_${sfx}.app.tar.gz`)) : '';
+      outputs[`sha256-${sfx}-tar`] = key ? sha(path.join(d, `Nexus_${v}_${sfx}.app.tar.gz`)) : 'none';
     }
     // Another job re-uploads each macOS artifact with the other leg's genuine, signed files under
     // this leg's names: right names, right version, signatures that verify.
@@ -980,6 +980,48 @@ function macShaWiring(wf) {
   if (gather?.env.get('MACOS_SHA256') !== '${{ toJSON(needs.macos.outputs) }}') v.push("publish's gather step is not handed the macos outputs as MACOS_SHA256");
   return v;
 }
+
+// The job that proves those outputs on EVERY run, the workflow_dispatch dry run included: publish
+// runs only on a tag, so without it a matrix-output regression would first show on a real release.
+const OUTPUTS_JOB = 'macos-outputs';
+function outputsJobWiring(wf) {
+  const v = [];
+  const j = wf.jobs.get(OUTPUTS_JOB);
+  if (!j) return [`no ${OUTPUTS_JOB} job`];
+  const at = (...p) => wf.entries.find((e) => e.path.join('\u0000') === ['jobs', OUTPUTS_JOB, ...p].join('\u0000'))?.value;
+  if (!j.needs.includes('macos')) v.push(`${OUTPUTS_JOB} does not need macos`);
+  if (at('if') !== undefined) v.push(`${OUTPUTS_JOB} has an if:, so some run skips it`);
+  const perms = wf.entries.filter((e) => e.path[0] === 'jobs' && e.path[1] === OUTPUTS_JOB && e.path[2] === 'permissions');
+  if (perms.length !== 1 || perms[0].path[3] !== 'contents' || perms[0].value !== 'read') v.push(`${OUTPUTS_JOB} is not exactly contents: read`);
+  const secrets = wf.refs.filter((r) => r.scope !== 'comment' && r.path[1] === OUTPUTS_JOB);
+  if (secrets.length) v.push(`${OUTPUTS_JOB} references ${secrets.map((r) => r.secret).join(', ')}`);
+  const step = j.steps.find((s) => s?.run);
+  const legs = (step?.env.get('LEGS') ?? '').split(/\s+/).filter(Boolean).sort();
+  const matrix = matrixLegs(wf, 'macos').map((l) => l.suffix).sort();
+  if (legs.join() !== matrix.join()) v.push(`${OUTPUTS_JOB} checks legs ${legs.join(',') || '(none)'}, not the macos matrix's ${matrix.join(',')}`);
+  if (step?.env.get('OUTPUTS') !== '${{ toJSON(needs.macos.outputs) }}') v.push(`${OUTPUTS_JOB} is not handed the macos outputs`);
+  if (!wf.jobs.get('publish').needs.includes(OUTPUTS_JOB)) v.push(`publish does not need ${OUTPUTS_JOB}`);
+  return v;
+}
+
+test('a job on every run proves each macOS leg reported both sha256 outputs', () => {
+  assert.deepEqual(outputsJobWiring(WF), []);
+  const thirdLeg = plant(TEXT, '            suffix: x64 ', '            suffix: x64b ');
+  assert.match(outputsJobWiring(readWorkflow(thirdLeg)).join('\n'), /not the macos matrix's aarch64,x64b/);
+  const run = (outputs) => {
+    const step = WF.jobs.get(OUTPUTS_JOB).steps.find((s) => s?.run);
+    return spawnSync('bash', ['-c', step.run], { env: { ...process.env, LEGS: step.env.get('LEGS'), OUTPUTS: JSON.stringify(outputs) }, encoding: 'utf8' });
+  };
+  const hex = (c) => c.repeat(64);
+  const good = { 'sha256-aarch64-dmg': hex('a'), 'sha256-aarch64-tar': hex('b'), 'sha256-x64-dmg': hex('c'), 'sha256-x64-tar': hex('d') };
+  assert.equal(run(good).status, 0, run(good).stderr);
+  assert.equal(run({ ...good, 'sha256-aarch64-tar': 'none', 'sha256-x64-tar': 'none' }).status, 0, 'a build with no key reports none');
+  for (const [k, value] of [['sha256-x64-dmg', undefined], ['sha256-x64-dmg', ''], ['sha256-aarch64-tar', ''], ['sha256-aarch64-dmg', hex('g')], ['sha256-x64-tar', hex('a').slice(1)], ['sha256-aarch64-dmg', 'none']]) {
+    const bad = { ...good, [k]: value };
+    if (value === undefined) delete bad[k];
+    assert.notEqual(run(bad).status, 0, `passed ${k}=${JSON.stringify(value)}`);
+  }
+});
 
 test('the macOS sha256 outputs cover every leg, and publish is handed them', () => {
   assert.deepEqual(macShaWiring(WF), []);

@@ -1307,7 +1307,8 @@ jobs:
           ( cd out && shasum -a 256 ./* )
 
       # This leg's sha256 outputs (see the job's `outputs`), from exactly the files uploaded next.
-      # No tarball (a fork without the key) leaves the tarball key empty.
+      # No tarball (a fork without the key) reports `none`, never an empty value, so macos-outputs
+      # can tell a leg that built no tarball from an output that never arrived.
       - name: Report the sha256 of what this leg uploads
         id: sum
         run: |
@@ -1316,7 +1317,7 @@ jobs:
           sfx=${{ matrix.suffix }}
           f="out/Nexus_${ver}_${sfx}"
           echo "sha256-${sfx}-dmg=$(shasum -a 256 "$f.dmg" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-          tar=''
+          tar=none
           [ ! -f "$f.app.tar.gz" ] || tar=$(shasum -a 256 "$f.app.tar.gz" | cut -d' ' -f1)
           echo "sha256-${sfx}-tar=$tar" >> "$GITHUB_OUTPUT"
 
@@ -1474,6 +1475,36 @@ jobs:
           base64 --decode < "$tarball.sig" > "$RUNNER_TEMP/updater.minisig"
           minisign -Vm "$tarball" -p "$RUNNER_TEMP/updater.pub" -x "$RUNNER_TEMP/updater.minisig"
           echo "updater bundle verified: unpacks, signed app v$upver matches the DMG, minisign signature valid"
+
+  # Proves, on EVERY run, the dispatch dry run included, that each macOS leg's sha256 outputs
+  # reached the job's combined outputs. publish compares the bytes it ships against them, but runs only
+  # on a tag; this makes a regression in how a matrix job's outputs combine fail the rehearsal rather
+  # than the release. No checkout, no secret. LEGS is the macos matrix's suffixes, held equal to it by
+  # release-secrets.test.mjs.
+  macos-outputs:
+    name: Check every macOS leg reported its sha256 outputs
+    needs: macos
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require a 64-hex DMG and tarball sha256 (or none, with no key) from every leg
+        env:
+          LEGS: aarch64 x64
+          OUTPUTS: ${{ toJSON(needs.macos.outputs) }}
+        run: |
+          set -euo pipefail
+          for sfx in $LEGS; do
+            for kind in dmg tar; do
+              k="sha256-$sfx-$kind"
+              v=$(jq -r --arg k "$k" '.[$k] // ""' <<<"$OUTPUTS")
+              if [[ "$v" =~ ^[0-9a-f]{64}$ ]] || { [ "$kind" = tar ] && [ "$v" = none ]; }; then
+                echo "$k=$v"
+              else
+                echo "macos output $k is ${v:-missing}: not a sha256"; exit 1
+              fi
+            done
+          done
 
   # ---------------------------------------------------------------------------------------
   # Raspberry Pi — one .deb per live Pi OS base, native on the hosted arm64 runner.
@@ -1711,7 +1742,7 @@ jobs:
     # sign-updaters is here because the Windows and Linux updater signatures come from it, and
     # a pattern download from a job this one does not wait for can find nothing and still
     # succeed: latest.json would then drop both platforms without a word.
-    needs: [ci-evidence, linux-x86, windows, smoke-windows, sign-updaters, macos, smoke-macos, manual]
+    needs: [ci-evidence, linux-x86, windows, smoke-windows, sign-updaters, macos, smoke-macos, macos-outputs, manual]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     # `actions: write` is for the downstream hand-off at the end of this job. Job-level
@@ -1791,7 +1822,7 @@ jobs:
             if [ "$SIGNING_KEY_PRESENT" = true ]; then
               same "$d/$f.app.tar.gz" "$(built tar)"
             else
-              [ -z "$(built tar)" ] || { echo "the macos job built a $sfx tarball with no signing key"; exit 1; }
+              [ "$(built tar)" = none ] || { echo "the macos job reported a $sfx tarball (or nothing) with no signing key"; exit 1; }
             fi
           done
           if [ "$SIGNING_KEY_PRESENT" = true ]; then
