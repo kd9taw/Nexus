@@ -1733,7 +1733,10 @@ jobs:
           check nexus-linux-x86 "Nexus_${ver}_amd64.AppImage" "Nexus_${ver}_pc_amd64.deb"
           check nexus-windows "Nexus_${ver}_x64-setup.exe" "Nexus_${ver}_x64.sym.gz"
           check nexus-manual Nexus-Manual.pdf Nexus-Manual.epub
-          for sfx in aarch64 x64; do
+          # Every macOS leg downloaded above, which release-secrets.test.mjs holds to the macos
+          # job's matrix: a leg the matrix builds is checked and published with no list here.
+          for d in artifacts/nexus-macos-*; do
+            sfx="${d#artifacts/nexus-macos-}"
             f="Nexus_${ver}_${sfx}"
             if [ "$SIGNING_KEY_PRESENT" = true ]; then
               check "nexus-macos-$sfx" "$f.dmg" "$f.app.tar.gz" "$f.app.tar.gz.sig"
@@ -1747,8 +1750,14 @@ jobs:
             [ ! -e artifacts/nexus-updater-sigs ] || { echo "updater signatures arrived with no signing key"; exit 1; }
           fi
           mkdir -p dist
-          for d in nexus-linux-x86 nexus-windows nexus-macos-aarch64 nexus-macos-x64 nexus-updater-sigs; do
-            [ ! -d "artifacts/$d" ] || mv "artifacts/$d"/* dist/
+          # Every artifact just checked, the manual excepted (it joins dist/ after latest.json). A
+          # download this step does not check is refused rather than gathered unchecked.
+          for d in artifacts/*; do
+            case "${d#artifacts/}" in
+              nexus-manual) ;;
+              nexus-linux-x86|nexus-windows|nexus-updater-sigs|nexus-macos-*) mv "$d"/* dist/ ;;
+              *) echo "$d was downloaded but this step does not check it"; exit 1 ;;
+            esac
           done
 
       # TIE WHAT SHIPS TO WHAT WAS SIGNED. The installers and bundles were signed in other jobs and

@@ -780,8 +780,13 @@ function matrixUndownloaded(wf) {
   const bases = pi.replace(/^\[|\]$/g, '').split(',').map((x) => x.trim()).filter(Boolean);
   if (!bases.length) v.push('no Pi bases read from the pi job matrix');
   for (const b of bases) if (!downloadedBy(wf, 'publish-pi').includes(`nexus-pi-${b}`)) v.push(`publish-pi does not download nexus-pi-${b}`);
-  for (const { suffix } of matrixLegs(wf, 'macos')) {
-    if (!downloadedBy(wf, 'publish').includes(`nexus-macos-${suffix}`)) v.push(`publish does not download nexus-macos-${suffix}`);
+  const suffixes = matrixLegs(wf, 'macos').map((l) => l.suffix);
+  for (const sfx of suffixes) {
+    if (!downloadedBy(wf, 'publish').includes(`nexus-macos-${sfx}`)) v.push(`publish does not download nexus-macos-${sfx}`);
+  }
+  // And nothing else: publish checks and gathers whatever nexus-macos-* it downloaded.
+  for (const n of downloadedBy(wf, 'publish').filter((x) => x?.startsWith('nexus-macos-'))) {
+    if (!suffixes.includes(n.slice('nexus-macos-'.length))) v.push(`publish downloads ${n}, which no macos leg builds`);
   }
   return v;
 }
@@ -873,6 +878,18 @@ test('publish gathers exactly the artifacts it always shipped, signed or not', (
     assert.equal(r.status, 0, r.stderr);
     assert.deepEqual(r.dist, expectedDist(['aarch64', 'x64'], key));
   }
+});
+
+// A third macOS leg, once the matrix builds it and publish downloads it (the matrix test below
+// holds those two together), must be checked and published like the others with no further edit:
+// a leg that builds but never publishes passes every gate and reaches nobody.
+test('publish checks and gathers every macOS leg it downloads, not a list of its own', () => {
+  const legs = ['aarch64', 'x64', 'universal'];
+  const r = runPublishGather({ legs });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(r.dist, expectedDist(legs, true));
+  const tampered = runPublishGather({ legs, tamper: 'Nexus_9.9.9_universal.app.tar.gz' });
+  assert.notEqual(tampered.status, 0, 'the third leg\'s bundle went unverified');
 });
 
 test('publish refuses an installer or bundle that is not the one that was signed', () => {
