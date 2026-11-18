@@ -12,9 +12,10 @@ The script takes both files from the addresses IOTA Ltd publishes for software, 
 limits as the app's own monthly check, and writes `iota_groups.manifest.json` beside them (the date,
 the group and island counts, and each file's SHA-256). When the islands list fails, the groups are
 still staged and the script exits 1. `scripts/release-prep` and `scripts/build-windows-cross.sh` run it,
-best-effort. Each installer job in `.github/workflows/release.yml` runs it with `--fallback`, on the
-last good lists restored from the GitHub Actions cache (`.github/workflows/iota-cache.yml` keeps
-main's copy fresh), and fails when it has neither a download nor a usable cached copy, so no
+best-effort. In `.github/workflows/release.yml` the `iota-lists` job runs it with `--fallback`, on
+the last good lists restored from the GitHub Actions cache (`.github/workflows/iota-cache.yml`
+keeps main's copy fresh), and fails when it has neither a download nor a usable cached copy; each
+installer job takes the checked lists from that job (`--checked`) and fails without them, so no
 release installer ships without them.
 
 A build without them still works: island names are then checked by their shape only, and no

@@ -159,10 +159,121 @@ jobs:
             --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" --sha "$tag_sha"
 
   # ---------------------------------------------------------------------------------------
+  # THE IOTA LISTS — downloaded, or the last good copy from the Actions cache, checked, and handed
+  # to the installer jobs as a workflow artifact.
+  #
+  # The IOTA island-group and islands lists (© RSGB and IOTA Ltd) ship in the installer with
+  # IOTA Ltd's permission and are never committed (src-tauri/resources/iota/README.md, NOTICE).
+  # iota-world.org answers HTTP 202 with no file while it rebuilds them; the script asks again
+  # (15/30/60 s), and even so 1.25.0-beta.1's Linux x86_64 installer shipped without them, as
+  # 1.22.0's had. So the last good lists are kept in the Actions cache, and the script falls back
+  # to them ("using the cached copy" in its log), dated as that copy.
+  #
+  # WHY A JOB OF ITS OWN. The Actions cache is not a trusted source, for two reasons:
+  #  - Who can write it: a tag run reads caches saved under its own tag and under main, and ANY
+  #    workflow run on main can save a main-scoped entry under any key: ci.yml, with every build
+  #    script and npm dev tool it runs, fd-rules.yml, and every scheduled workflow. The key
+  #    prefixes (iota-lists-main-*, written by iota-cache.yml; iota-lists-tag-*, written here)
+  #    name the intended writer and authenticate nothing.
+  #  - Where it lands: actions/cache extracts with `tar -P`, so an entry is NOT confined to the
+  #    `path` it names. A crafted entry can write anywhere the job user can (~/.cargo/bin, the
+  #    Node toolcache, ~/.gitconfig, ...), before any later step can inspect it.
+  # So a restore is never done in a job that builds an installer or holds a secret (the same rule
+  # as the macos job's tauri-cli note). It is done HERE, on a throwaway runner that builds
+  # nothing, holds no secret and has a read-only token. What leaves this job is only the three
+  # files the script wrote, after its checks (gen-iota-groups.mjs, "Fallback": exactly those
+  # files, regular files within size limits, both lists passing the download checks, the
+  # manifest a JSON object). The installer jobs fetch them with download-artifact, which refuses
+  # an entry that escapes its target path, and the script checks them again (--checked). The worst
+  # a hostile cache entry can do is hand over well-formed but wrong island data within the size
+  # limits: data, not code.
+  #
+  # Saves: here only on a tag run (iota-lists-tag-*, for this run's re-runs), and on main from
+  # iota-cache.yml. A workflow_dispatch dry run saves nothing, but it does read its own branch's
+  # entries; whoever dispatches on a branch already controls that branch's workflows, and a dry
+  # run publishes nothing.
+  #
+  # The artifact is kept one day. Each installer job's own artifact already carries the same lists
+  # inside the installer.
+  #
+  # FAIL CLOSED. With neither a download nor a usable cached copy this job fails, and every
+  # installer job, which needs it, does not run. Re-run the workflow once the server answers.
+  # ---------------------------------------------------------------------------------------
+  iota-lists:
+    name: IOTA lists (download, or the last good copy)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # A job-level block REPLACES the workflow-level one; `contents: read` is for the checkout only.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Empty the IOTA cache directory
+        run: rm -rf ~/.nexus-iota-cache
+
+      - name: Restore the last good IOTA lists
+        id: iota-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.nexus-iota-cache
+          key: iota-lists-tag-${{ github.run_id }}
+          restore-keys: |
+            iota-lists-tag-
+            iota-lists-main-
+
+      # The output goes outside the workspace, into a directory only the script writes, so the
+      # upload below can carry nothing else.
+      - name: Download the IOTA lists, or fall back to the cache
+        id: stage
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/iota-lists"
+          if ! node scripts/gen-iota-groups.mjs --download "$out" --fallback ~/.nexus-iota-cache; then
+            echo "::error::IOTA lists not staged: no download and no usable cached copy"
+            {
+              echo "### IOTA lists: none to ship, so no installer is built"
+              echo "iota-world.org did not hand over the lists after every retry, and the Actions cache held"
+              echo "no usable copy (see this job's log). Re-run the workflow once the server answers."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          # The lists' content names the cache entry; iota-cache.yml computes it the same way.
+          echo "hash=$(cat "$out/iota_groups.json" "$out/iota_islands.json" | sha256sum | cut -c1-64)" >> "$GITHUB_OUTPUT"
+          # What a save below stores: the checked files, and nothing restored.
+          rm -rf ~/.nexus-iota-cache
+          mkdir -p ~/.nexus-iota-cache
+          cp "$out/iota_groups.json" "$out/iota_islands.json" "$out/iota_groups.manifest.json" ~/.nexus-iota-cache/
+
+      - name: Keep the IOTA lists for this run's re-runs
+        if: github.ref_type == 'tag' && !endsWith(steps.iota-cache.outputs.cache-matched-key, format('-{0}', steps.stage.outputs.hash))
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.nexus-iota-cache
+          key: iota-lists-tag-${{ steps.stage.outputs.hash }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexus-iota-lists
+          path: |
+            ${{ runner.temp }}/iota-lists/iota_groups.json
+            ${{ runner.temp }}/iota-lists/iota_islands.json
+            ${{ runner.temp }}/iota-lists/iota_groups.manifest.json
+          if-no-files-found: error
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------------------
   # Linux x86_64 — .deb + AppImage via the same scripts/build-linux.sh developers use.
   # ---------------------------------------------------------------------------------------
   linux-x86:
     name: Linux x86_64 (.deb + AppImage)
+    needs: iota-lists
     # BUILT IN A PINNED CONTAINER, not on the runner. The build host's glibc IS the floor of every
     # published x86_64 artifact, so the image below decides who can run Nexus: ubuntu:22.04 is
     # glibc 2.35 (GLIBC_FLOOR). Pinned by digest, like the Pi jobs' `debian:${BASE}` images, so
@@ -187,15 +298,14 @@ jobs:
       # gstreamer1.0-plugins-base/-good (the app, autodetect and coreelements plugins build-linux.sh
       # copies in, and Verify requires) and xdg-utils (tauri's AppImage bundler refuses to build
       # without /usr/bin/xdg-open, which it ships as usr/bin/xdg-open). gh is jammy's own (2.4.0),
-      # for the model download below. zstd is for actions/cache: without it the IOTA cache steps
-      # write and read gzip entries, a different cache from every other job's.
+      # for the model download below.
       - name: Install build dependencies
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
           apt-get install -y --no-install-recommends \
-            ca-certificates curl wget file git xz-utils zstd python3 gh \
+            ca-certificates curl wget file git xz-utils python3 gh \
             libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
             librsvg2-dev libxdo-dev libssl-dev libsoup-3.0-dev patchelf \
             build-essential cmake ninja-build gfortran pkg-config \
@@ -245,97 +355,27 @@ jobs:
         with:
           node-version: 24
 
-      # The IOTA island-group and islands lists (© RSGB and IOTA Ltd) ship in the installer with
-      # IOTA Ltd's permission but are never committed (src-tauri/resources/iota/README.md, NOTICE),
-      # so the checkout has none. The script asks again on a 202, a 5xx or no answer at all
-      # (15/30/60 s); even so 1.25.0-beta.1's Linux x86_64 installer shipped without them (202 on
-      # every attempt), as 1.22.0's had. So the last good lists are kept in the Actions cache, and
-      # the script falls back to them ("using the cached copy" in its log), dated as that copy.
-      #
-      # THE CACHE IS UNTRUSTED INPUT, and this job later builds with secrets. So:
-      #  - it is restored into ~/.nexus-iota-cache, emptied first, outside the workspace, where
-      #    nothing else reads (not $RUNNER_TEMP: actions/cache hashes the path as written into the
-      #    cache's identity, and runner.temp expands differently on the host, in the linux-x86
-      #    container and on macOS, so the jobs would never share an entry; `~` stays literal);
-      #  - the script checks that directory as a whole (gen-iota-groups.mjs, "Fallback"): exactly
-      #    its three files, regular files within their size limits, both lists passing the same
-      #    checks as a download, the manifest a JSON object. Anything else is a logged cache miss.
-      #    Only the checked bytes are written to src-tauri/resources/iota;
-      #  - the tree is compared before and after (git status with ignored files, plus a hash of the
-      #    tracked diff): anything but the three staged files appearing or changing fails the step;
-      #  - entries are written only by main (iota-cache.yml, key iota-lists-main-*) and by tag
-      #    runs (iota-lists-tag-*, for this run's re-runs); a dispatch dry run saves nothing.
-      #    The boundary is GitHub's own scoping: a tag run reads only caches saved under its own
-      #    tag or under main, so an entry from a feature branch or a pull request cannot be picked
-      #    (the macos job's tauri-cli note has the same rule). The prefixes only name the writer.
-      #  - all of it runs before the first step that is handed a secret (no job here has a
-      #    job-level secret; scripts/release-secrets.test.mjs refuses one).
-      # The linux-x86 container installs zstd so its entries match the other jobs' (actions/cache
-      # falls back to gzip without it, and a gzip entry is a different cache).
-      #
-      # FAIL CLOSED. With neither a download nor a usable cached copy, the job FAILS: no
-      # installer ships without the lists. Re-run the job once the server answers.
-      - name: Empty the IOTA cache directory and record the tree
-        run: |
-          set -euo pipefail
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          rm -rf ~/.nexus-iota-cache
-          {
-            git status --porcelain --ignored --untracked-files=all
-            git diff HEAD --binary | git hash-object --stdin
-          } > "$RUNNER_TEMP/iota-tree-before"
-
-      - name: Restore the last good IOTA lists
-        id: iota-cache
-        uses: actions/cache/restore@v6
+      # The IOTA lists (© RSGB and IOTA Ltd; never committed, src-tauri/resources/iota/README.md)
+      # come from the iota-lists job as a workflow artifact, NOT from the Actions cache: no job that
+      # builds an installer or holds a secret restores a cache (see iota-lists for why). The
+      # script checks the three files again exactly as it checks a cache directory, and fails the
+      # job when they do not pass, so no installer ships without the lists.
+      - name: Download the checked IOTA lists
+        uses: actions/download-artifact@v4
         with:
-          path: ~/.nexus-iota-cache
-          key: iota-lists-tag-${{ github.run_id }}
-          restore-keys: |
-            iota-lists-tag-
-            iota-lists-main-
+          name: nexus-iota-lists
+          path: ~/.nexus-iota-handover
 
       - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
         run: |
           set -euo pipefail
-          if ! node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota --fallback ~/.nexus-iota-cache; then
-            echo "::error::IOTA lists not staged: no download and no usable cached copy"
-            {
-              echo "### ${{ github.job }}: stopped, no IOTA lists to ship"
-              echo "iota-world.org did not hand over the lists after every retry, and the Actions cache held"
-              echo "no usable copy (see the step's log). Re-run this job once the server answers."
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
+          node scripts/gen-iota-groups.mjs --checked "$HOME/.nexus-iota-handover" src-tauri/resources/iota
           for f in iota_groups.json iota_islands.json iota_groups.manifest.json; do
             if [ ! -s "src-tauri/resources/iota/$f" ]; then
               echo "::error::src-tauri/resources/iota/$f is missing or empty after staging"
               exit 1
             fi
           done
-          {
-            git status --porcelain --ignored --untracked-files=all
-            git diff HEAD --binary | git hash-object --stdin
-          } > "$RUNNER_TEMP/iota-tree-after"
-          unexpected=$(diff "$RUNNER_TEMP/iota-tree-before" "$RUNNER_TEMP/iota-tree-after" | grep '^[<>]' \
-            | grep -Ev '^> !! src-tauri/resources/iota/iota_(groups|islands|groups\.manifest)\.json$' || true)
-          if [ -n "$unexpected" ]; then
-            echo "::error::staging the IOTA lists changed the tree beyond src-tauri/resources/iota"
-            echo "$unexpected"
-            exit 1
-          fi
-          # What a save below stores: the staged, checked files, and nothing else.
-          rm -rf ~/.nexus-iota-cache
-          mkdir -p ~/.nexus-iota-cache
-          cp src-tauri/resources/iota/iota_groups.json src-tauri/resources/iota/iota_islands.json \
-            src-tauri/resources/iota/iota_groups.manifest.json ~/.nexus-iota-cache/
-
-      - name: Keep the IOTA lists for this run's re-runs
-        if: github.ref_type == 'tag' && !endsWith(steps.iota-cache.outputs.cache-matched-key, format('-{0}', hashFiles('src-tauri/resources/iota/iota_groups.json', 'src-tauri/resources/iota/iota_islands.json')))
-        uses: actions/cache/save@v6
-        with:
-          path: ~/.nexus-iota-cache
-          key: iota-lists-tag-${{ hashFiles('src-tauri/resources/iota/iota_groups.json', 'src-tauri/resources/iota/iota_islands.json') }}
 
       # AppImage's bundler (appimagetool) normally needs FUSE, which hosted runners lack.
       # APPIMAGE_EXTRACT_AND_RUN makes it self-extract instead — the standard CI workaround.
@@ -552,6 +592,7 @@ jobs:
   # ---------------------------------------------------------------------------------------
   windows:
     name: Windows (NSIS installer)
+    needs: iota-lists
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -590,97 +631,27 @@ jobs:
         with:
           node-version: 24
 
-      # The IOTA island-group and islands lists (© RSGB and IOTA Ltd) ship in the installer with
-      # IOTA Ltd's permission but are never committed (src-tauri/resources/iota/README.md, NOTICE),
-      # so the checkout has none. The script asks again on a 202, a 5xx or no answer at all
-      # (15/30/60 s); even so 1.25.0-beta.1's Linux x86_64 installer shipped without them (202 on
-      # every attempt), as 1.22.0's had. So the last good lists are kept in the Actions cache, and
-      # the script falls back to them ("using the cached copy" in its log), dated as that copy.
-      #
-      # THE CACHE IS UNTRUSTED INPUT, and this job later builds with secrets. So:
-      #  - it is restored into ~/.nexus-iota-cache, emptied first, outside the workspace, where
-      #    nothing else reads (not $RUNNER_TEMP: actions/cache hashes the path as written into the
-      #    cache's identity, and runner.temp expands differently on the host, in the linux-x86
-      #    container and on macOS, so the jobs would never share an entry; `~` stays literal);
-      #  - the script checks that directory as a whole (gen-iota-groups.mjs, "Fallback"): exactly
-      #    its three files, regular files within their size limits, both lists passing the same
-      #    checks as a download, the manifest a JSON object. Anything else is a logged cache miss.
-      #    Only the checked bytes are written to src-tauri/resources/iota;
-      #  - the tree is compared before and after (git status with ignored files, plus a hash of the
-      #    tracked diff): anything but the three staged files appearing or changing fails the step;
-      #  - entries are written only by main (iota-cache.yml, key iota-lists-main-*) and by tag
-      #    runs (iota-lists-tag-*, for this run's re-runs); a dispatch dry run saves nothing.
-      #    The boundary is GitHub's own scoping: a tag run reads only caches saved under its own
-      #    tag or under main, so an entry from a feature branch or a pull request cannot be picked
-      #    (the macos job's tauri-cli note has the same rule). The prefixes only name the writer.
-      #  - all of it runs before the first step that is handed a secret (no job here has a
-      #    job-level secret; scripts/release-secrets.test.mjs refuses one).
-      # The linux-x86 container installs zstd so its entries match the other jobs' (actions/cache
-      # falls back to gzip without it, and a gzip entry is a different cache).
-      #
-      # FAIL CLOSED. With neither a download nor a usable cached copy, the job FAILS: no
-      # installer ships without the lists. Re-run the job once the server answers.
-      - name: Empty the IOTA cache directory and record the tree
-        run: |
-          set -euo pipefail
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          rm -rf ~/.nexus-iota-cache
-          {
-            git status --porcelain --ignored --untracked-files=all
-            git diff HEAD --binary | git hash-object --stdin
-          } > "$RUNNER_TEMP/iota-tree-before"
-
-      - name: Restore the last good IOTA lists
-        id: iota-cache
-        uses: actions/cache/restore@v6
+      # The IOTA lists (© RSGB and IOTA Ltd; never committed, src-tauri/resources/iota/README.md)
+      # come from the iota-lists job as a workflow artifact, NOT from the Actions cache: no job that
+      # builds an installer or holds a secret restores a cache (see iota-lists for why). The
+      # script checks the three files again exactly as it checks a cache directory, and fails the
+      # job when they do not pass, so no installer ships without the lists.
+      - name: Download the checked IOTA lists
+        uses: actions/download-artifact@v4
         with:
-          path: ~/.nexus-iota-cache
-          key: iota-lists-tag-${{ github.run_id }}
-          restore-keys: |
-            iota-lists-tag-
-            iota-lists-main-
+          name: nexus-iota-lists
+          path: ~/.nexus-iota-handover
 
       - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
         run: |
           set -euo pipefail
-          if ! node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota --fallback ~/.nexus-iota-cache; then
-            echo "::error::IOTA lists not staged: no download and no usable cached copy"
-            {
-              echo "### ${{ github.job }}: stopped, no IOTA lists to ship"
-              echo "iota-world.org did not hand over the lists after every retry, and the Actions cache held"
-              echo "no usable copy (see the step's log). Re-run this job once the server answers."
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
+          node scripts/gen-iota-groups.mjs --checked "$HOME/.nexus-iota-handover" src-tauri/resources/iota
           for f in iota_groups.json iota_islands.json iota_groups.manifest.json; do
             if [ ! -s "src-tauri/resources/iota/$f" ]; then
               echo "::error::src-tauri/resources/iota/$f is missing or empty after staging"
               exit 1
             fi
           done
-          {
-            git status --porcelain --ignored --untracked-files=all
-            git diff HEAD --binary | git hash-object --stdin
-          } > "$RUNNER_TEMP/iota-tree-after"
-          unexpected=$(diff "$RUNNER_TEMP/iota-tree-before" "$RUNNER_TEMP/iota-tree-after" | grep '^[<>]' \
-            | grep -Ev '^> !! src-tauri/resources/iota/iota_(groups|islands|groups\.manifest)\.json$' || true)
-          if [ -n "$unexpected" ]; then
-            echo "::error::staging the IOTA lists changed the tree beyond src-tauri/resources/iota"
-            echo "$unexpected"
-            exit 1
-          fi
-          # What a save below stores: the staged, checked files, and nothing else.
-          rm -rf ~/.nexus-iota-cache
-          mkdir -p ~/.nexus-iota-cache
-          cp src-tauri/resources/iota/iota_groups.json src-tauri/resources/iota/iota_islands.json \
-            src-tauri/resources/iota/iota_groups.manifest.json ~/.nexus-iota-cache/
-
-      - name: Keep the IOTA lists for this run's re-runs
-        if: github.ref_type == 'tag' && !endsWith(steps.iota-cache.outputs.cache-matched-key, format('-{0}', hashFiles('src-tauri/resources/iota/iota_groups.json', 'src-tauri/resources/iota/iota_islands.json')))
-        uses: actions/cache/save@v6
-        with:
-          path: ~/.nexus-iota-cache
-          key: iota-lists-tag-${{ hashFiles('src-tauri/resources/iota/iota_groups.json', 'src-tauri/resources/iota/iota_islands.json') }}
 
       # FFTW, and any other native library build-windows-cross.sh compiles from a downloaded
       # tarball, is built HERE, with no secret in the environment: third-party builds run
@@ -950,6 +921,7 @@ jobs:
   macos:
     name: macOS (${{ matrix.label }} .dmg)
     runs-on: ${{ matrix.runner }}
+    needs: iota-lists
     # `tsc -b` needs about 2.5 GB of JavaScript heap since the Chinese catalogs (2,048 MB, Node's
     # default on these 7 GB runners, aborts with exit 134; 3,072 MB passes). For the whole job, not
     # one step: the web UI is built here AND again by `cargo tauri build`'s beforeBuildCommand. The
@@ -1091,97 +1063,27 @@ jobs:
         with:
           node-version: 24
 
-      # The IOTA island-group and islands lists (© RSGB and IOTA Ltd) ship in the installer with
-      # IOTA Ltd's permission but are never committed (src-tauri/resources/iota/README.md, NOTICE),
-      # so the checkout has none. The script asks again on a 202, a 5xx or no answer at all
-      # (15/30/60 s); even so 1.25.0-beta.1's Linux x86_64 installer shipped without them (202 on
-      # every attempt), as 1.22.0's had. So the last good lists are kept in the Actions cache, and
-      # the script falls back to them ("using the cached copy" in its log), dated as that copy.
-      #
-      # THE CACHE IS UNTRUSTED INPUT, and this job later builds with secrets. So:
-      #  - it is restored into ~/.nexus-iota-cache, emptied first, outside the workspace, where
-      #    nothing else reads (not $RUNNER_TEMP: actions/cache hashes the path as written into the
-      #    cache's identity, and runner.temp expands differently on the host, in the linux-x86
-      #    container and on macOS, so the jobs would never share an entry; `~` stays literal);
-      #  - the script checks that directory as a whole (gen-iota-groups.mjs, "Fallback"): exactly
-      #    its three files, regular files within their size limits, both lists passing the same
-      #    checks as a download, the manifest a JSON object. Anything else is a logged cache miss.
-      #    Only the checked bytes are written to src-tauri/resources/iota;
-      #  - the tree is compared before and after (git status with ignored files, plus a hash of the
-      #    tracked diff): anything but the three staged files appearing or changing fails the step;
-      #  - entries are written only by main (iota-cache.yml, key iota-lists-main-*) and by tag
-      #    runs (iota-lists-tag-*, for this run's re-runs); a dispatch dry run saves nothing.
-      #    The boundary is GitHub's own scoping: a tag run reads only caches saved under its own
-      #    tag or under main, so an entry from a feature branch or a pull request cannot be picked
-      #    (the macos job's tauri-cli note has the same rule). The prefixes only name the writer.
-      #  - all of it runs before the first step that is handed a secret (no job here has a
-      #    job-level secret; scripts/release-secrets.test.mjs refuses one).
-      # The linux-x86 container installs zstd so its entries match the other jobs' (actions/cache
-      # falls back to gzip without it, and a gzip entry is a different cache).
-      #
-      # FAIL CLOSED. With neither a download nor a usable cached copy, the job FAILS: no
-      # installer ships without the lists. Re-run the job once the server answers.
-      - name: Empty the IOTA cache directory and record the tree
-        run: |
-          set -euo pipefail
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          rm -rf ~/.nexus-iota-cache
-          {
-            git status --porcelain --ignored --untracked-files=all
-            git diff HEAD --binary | git hash-object --stdin
-          } > "$RUNNER_TEMP/iota-tree-before"
-
-      - name: Restore the last good IOTA lists
-        id: iota-cache
-        uses: actions/cache/restore@v6
+      # The IOTA lists (© RSGB and IOTA Ltd; never committed, src-tauri/resources/iota/README.md)
+      # come from the iota-lists job as a workflow artifact, NOT from the Actions cache: no job that
+      # builds an installer or holds a secret restores a cache (see iota-lists for why). The
+      # script checks the three files again exactly as it checks a cache directory, and fails the
+      # job when they do not pass, so no installer ships without the lists.
+      - name: Download the checked IOTA lists
+        uses: actions/download-artifact@v4
         with:
-          path: ~/.nexus-iota-cache
-          key: iota-lists-tag-${{ github.run_id }}
-          restore-keys: |
-            iota-lists-tag-
-            iota-lists-main-
+          name: nexus-iota-lists
+          path: ~/.nexus-iota-handover
 
       - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
         run: |
           set -euo pipefail
-          if ! node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota --fallback ~/.nexus-iota-cache; then
-            echo "::error::IOTA lists not staged: no download and no usable cached copy"
-            {
-              echo "### ${{ github.job }}: stopped, no IOTA lists to ship"
-              echo "iota-world.org did not hand over the lists after every retry, and the Actions cache held"
-              echo "no usable copy (see the step's log). Re-run this job once the server answers."
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
+          node scripts/gen-iota-groups.mjs --checked "$HOME/.nexus-iota-handover" src-tauri/resources/iota
           for f in iota_groups.json iota_islands.json iota_groups.manifest.json; do
             if [ ! -s "src-tauri/resources/iota/$f" ]; then
               echo "::error::src-tauri/resources/iota/$f is missing or empty after staging"
               exit 1
             fi
           done
-          {
-            git status --porcelain --ignored --untracked-files=all
-            git diff HEAD --binary | git hash-object --stdin
-          } > "$RUNNER_TEMP/iota-tree-after"
-          unexpected=$(diff "$RUNNER_TEMP/iota-tree-before" "$RUNNER_TEMP/iota-tree-after" | grep '^[<>]' \
-            | grep -Ev '^> !! src-tauri/resources/iota/iota_(groups|islands|groups\.manifest)\.json$' || true)
-          if [ -n "$unexpected" ]; then
-            echo "::error::staging the IOTA lists changed the tree beyond src-tauri/resources/iota"
-            echo "$unexpected"
-            exit 1
-          fi
-          # What a save below stores: the staged, checked files, and nothing else.
-          rm -rf ~/.nexus-iota-cache
-          mkdir -p ~/.nexus-iota-cache
-          cp src-tauri/resources/iota/iota_groups.json src-tauri/resources/iota/iota_islands.json \
-            src-tauri/resources/iota/iota_groups.manifest.json ~/.nexus-iota-cache/
-
-      - name: Keep the IOTA lists for this run's re-runs
-        if: github.ref_type == 'tag' && !endsWith(steps.iota-cache.outputs.cache-matched-key, format('-{0}', hashFiles('src-tauri/resources/iota/iota_groups.json', 'src-tauri/resources/iota/iota_islands.json')))
-        uses: actions/cache/save@v6
-        with:
-          path: ~/.nexus-iota-cache
-          key: iota-lists-tag-${{ hashFiles('src-tauri/resources/iota/iota_groups.json', 'src-tauri/resources/iota/iota_islands.json') }}
 
       - name: Build the web UI
         run: |
@@ -1632,6 +1534,7 @@ jobs:
   # ---------------------------------------------------------------------------------------
   pi:
     name: Raspberry Pi .deb (${{ matrix.base }})
+    needs: iota-lists
     runs-on: ubuntu-24.04-arm
     strategy:
       fail-fast: false
@@ -1665,97 +1568,27 @@ jobs:
         with:
           node-version: 24
 
-      # The IOTA island-group and islands lists (© RSGB and IOTA Ltd) ship in the installer with
-      # IOTA Ltd's permission but are never committed (src-tauri/resources/iota/README.md, NOTICE),
-      # so the checkout has none. The script asks again on a 202, a 5xx or no answer at all
-      # (15/30/60 s); even so 1.25.0-beta.1's Linux x86_64 installer shipped without them (202 on
-      # every attempt), as 1.22.0's had. So the last good lists are kept in the Actions cache, and
-      # the script falls back to them ("using the cached copy" in its log), dated as that copy.
-      #
-      # THE CACHE IS UNTRUSTED INPUT, and this job later builds with secrets. So:
-      #  - it is restored into ~/.nexus-iota-cache, emptied first, outside the workspace, where
-      #    nothing else reads (not $RUNNER_TEMP: actions/cache hashes the path as written into the
-      #    cache's identity, and runner.temp expands differently on the host, in the linux-x86
-      #    container and on macOS, so the jobs would never share an entry; `~` stays literal);
-      #  - the script checks that directory as a whole (gen-iota-groups.mjs, "Fallback"): exactly
-      #    its three files, regular files within their size limits, both lists passing the same
-      #    checks as a download, the manifest a JSON object. Anything else is a logged cache miss.
-      #    Only the checked bytes are written to src-tauri/resources/iota;
-      #  - the tree is compared before and after (git status with ignored files, plus a hash of the
-      #    tracked diff): anything but the three staged files appearing or changing fails the step;
-      #  - entries are written only by main (iota-cache.yml, key iota-lists-main-*) and by tag
-      #    runs (iota-lists-tag-*, for this run's re-runs); a dispatch dry run saves nothing.
-      #    The boundary is GitHub's own scoping: a tag run reads only caches saved under its own
-      #    tag or under main, so an entry from a feature branch or a pull request cannot be picked
-      #    (the macos job's tauri-cli note has the same rule). The prefixes only name the writer.
-      #  - all of it runs before the first step that is handed a secret (no job here has a
-      #    job-level secret; scripts/release-secrets.test.mjs refuses one).
-      # The linux-x86 container installs zstd so its entries match the other jobs' (actions/cache
-      # falls back to gzip without it, and a gzip entry is a different cache).
-      #
-      # FAIL CLOSED. With neither a download nor a usable cached copy, the job FAILS: no
-      # installer ships without the lists. Re-run the job once the server answers.
-      - name: Empty the IOTA cache directory and record the tree
-        run: |
-          set -euo pipefail
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          rm -rf ~/.nexus-iota-cache
-          {
-            git status --porcelain --ignored --untracked-files=all
-            git diff HEAD --binary | git hash-object --stdin
-          } > "$RUNNER_TEMP/iota-tree-before"
-
-      - name: Restore the last good IOTA lists
-        id: iota-cache
-        uses: actions/cache/restore@v6
+      # The IOTA lists (© RSGB and IOTA Ltd; never committed, src-tauri/resources/iota/README.md)
+      # come from the iota-lists job as a workflow artifact, NOT from the Actions cache: no job that
+      # builds an installer or holds a secret restores a cache (see iota-lists for why). The
+      # script checks the three files again exactly as it checks a cache directory, and fails the
+      # job when they do not pass, so no installer ships without the lists.
+      - name: Download the checked IOTA lists
+        uses: actions/download-artifact@v4
         with:
-          path: ~/.nexus-iota-cache
-          key: iota-lists-tag-${{ github.run_id }}
-          restore-keys: |
-            iota-lists-tag-
-            iota-lists-main-
+          name: nexus-iota-lists
+          path: ~/.nexus-iota-handover
 
       - name: Stage the IOTA island list (not committed — IOTA Ltd's permission)
         run: |
           set -euo pipefail
-          if ! node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota --fallback ~/.nexus-iota-cache; then
-            echo "::error::IOTA lists not staged: no download and no usable cached copy"
-            {
-              echo "### ${{ github.job }}: stopped, no IOTA lists to ship"
-              echo "iota-world.org did not hand over the lists after every retry, and the Actions cache held"
-              echo "no usable copy (see the step's log). Re-run this job once the server answers."
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
+          node scripts/gen-iota-groups.mjs --checked "$HOME/.nexus-iota-handover" src-tauri/resources/iota
           for f in iota_groups.json iota_islands.json iota_groups.manifest.json; do
             if [ ! -s "src-tauri/resources/iota/$f" ]; then
               echo "::error::src-tauri/resources/iota/$f is missing or empty after staging"
               exit 1
             fi
           done
-          {
-            git status --porcelain --ignored --untracked-files=all
-            git diff HEAD --binary | git hash-object --stdin
-          } > "$RUNNER_TEMP/iota-tree-after"
-          unexpected=$(diff "$RUNNER_TEMP/iota-tree-before" "$RUNNER_TEMP/iota-tree-after" | grep '^[<>]' \
-            | grep -Ev '^> !! src-tauri/resources/iota/iota_(groups|islands|groups\.manifest)\.json$' || true)
-          if [ -n "$unexpected" ]; then
-            echo "::error::staging the IOTA lists changed the tree beyond src-tauri/resources/iota"
-            echo "$unexpected"
-            exit 1
-          fi
-          # What a save below stores: the staged, checked files, and nothing else.
-          rm -rf ~/.nexus-iota-cache
-          mkdir -p ~/.nexus-iota-cache
-          cp src-tauri/resources/iota/iota_groups.json src-tauri/resources/iota/iota_islands.json \
-            src-tauri/resources/iota/iota_groups.manifest.json ~/.nexus-iota-cache/
-
-      - name: Keep the IOTA lists for this run's re-runs
-        if: github.ref_type == 'tag' && !endsWith(steps.iota-cache.outputs.cache-matched-key, format('-{0}', hashFiles('src-tauri/resources/iota/iota_groups.json', 'src-tauri/resources/iota/iota_islands.json')))
-        uses: actions/cache/save@v6
-        with:
-          path: ~/.nexus-iota-cache
-          key: iota-lists-tag-${{ hashFiles('src-tauri/resources/iota/iota_groups.json', 'src-tauri/resources/iota/iota_islands.json') }}
 
       # The ClubLog key, compiled in as on every other platform (#388). It goes in as a BuildKit
       # secret, which Dockerfile.pi mounts for the one RUN that compiles Nexus; a build arg would

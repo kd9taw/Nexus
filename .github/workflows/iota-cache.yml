@@ -13,13 +13,14 @@
 # its tag, and weekly, so the entry is never evicted for want of use (GitHub evicts after 7 days
 # untouched).
 #
-# Entries are saved under iota-lists-main-<the two lists' content hash>, only from main (a dispatch
-# on another branch refreshes nothing), and only when the content changed; the restore takes the
-# newest. release.yml restores iota-lists-tag-* (its own re-runs) then iota-lists-main-*, into a
-# directory outside the workspace, and the script checks that directory as a whole before using
-# any of it (release.yml's IOTA comment has the threat and the checks). The path, the prefixes and
-# the steps match release.yml's IOTA steps; change them together, or the release jobs restore
-# nothing from here.
+# Entries are saved under iota-lists-main-<sha256 of the two lists>, only from main (a dispatch on
+# another branch refreshes nothing), and only when the content changed; the restore takes the
+# newest. This is NOT a trust boundary: any workflow run on main can save a main-scoped entry
+# under any key, and actions/cache extracts unconfined (`tar -P`). So release.yml restores these
+# entries only in its iota-lists job, which builds nothing and holds no secret, and hands the
+# installer jobs only the checked files (release.yml's iota-lists comment has the threat model).
+# The path, the prefixes and the hash match that job's steps; change them together, or the
+# release restores nothing from here.
 
 name: IOTA lists cache
 
@@ -65,17 +66,20 @@ jobs:
       # A download that fails falls back to the restored copy and passes; only with neither does
       # this fail, and then main holds no copy for the next release until a run here succeeds.
       - name: Download the IOTA lists
+        id: stage
         run: |
           set -euo pipefail
-          node scripts/gen-iota-groups.mjs --download src-tauri/resources/iota --fallback ~/.nexus-iota-cache
+          out="$RUNNER_TEMP/iota-lists"
+          node scripts/gen-iota-groups.mjs --download "$out" --fallback ~/.nexus-iota-cache
+          # The lists' content names the cache entry; release.yml's iota-lists job computes it the same way.
+          echo "hash=$(cat "$out/iota_groups.json" "$out/iota_islands.json" | sha256sum | cut -c1-64)" >> "$GITHUB_OUTPUT"
           rm -rf ~/.nexus-iota-cache
           mkdir -p ~/.nexus-iota-cache
-          cp src-tauri/resources/iota/iota_groups.json src-tauri/resources/iota/iota_islands.json \
-            src-tauri/resources/iota/iota_groups.manifest.json ~/.nexus-iota-cache/
+          cp "$out/iota_groups.json" "$out/iota_islands.json" "$out/iota_groups.manifest.json" ~/.nexus-iota-cache/
 
       - name: Save the IOTA lists when they changed
-        if: github.ref == 'refs/heads/main' && !endsWith(steps.iota-cache.outputs.cache-matched-key, format('-{0}', hashFiles('src-tauri/resources/iota/iota_groups.json', 'src-tauri/resources/iota/iota_islands.json')))
+        if: github.ref == 'refs/heads/main' && !endsWith(steps.iota-cache.outputs.cache-matched-key, format('-{0}', steps.stage.outputs.hash))
         uses: actions/cache/save@v6
         with:
           path: ~/.nexus-iota-cache
-          key: iota-lists-main-${{ hashFiles('src-tauri/resources/iota/iota_groups.json', 'src-tauri/resources/iota/iota_islands.json') }}
+          key: iota-lists-main-${{ steps.stage.outputs.hash }}

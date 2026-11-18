@@ -332,3 +332,36 @@ test('CONTROL: good sources are staged as new, with the cache directory unused',
   assert.ok(manifest.fetchedAt >= before, 'dated now')
   assert.equal(manifest.islands, 10_001)
 })
+
+test('--checked stages lists another job handed over, checked, with their own date and no download', (t) => {
+  const handed = cacheDir(t, 1_700_000_000)
+  const out = tempDir(t)
+  const r = run('--checked', handed, out)
+  assert.equal(r.status, 0, r.stderr)
+  assert.match(r.stderr, /handed-over lists in .* checked \(fetched 2023-11-14T22:13:20\.000Z\)/)
+  assert.doesNotMatch(r.stderr + r.stdout, /attempt|cache miss|using the cached copy/)
+  assert.deepEqual(readFileSync(join(out, 'iota_groups.json')), groups())
+  assert.deepEqual(readFileSync(join(out, 'iota_islands.json')), islands(10_000))
+  const manifest = JSON.parse(readFileSync(join(out, 'iota_groups.manifest.json'), 'utf8'))
+  assert.equal(manifest.fetchedAt, 1_700_000_000)
+  assert.equal(manifest.islands, 10_000)
+})
+
+test('--checked refuses a hand-over that fails the cache checks, and stages nothing', (t) => {
+  for (const spoil of [
+    (d) => writeFileSync(join(d, 'extra.sh'), 'echo hi'),
+    (d) => rmSync(join(d, 'iota_islands.json')),
+    (d) => writeFileSync(join(d, 'iota_groups.json'), '[]'),
+  ]) {
+    const handed = cacheDir(t)
+    spoil(handed)
+    const out = tempDir(t)
+    const r = run('--checked', handed, out)
+    assert.equal(r.status, 1)
+    assert.match(r.stderr, /the handed-over IOTA lists cannot be used: /)
+    assert.deepEqual(readdirSync(out), [])
+  }
+  const r = run('--checked', cacheDir(t), tempDir(t), '--fallback', cacheDir(t))
+  assert.equal(r.status, 1)
+  assert.match(r.stderr, /--checked takes no --fallback/)
+})
