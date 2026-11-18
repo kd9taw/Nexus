@@ -1324,15 +1324,16 @@ jobs:
         with:
           path: dist
           name: nexus-macos-${{ matrix.suffix }}
+      # The DMG alone, or the DMG with the updater bundle and its signature. This job holds no
+      # secret, not even whether the key exists (its runner would be handed the key to find out):
+      # the macos job already fails when the key exists and no bundle was made, and publish
+      # checks the set again against the key.
       - name: Check the artifact holds exactly the expected files
-        env:
-          # Whether the key exists, not the key: with it, the macos job ships the updater bundle.
-          SIGNING_KEY_PRESENT: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
         run: |
           set -euo pipefail
           ver=$(grep -m1 '"version"' src-tauri/tauri.conf.json | sed -E 's/.*"version": *"([^"]+)".*/\1/')
           f="Nexus_${ver}_${{ matrix.suffix }}"
-          if [ "$SIGNING_KEY_PRESENT" = true ]; then
+          if [ -e "dist/$f.app.tar.gz" ] || [ -e "dist/$f.app.tar.gz.sig" ]; then
             bash scripts/check-artifact-set.sh dist "$f.dmg" "$f.app.tar.gz" "$f.app.tar.gz.sig"
           else
             bash scripts/check-artifact-set.sh dist "$f.dmg"

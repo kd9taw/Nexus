@@ -656,6 +656,26 @@ test('release.yml: no step or job that builds or runs third-party code can see a
   assert.deepEqual(v, [], `\n${v.join('\n')}\n`);
 });
 
+// The smoke jobs run the built app and install tools from Homebrew, and a runner is handed every
+// secret its job references when the job starts, whether a step reads the value or only asks
+// whether it is set (`secrets.X != ''` is evaluated on the runner). So no smoke job references a
+// signing secret at all, not even to test for one: what the key decides, the build job enforces.
+function smokeSigningRefs(wf) {
+  return wf.refs
+    .filter((r) => r.scope !== 'comment' && r.path[0] === 'jobs' && /^smoke-/.test(r.path[1] ?? '') && r.secret && signingGrade(r.secret))
+    .map((r) => `job ${r.path[1]}, line ${r.line}: references ${r.secret}`);
+}
+
+test('no smoke job references a signing secret, not even whether one is set', () => {
+  assert.deepEqual(smokeSigningRefs(WF), []);
+  const planted = plant(
+    TEXT,
+    '      - name: Check the artifact holds exactly the expected files\n        run: |\n          set -euo pipefail\n          ver=',
+    "      - name: Check the artifact holds exactly the expected files\n        env:\n          SIGNING_KEY_PRESENT: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}\n        run: |\n          set -euo pipefail\n          ver=",
+  );
+  assert.equal(smokeSigningRefs(readWorkflow(planted)).length, 1);
+});
+
 test('a signing key planted in a build step is reported', () => {
   const planted = plant(
     TEXT,
