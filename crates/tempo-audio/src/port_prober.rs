@@ -456,15 +456,14 @@ mod tests {
     /// A stand-in rigctld that starts listening only after `after`, as the real one does: it opens
     /// the rig BEFORE it listens, and Hamlib's open takes ~0.77 s for an FT-847 (its per-byte
     /// write delays) and ~1.7 s for an FT-817/818 (`ft817_open` sleeps 1.5 s). It answers `f`.
+    /// The port is held bound until it listens, so a connect before then is refused and no other
+    /// test's `:0` bind can be given it meanwhile.
     fn late_rigctld(after: Duration) -> String {
-        let port = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
+        let (socket, addr) = held_port();
         std::thread::spawn(move || {
             std::thread::sleep(after);
-            let l = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+            socket.listen(128).unwrap();
+            let l = std::net::TcpListener::from(socket);
             if let Ok((mut s, _)) = l.accept() {
                 use std::io::{Read, Write};
                 let mut b = [0u8; 64];
@@ -473,7 +472,21 @@ mod tests {
                 std::thread::sleep(Duration::from_secs(2));
             }
         });
-        format!("127.0.0.1:{port}")
+        addr
+    }
+
+    /// A loopback port bound and never listened on, and its address: a connect there is refused
+    /// for as long as the socket lives, and no other socket can take the port. A port bound and
+    /// let go is free for the next `:0` bind anywhere on this computer, and another test's
+    /// listener there answers a connect that was meant to find nobody.
+    fn held_port() -> (socket2::Socket, String) {
+        use socket2::{Domain, Socket, Type};
+        let socket = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
+        socket
+            .bind(&std::net::SocketAddr::from(([127, 0, 0, 1], 0)).into())
+            .unwrap();
+        let at = socket.local_addr().unwrap().as_socket().unwrap();
+        (socket, at.to_string())
     }
 
     /// ⭐ THE PROBE WAITS FOR RIGCTLD, not a fixed 700 ms. One read at 700 ms found nothing behind
@@ -492,10 +505,7 @@ mod tests {
     /// port), so a dead candidate costs nothing extra.
     #[test]
     fn the_wait_gives_up_at_its_deadline_and_at_once_for_a_daemon_that_exited() {
-        let nobody = {
-            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            format!("127.0.0.1:{}", l.local_addr().unwrap().port())
-        };
+        let (_held, nobody) = held_port();
         let t = std::time::Instant::now();
         assert_eq!(
             read_freq_when_listening(&nobody, Duration::from_millis(600), || true),
