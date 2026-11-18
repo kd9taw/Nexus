@@ -22043,6 +22043,7 @@ mod tests {
     mod cw_speed_match;
     mod cw_stop;
     mod cw_tune_keyer;
+    mod daemon_no_answer;
     mod decode_in_flight;
     mod failed_unkey;
     mod filter_width;
