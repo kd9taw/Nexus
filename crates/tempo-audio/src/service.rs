@@ -46484,12 +46484,12 @@ mod tests {
         assert_eq!(offs, 2, "the second QSY sends S 0 again");
     }
 
-    /// ⚠️ THE CROSS-BAND CASE. Split on at 14.345, the radio keyed at its front panel, then a QSY to
-    /// 40 m with a split request there past the 40 m edge. While keyed nothing is written; once
-    /// the key is up the request goes out (unkeyed, the key-time gate then judges it), so the
-    /// radio is not left on the old 20 m VFO B after the dial moves.
+    /// ⛔ THE CROSS-BAND CASE. Split on at 14.345, the radio keyed at its front panel, then a QSY to
+    /// 40 m with a split request there past the 40 m edge. The refused split is never written,
+    /// keyed or after the unkey (a front-panel PTT would transmit on it); the QSY's own `S 0`
+    /// goes out in its place, so the radio is not left on the old 20 m VFO B either.
     #[test]
-    fn a_split_request_after_a_qsy_refused_while_keyed_goes_out_at_the_unkey() {
+    fn a_split_request_after_a_qsy_refused_while_keyed_gives_way_to_the_qsys_simplex() {
         let (addr, seen) = recording_rigctld_stub();
         let engine = engine_on(3073);
         {
@@ -46524,12 +46524,14 @@ mod tests {
             .collect();
         assert_eq!(
             wire,
-            vec!["S 1 VFOB", "I 14345000", "S 1 VFOB", "I 7301000"],
-            "nothing while keyed; at the unkey the new band's request, never left behind"
+            vec!["S 1 VFOB", "I 14345000", "S 0 VFOA"],
+            "the refused split never reaches the radio; the QSY's S 0 does"
         );
+        let e = engine.lock().unwrap();
+        assert_eq!(e.split_tx_mhz(), None, "Nexus is simplex, as the radio is");
         assert!(
-            !engine.lock().unwrap().tx_allowed(),
-            "and the key-time gate refuses the out-of-band split before anything keys"
+            e.tx_allowed(),
+            "and the 40 m dial is judged, inside the licence"
         );
     }
 
