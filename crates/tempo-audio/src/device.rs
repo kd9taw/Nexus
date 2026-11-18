@@ -2619,6 +2619,10 @@ impl AudioBackend for CpalBackend {
         self.capture_input.clone()
     }
 
+    fn capture_is_streaming(&self) -> bool {
+        self._in_stream.is_some()
+    }
+
     fn take_stream_error(&mut self) -> Option<String> {
         self.stream_err
             .lock()
