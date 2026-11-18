@@ -2,7 +2,7 @@
 // verify-updater-sigs.mjs — prove each file's updater signature against the public key every
 // shipped client trusts, before the release goes out.
 //
-//   usage: node scripts/verify-updater-sigs.mjs <tauri.conf.json> <file>...
+//   usage: node scripts/verify-updater-sigs.mjs --version <ver> --not-before <unix time> <tauri.conf.json> <file>...
 //
 // WHY. sign-updaters signs the Windows and Linux installers and the macOS bundler signs its
 // updater tarball, each in another job; publish then takes those bytes back out of the artifact
@@ -17,10 +17,22 @@
 //     tauri-cli and tauri's bundler write; legacy "Ed" over the raw file is accepted as minisign
 //     itself does);
 //   - the global signature verifies over the signature and its trusted comment, so the comment
-//     (timestamp, file, version) cannot have been edited.
+//     (timestamp, file, version) cannot have been edited;
+//   - and then what that verified comment SAYS. A signature checked only for being valid can be
+//     replayed: an older installer swapped in with its own old .sig is signed by the right key over
+//     exactly its bytes. So the comment's `file:` must be this file's name, its `version:` this
+//     release's, and its `timestamp:` no earlier than --not-before (this run, less a margin), so a
+//     signature from an earlier run of the same version cannot be replayed under the same name.
+//
+// THE COMMENT, as tauri writes it: `timestamp:<unix>\tfile:<name>\tversion:<ver>`. sign-updaters
+// (tauri-cli `signer sign --app-version`) names the file it signed, which is the shipped name. The
+// macOS bundler signs the tarball as `Nexus.app.tar.gz`, before the macos job renames it
+// Nexus_<ver>_<arch>.app.tar.gz, so a `.app.tar.gz` may also carry that one name. For those two, the
+// version and the timestamp are what tie the signature to this release, not the file name.
 // No secret: it reads only the public key. Node's own crypto, so nothing is installed for it.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import path from 'node:path';
 
 const fail = (why) => {
   console.error(`verify-updater-sigs: ${why}`);
@@ -45,8 +57,18 @@ function blake2b512(file) {
   return h.digest();
 }
 
-const [conf, ...files] = process.argv.slice(2);
-if (!conf || !files.length) fail('usage: verify-updater-sigs.mjs <tauri.conf.json> <file>...');
+const args = process.argv.slice(2);
+const flag = (name) => {
+  const i = args.indexOf(name);
+  if (i < 0 || args[i + 1] === undefined) fail(`usage: verify-updater-sigs.mjs --version <ver> --not-before <unix time> <tauri.conf.json> <file>...`);
+  return args.splice(i, 2)[1];
+};
+const version = flag('--version');
+const notBefore = Number(flag('--not-before'));
+if (!Number.isInteger(notBefore)) fail('--not-before is not a unix time');
+const [conf, ...files] = args;
+if (!conf || !files.length) fail('usage: verify-updater-sigs.mjs --version <ver> --not-before <unix time> <tauri.conf.json> <file>...');
+const BUNDLER_TARBALL = 'Nexus.app.tar.gz';
 
 const pubB64 = JSON.parse(fs.readFileSync(conf, 'utf8'))?.plugins?.updater?.pubkey;
 if (!pubB64) fail(`no plugins.updater.pubkey in ${conf}`);
@@ -74,5 +96,18 @@ for (const file of files) {
   if (!crypto.verify(null, Buffer.concat([sig.subarray(10), Buffer.from(comment)]), key, global)) {
     fail(`${sigFile}: the trusted comment does not verify (edited after signing)`);
   }
+  // Only now is the comment worth reading: it is what the key holder signed.
+  const fields = new Map(comment.split('\t').map((f) => [f.slice(0, f.indexOf(':')), f.slice(f.indexOf(':') + 1)]).filter(([k]) => k));
+  const name = path.basename(file);
+  const signedFor = fields.get('file');
+  if (signedFor === undefined) fail(`${sigFile}: the trusted comment names no file`);
+  if (signedFor !== name && !(name.endsWith('.app.tar.gz') && signedFor === BUNDLER_TARBALL)) {
+    fail(`${sigFile} was signed for ${signedFor}, not ${name}`);
+  }
+  if (!fields.has('version')) fail(`${sigFile}: the trusted comment binds no version`);
+  if (fields.get('version') !== version) fail(`${sigFile} was signed for version ${fields.get('version')}, not ${version}`);
+  const ts = fields.get('timestamp');
+  if (!/^[0-9]+$/.test(ts ?? '')) fail(`${sigFile}: the trusted comment has no timestamp`);
+  if (Number(ts) < notBefore) fail(`${sigFile} was signed at ${ts}, older than this run (not before ${notBefore})`);
   console.log(`verified: ${file} (${comment})`);
 }

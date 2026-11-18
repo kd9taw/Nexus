@@ -45,6 +45,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -805,43 +806,61 @@ const GATHER = 'Check each artifact holds exactly the expected files, and gather
 const VERIFY_SIGS = 'Verify every updater signature against the key clients trust';
 const FIXTURE_SIG = path.join(ROOT, 'scripts', 'fixtures', 'updater-sig');
 const FIXTURE_FILE = 'payload.txt'; // not .exe: .gitignore drops those, and the signature covers the bytes, not the name
-function runPublishGather({ text = TEXT, legs = ['aarch64', 'x64'], key = true, tamper = null, dropSig = null } = {}) {
+const VERIFY = path.join(ROOT, 'scripts', 'verify-updater-sigs.mjs');
+
+// A minisign signer in the format tauri writes (prehashed "ED", the whole file base64-wrapped), with
+// a key made per run, so a signature is always fresh and a test never ages out. The tauri-cli
+// fixture above proves the format against the real signer.
+function updaterKey() {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const id = crypto.randomBytes(8);
+  const raw = publicKey.export({ format: 'der', type: 'spki' }).subarray(12);
+  const pub = `untrusted comment: minisign public key: X\n${Buffer.concat([Buffer.from('Ed'), id, raw]).toString('base64')}\n`;
+  const conf = `${JSON.stringify({ plugins: { updater: { pubkey: Buffer.from(pub).toString('base64') } } })}\n`;
+  const sign = (data, comment) => {
+    const sig = crypto.sign(null, crypto.createHash('blake2b512').update(data).digest(), privateKey);
+    const global = crypto.sign(null, Buffer.concat([sig, Buffer.from(comment)]), privateKey);
+    const text = `untrusted comment: signature from tauri secret key\n${Buffer.concat([Buffer.from('ED'), id, sig]).toString('base64')}\ntrusted comment: ${comment}\n${global.toString('base64')}\n`;
+    return Buffer.from(text).toString('base64');
+  };
+  return { conf, sign };
+}
+const now = () => Math.floor(Date.now() / 1000);
+// What tauri writes: sign-updaters binds the file's own name; the macOS bundler signs the tarball
+// as Nexus.app.tar.gz before the macos job renames it. Both bind the version.
+const tauriComment = (name, ver, ts = now()) =>
+  `timestamp:${ts}\tfile:${name.endsWith('.app.tar.gz') ? 'Nexus.app.tar.gz' : name}\tversion:${ver}`;
+
+function runPublishGather({ text = TEXT, legs = ['aarch64', 'x64'], key = true, tamper = null, dropSig = null, comments = {} } = {}) {
   const wf = readWorkflow(text);
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'publish-gather-'));
   try {
     const at = (...p) => path.join(dir, ...p);
     fs.symlinkSync(path.join(ROOT, 'scripts'), at('scripts'));
     fs.mkdirSync(at('src-tauri'));
-    // The fixture's key stands in for the one clients trust; its payload, signed by tauri-cli, for
-    // every signed installer and bundle.
-    fs.copyFileSync(path.join(FIXTURE_SIG, 'tauri.conf.json'), at('src-tauri', 'tauri.conf.json'));
+    const k = updaterKey();
+    fs.writeFileSync(at('src-tauri', 'tauri.conf.json'), k.conf);
     const v = '9.9.9';
-    const put = (artifact, name, signed = false) => {
+    const signed = [];
+    const put = (artifact, name, sigIn = null) => {
       fs.mkdirSync(at('artifacts', artifact), { recursive: true });
-      if (signed) fs.copyFileSync(path.join(FIXTURE_SIG, FIXTURE_FILE), at('artifacts', artifact, name));
-      else fs.writeFileSync(at('artifacts', artifact, name), name);
-      if (name === tamper) fs.appendFileSync(at('artifacts', artifact, name), 'replaced after signing');
+      fs.writeFileSync(at('artifacts', artifact, name), `stand-in for ${name}`);
+      if (sigIn) signed.push({ file: at('artifacts', artifact, name), name, sigDir: at('artifacts', sigIn) });
     };
-    const sig = (artifact, name) => {
-      fs.mkdirSync(at('artifacts', artifact), { recursive: true });
-      if (name !== dropSig) fs.copyFileSync(path.join(FIXTURE_SIG, `${FIXTURE_FILE}.sig`), at('artifacts', artifact, `${name}.sig`));
-    };
-    put('nexus-linux-x86', `Nexus_${v}_amd64.AppImage`, key);
+    put('nexus-linux-x86', `Nexus_${v}_amd64.AppImage`, key && 'nexus-updater-sigs');
     put('nexus-linux-x86', `Nexus_${v}_pc_amd64.deb`);
-    put('nexus-windows', `Nexus_${v}_x64-setup.exe`, key);
+    put('nexus-windows', `Nexus_${v}_x64-setup.exe`, key && 'nexus-updater-sigs');
     put('nexus-windows', `Nexus_${v}_x64.sym.gz`);
     put('nexus-manual', 'Nexus-Manual.pdf');
     put('nexus-manual', 'Nexus-Manual.epub');
     for (const sfx of legs) {
       put(`nexus-macos-${sfx}`, `Nexus_${v}_${sfx}.dmg`);
-      if (key) {
-        put(`nexus-macos-${sfx}`, `Nexus_${v}_${sfx}.app.tar.gz`, true);
-        sig(`nexus-macos-${sfx}`, `Nexus_${v}_${sfx}.app.tar.gz`);
-      }
+      if (key) put(`nexus-macos-${sfx}`, `Nexus_${v}_${sfx}.app.tar.gz`, `nexus-macos-${sfx}`);
     }
-    if (key) {
-      sig('nexus-updater-sigs', `Nexus_${v}_x64-setup.exe`);
-      sig('nexus-updater-sigs', `Nexus_${v}_amd64.AppImage`);
+    for (const { file, name, sigDir } of signed) {
+      fs.mkdirSync(sigDir, { recursive: true });
+      if (name !== dropSig) fs.writeFileSync(path.join(sigDir, `${name}.sig`), k.sign(fs.readFileSync(file), comments[name] ?? tauriComment(name, v)));
+      if (name === tamper) fs.appendFileSync(file, 'replaced after signing');
     }
     const env = { ...process.env, GITHUB_REF_NAME: `v${v}`, SIGNING_KEY_PRESENT: String(key) };
     const missing = [];
@@ -851,7 +870,7 @@ function runPublishGather({ text = TEXT, legs = ['aarch64', 'x64'], key = true, 
       const step = wf.jobs.get('publish').steps.find((x) => x?.name === name);
       if (!step) { missing.push(name); continue; }
       const r = spawnSync('bash', ['-c', step.run], { cwd: dir, env, encoding: 'utf8' });
-      stderr += r.stderr;
+      stderr += r.stdout + r.stderr;
       if (r.status !== 0) { status = r.status; break; }
     }
     const dist = fs.existsSync(at('dist')) ? fs.readdirSync(at('dist')).sort() : [];
@@ -902,23 +921,74 @@ test('publish refuses an installer or bundle that is not the one that was signed
   assert.notEqual(unsigned.status, 0, 'publish passed a macOS bundle with no signature');
 });
 
-test("the signature check refuses a missing signature, another key, and an edited trusted comment", () => {
-  const verify = (conf, file) => spawnSync('node', [path.join(ROOT, 'scripts', 'verify-updater-sigs.mjs'), conf, file], { encoding: 'utf8' });
-  const conf = path.join(FIXTURE_SIG, 'tauri.conf.json');
-  assert.equal(verify(conf, path.join(FIXTURE_SIG, FIXTURE_FILE)).status, 0, 'the tauri-cli fixture verifies');
-  assert.match(verify(path.join(ROOT, 'src-tauri', 'tauri.conf.json'), path.join(FIXTURE_SIG, FIXTURE_FILE)).stderr, /but clients trust/);
+test('publish refuses an older installer swapped in with its own valid signature', () => {
+  // Signed by the right key, over exactly these bytes, but for another release: by name, by
+  // version, and by age. Each alone must fail publish.
+  const exe = 'Nexus_9.9.9_x64-setup.exe';
+  for (const comment of [
+    `timestamp:${now()}\tfile:Nexus_9.9.8_x64-setup.exe\tversion:9.9.8`,
+    `timestamp:${now()}\tfile:${exe}\tversion:9.9.8`,
+    `timestamp:${now() - 3 * 86400}\tfile:${exe}\tversion:9.9.9`,
+  ]) {
+    const r = runPublishGather({ comments: { [exe]: comment } });
+    assert.notEqual(r.status, 0, `publish passed ${exe} signed as ${JSON.stringify(comment)}`);
+  }
+});
+
+test('the signature check reads the trusted comment it verified: file, version and age', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'updater-sig-'));
   try {
-    const file = path.join(dir, FIXTURE_FILE);
-    fs.copyFileSync(path.join(FIXTURE_SIG, FIXTURE_FILE), file);
-    assert.match(verify(conf, file).stderr, /has no signature beside it/);
-    const lines = Buffer.from(fs.readFileSync(path.join(FIXTURE_SIG, `${FIXTURE_FILE}.sig`), 'utf8'), 'base64').toString().split('\n');
-    lines[2] = lines[2].replace('file:', 'version:9.9.10\tfile:');
+    const k = updaterKey();
+    const conf = path.join(dir, 'tauri.conf.json');
+    fs.writeFileSync(conf, k.conf);
+    const notBefore = now() - 86400;
+    const check = (name, comment, { sign = true, ver = '9.9.9' } = {}) => {
+      const file = path.join(dir, name);
+      fs.writeFileSync(file, `stand-in for ${name}`);
+      fs.rmSync(`${file}.sig`, { force: true });
+      if (sign) fs.writeFileSync(`${file}.sig`, k.sign(fs.readFileSync(file), comment));
+      return spawnSync('node', [VERIFY, '--version', ver, '--not-before', String(notBefore), conf, file], { encoding: 'utf8' });
+    };
+    const exe = 'Nexus_9.9.9_x64-setup.exe';
+    const tar = 'Nexus_9.9.9_x64.app.tar.gz';
+    assert.equal(check(exe, tauriComment(exe, '9.9.9')).status, 0, 'a good signature passes');
+    assert.equal(check(tar, tauriComment(tar, '9.9.9')).status, 0, "the bundler's Nexus.app.tar.gz passes for a tarball");
+    assert.equal(check(tar, `timestamp:${now()}\tfile:${tar}\tversion:9.9.9`).status, 0, 'its own name passes for a tarball');
+    const refused = [
+      [exe, `timestamp:${now()}\tfile:Nexus_9.9.9_amd64.AppImage\tversion:9.9.9`, /signed for Nexus_9.9.9_amd64.AppImage/],
+      [exe, `timestamp:${now()}\tfile:Nexus.app.tar.gz\tversion:9.9.9`, /signed for Nexus.app.tar.gz/],
+      [exe, `timestamp:${now()}\tversion:9.9.9`, /names no file/],
+      [exe, `timestamp:${now()}\tfile:${exe}`, /binds no version/],
+      [exe, `timestamp:${now()}\tfile:${exe}\tversion:9.9.8`, /version 9.9.8, not 9.9.9/],
+      [exe, `timestamp:${notBefore - 1}\tfile:${exe}\tversion:9.9.9`, /older than this run/],
+      [exe, `file:${exe}\tversion:9.9.9`, /no timestamp/],
+    ];
+    for (const [name, comment, why] of refused) {
+      const r = check(name, comment);
+      assert.notEqual(r.status, 0, `passed ${JSON.stringify(comment)}`);
+      assert.match(r.stderr, why);
+    }
+    assert.match(check(exe, '', { sign: false }).stderr, /has no signature beside it/);
+    // An edited trusted comment: the global signature no longer covers it.
+    const file = path.join(dir, exe);
+    check(exe, tauriComment(exe, '9.9.9'));
+    const lines = Buffer.from(fs.readFileSync(`${file}.sig`, 'utf8'), 'base64').toString().split('\n');
+    lines[2] = lines[2].replace('version:9.9.9', 'version:9.9.10');
     fs.writeFileSync(`${file}.sig`, Buffer.from(lines.join('\n')).toString('base64'));
-    assert.match(verify(conf, file).stderr, /trusted comment does not verify/);
+    assert.match(spawnSync('node', [VERIFY, '--version', '9.9.10', '--not-before', String(notBefore), conf, file], { encoding: 'utf8' }).stderr, /trusted comment does not verify/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('the signature check reads what tauri-cli writes, and checks the key it trusts', () => {
+  // The fixture was signed by tauri-cli 2.11.2 as Nexus_9.9.9_x64-setup.exe and stored as payload.txt.
+  // The comment is read only after the signature and the comment itself verify, so being refused for
+  // its file name is the proof that both did.
+  const conf = path.join(FIXTURE_SIG, 'tauri.conf.json');
+  const run = (c) => spawnSync('node', [VERIFY, '--version', '9.9.9', '--not-before', '0', c, path.join(FIXTURE_SIG, FIXTURE_FILE)], { encoding: 'utf8' });
+  assert.match(run(conf).stderr, /was signed for Nexus_9\.9\.9_x64-setup\.exe, not payload\.txt/);
+  assert.match(run(path.join(ROOT, 'src-tauri', 'tauri.conf.json')).stderr, /but clients trust/);
 });
 
 // ---- The artifact set check (scripts/check-artifact-set.sh) -------------------------------------

@@ -1779,7 +1779,11 @@ jobs:
           ver="${GITHUB_REF_NAME#v}"
           signed=("dist/Nexus_${ver}_x64-setup.exe" "dist/Nexus_${ver}_amd64.AppImage")
           for t in dist/Nexus_"${ver}"_*.app.tar.gz; do signed+=("$t"); done
-          node scripts/verify-updater-sigs.mjs src-tauri/tauri.conf.json "${signed[@]}"
+          # Each signature must also be FOR this release: this file name, this version, and made in
+          # this run (24 h covers the longest run). Otherwise an older installer swapped in with its
+          # own valid .sig would pass. See the script's header for the macOS tarball's name.
+          node scripts/verify-updater-sigs.mjs --version "$ver" --not-before "$(( $(date +%s) - 86400 ))" \
+            src-tauri/tauri.conf.json "${signed[@]}"
 
       - name: Derive + cross-check the version
         id: ver
