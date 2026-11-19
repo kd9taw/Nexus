@@ -61,6 +61,22 @@ export async function getScopeFrame(lo: number, hi: number): Promise<any> {
   return { seq: 1, tMs: Date.now(), source: 'audio', loHz: lo, hiHz: hi, scale: { kind: 'relative' }, bins: new Array(512).fill(0.2) }
 }
 export async function getRfFrame(): Promise<any> { return null }
+// RTTY's and JTTY's state as the cockpits read it on mount (the folded-dock pages; waterfalls-api.ts's shapes): the
+// generated `{}` default has no `charConf`, and RTTY crashed on it.
+// `probe.rtty` (JSON) lays a page's own fields over the idle state: an auto QSO under way, so its Abort is drawn.
+let rttyOver: any = {}
+try { rttyOver = JSON.parse(localStorage.getItem('probe.rtty') ?? '{}') } catch {}
+const rtty: any = { armed: true, afcHz: 0, afcLocked: false, text: '', charConf: [], baud: 45.45, shiftHz: 170, backend: 'afsk',
+  sending: false, latched: false, keyerError: null, markHz: 2125, spaceHz: 2295, auto: false, seqState: 'idle', peer: null, peerExchange: [], heardCq: null,
+  ...rttyOver }
+const jtty: any = { armed: true, rxHz: 1500, ftolHz: 20, lowHz: 200, highHz: 3000, lines: [], heard: [], notice: null }
+export async function getRttyState(): Promise<any> { return rtty }
+export async function rttyAutoArm(): Promise<any> { return rtty }
+export async function rttyArm(): Promise<any> { return rtty }
+export async function getJttyState(): Promise<any> { return jtty }
+export async function jttyAutoArm(): Promise<any> { return jtty }
+export async function jttyArm(): Promise<any> { return jtty }
+export async function jttySetBand(lo: number, hi: number): Promise<any> { return { ...jtty, lowHz: lo, highHz: hi } }
 export async function cwDecode(): Promise<any> {
   return { text: '', pending: '', wpm: null, sent: [], keyerError: null, paddleTookOver: false, unassisted: false, candidates: [],
     workedCall: null, rst: null, name: null, turn: null }

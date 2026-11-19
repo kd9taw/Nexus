@@ -8,7 +8,11 @@
 // `?case=strip`: the call just above the TX strip, the dock under that: the room under the call is too
 // short, so the card must go elsewhere. `?case=qso`: FT's QSO strip with its Stop directly under a call
 // near the top. Each Stop TX stands under the call, where the card would go if nothing kept it off.
-// `&avoid=off` is the CONTROL: the same boxes without their transmit classes, so the card
+// `?case=folded`: a FOLDED keyboard dock, as RTTY's folds on a small window: the dock is `display: contents` (the
+// real `.cockpit-txdock[data-fold='on']` rule) and has no box, its auto row with the sequencer's Abort (a stop
+// control in a row OUTSIDE the keep row) stands directly under a call near the top, and the keep row with Esc/Stop
+// and the TX latch is parked at the foot. The card must keep off Abort and the keep row though the dock has no box.
+// `&avoid=off` is the CONTROL: the same boxes without their transmit classes (and stop markers), so the card
 // is free to land on them, and the probe must see it there.
 //
 // `?case=phone`: Phone's log strip Card button, for a call the strip has ALREADY looked up (the
@@ -34,6 +38,8 @@ const avoid = params.get('avoid') !== 'off'
 const best = params.get('card') === 'best'
 /** The class a box has in a cockpit, or none in the control. */
 const tx = (cls: string) => (avoid ? cls : 'probe-not-tx')
+/** A stop control's marker (`data-stop-control`), or none in the control. */
+const stopMark = (value: string) => (avoid ? { 'data-stop-control': value } : {})
 
 document.documentElement.setAttribute('data-theme', 'dark')
 if (params.get('zoom')) document.documentElement.style.setProperty('--ui-zoom', params.get('zoom')!)
@@ -107,6 +113,23 @@ function Probe() {
           </button>
           <div className={tx('cockpit-txdock')} data-tx="TX dock" style={at({ left: 0, right: 0, bottom: 0, height: 90 })}>
             <button type="button">PTT</button>
+          </div>
+        </>
+      ) : which === 'folded' ? (
+        <>
+          <button type="button" className="probe-call" style={at({ left: 120, top: 100, height: 24 })} {...trigger('EC1DD')}>
+            EC1DD
+          </button>
+          <div className={tx('cockpit-txdock')} data-fold="on">
+            <div className="cw-macros rtty-auto-row" style={at({ left: 0, width: 700, top: 132, height: 44, display: 'flex', gap: 8, padding: '4px 4px 4px 130px' })}>
+              <span className="rtty-auto-status">CQ</span>
+              <button type="button" className="cw-macro rtty-auto-stop" data-tx="Abort" {...stopMark('sequencer-abort')}>Esc Abort</button>
+            </div>
+            <div className={tx('cockpit-txdock-keep')} data-fold="on" data-tx="keep row" style={at({ left: 0, right: 0, bottom: 0, height: 64, display: 'flex', gap: 8 })}>
+              <button type="button">Send</button>
+              <button type="button">TX Continuous</button>
+              <button type="button" className="cw-macro rtty-stop" data-tx="Esc Stop" {...stopMark('esc-stop')}>Esc Stop</button>
+            </div>
           </div>
         </>
       ) : which === 'strip' ? (

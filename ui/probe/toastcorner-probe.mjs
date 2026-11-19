@@ -18,6 +18,15 @@
 //      cluster, any Stop button);
 //   2. the column is inside the window, stands in the corner chosen, and is never shorter than one toast.
 // Then the first visits: FT with a burst of twenty up, switched to PSK and to JTTY, in each corner at each size.
+// Then THE FOLDED DOCK: RTTY at 900×600 and 700×800 and JTTY at 1280×720, all at 175 %, where the dock folds
+// (cockpit-panes.css `.cockpit-txdock[data-fold='on']`: the dock has no box and only its keep row — Send, PTT,
+// Esc/Stop and the TX latch — stays parked at the foot). One LARGE sticky notice with a long action label, in each
+// corner: check 1 holds for the keep row's buttons too, and a page whose dock did not fold is a red (the case
+// would not be tested). A notice that size once stood over Esc/Stop and the latch: the column measured the
+// folded dock, which has no box, and not the keep row. RTTY at 900×600 and 700×800 again WITH AN AUTO QSO RUNNING:
+// the sequencer's Abort is a stop control in a dock row outside the keep row, so folded it scrolls with the panes.
+// On the folded pages the check runs at every scroll position of the shell for every stop control (`data-stop-control`)
+// and the keep row; the notice once stood over Abort at the end of the scroll.
 // THE CONTROL, at one page: Phone, the floor, bottom left, one toast, with the column forced back to the bare
 // corner (16 px, no height cap). The probe must see the toast over PTT; if it does not, the check cannot
 // fail and the probe says so instead of passing.
@@ -43,7 +52,7 @@ const BURSTS = (process.env.PROBE_BURSTS ?? '9').split(',').map(Number)
 // The pinned zooms the UI offers at its ends (65 % and 175 %), on the two screens whose dock a bottom
 // corner meets (Phone's PTT, CW's Send): the column's room is window px divided by the zoom, and a wrong
 // division is exactly a toast on PTT at 65 %. PROBE_SET=base, =zoom or =switch runs one part (a loaded
-// box's foreground budget); unset, all three.
+// box's foreground budget); =fold runs the folded-dock pages alone. Unset, all four.
 // xs: 900×600 (the shell's own minimum window, off the matrix) at the app's 175 % is 514×343 effective — the
 // row that keeps the xs layout here; 1366×768 at 175 % is 780 px, sm.
 const ZOOMED = [[LAPTOP, '65'], [FHD, '65'], [LAPTOP, '175'], [FHD, '175'], [offMatrix(900, 600), '175']]
@@ -52,22 +61,40 @@ const PAGES = [
   ...(SET === 'all' || SET === 'base' ? SIZES.map((size) => [size, 'auto', SCREENS]) : []),
   ...(SET === 'all' || SET === 'zoom' ? ZOOMED.map(([size, scale]) => [size, scale, ['phone', 'cw']]) : []),
 ]
+// The folded-dock pages: [screen, size, app zoom]. Each folds its dock there (measured in the digishell probe).
+// The fourth field, where there is one, is RTTY's state over the stub's idle one: an auto QSO calling CQ, so the
+// sequencer's Abort (a stop control in a dock row OUTSIDE the keep row) is drawn and scrolls with the panes.
+const AUTO_QSO = { auto: true, seqState: 'calling_cq' }
+const FOLDED = [['rtty', offMatrix(900, 600), '175'], ['rtty', offMatrix(700, 800), '175'], ['jtty', offMatrix(1280, 720), '175'],
+  ['rtty', offMatrix(900, 600), '175', AUTO_QSO], ['rtty', offMatrix(700, 800), '175', AUTO_QSO]]
+// A notice as large as the app raises: a sentence that wraps over several lines and a long action label.
+const BIG_MESSAGE =
+  'The radio stopped answering CAT on COM7 at 9600 baud. Nexus tried the other speeds and the second port and got no reply, so the dial and the band shown here may be stale until it answers again.'
+const BIG_LABEL = 'Open the radio setup and test CAT again →'
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 // The transmit surfaces, as features/txSurfaces.ts names them (read from the source, so the two cannot drift).
 const surfacesSrc = await readFile(join(UI, 'src', 'features', 'txSurfaces.ts'), 'utf8')
-const TX_AVOID = /export const TX_AVOID = '([^']+)'/.exec(surfacesSrc)?.[1]
+// TX_AVOID is the surfaces' classes and every stop control (StopLayer.tsx STOP_CONTROL, `[data-stop-control]`).
+const SURFACES = /export const TX_SURFACES = '([^']+)'/.exec(surfacesSrc)?.[1]
+const withStops = /export const TX_AVOID = `\$\{TX_SURFACES\}, \$\{STOP_CONTROL\}`/.test(surfacesSrc)
+const TX_AVOID = SURFACES && withStops ? `${SURFACES}, [data-stop-control]` : null
 if (!TX_AVOID) {
-  console.error('toastcorner-probe: could not read TX_AVOID from src/features/txSurfaces.ts')
+  console.error('toastcorner-probe: could not read TX_AVOID (TX_SURFACES and STOP_CONTROL) from src/features/txSurfaces.ts')
   process.exit(1)
 }
 
 // \`then\`: a mode button to press once the toasts are up (a screen's first visit, its TX strip mounted
 // after the column was placed), or null.
-const MEASURE = (n, control, then = null) => `(async () => {
+// \`big\`: the toasts are the large notice (BIG_MESSAGE, BIG_LABEL), not the short call alert, and the check runs
+// at every scroll position of the shell for the stop controls and the keep row (a folded dock's rows, RTTY's sequencer
+// Abort among them, scroll with the panes); the whole check runs at the resting position, as on every other page.
+const MEASURE = (n, control, then = null, big = false) => `(async () => {
   const T = await import('/src/toast.ts')
   ${control ? `const s = document.createElement('style'); s.textContent = '.ui-toast-viewport { bottom: 16px !important; top: auto !important; max-height: none !important; }'; document.head.appendChild(s);` : ''}
-  for (let i = 0; i < ${n}; i++) T.pushToast('Toast ' + i + ': W1AW is calling you on 20m at -05 dB', 'info', 0, { action: () => {}, actionLabel: 'Work' })
+  for (let i = 0; i < ${n}; i++) ${big
+    ? `T.pushToast(${JSON.stringify(BIG_MESSAGE)}, 'error', 0, { action: () => {}, actionLabel: ${JSON.stringify(BIG_LABEL)} })`
+    : `T.pushToast('Toast ' + i + ': W1AW is calling you on 20m at -05 dB', 'info', 0, { action: () => {}, actionLabel: 'Work' })`}
   await new Promise((r) => setTimeout(r, 900))
   ${then ? `const go = [...document.querySelectorAll('.mode-btn')].find((b) => b.textContent.trim() === ${JSON.stringify(then)})
   if (!go) return { error: 'no ${then} mode button' }
@@ -77,13 +104,19 @@ const MEASURE = (n, control, then = null) => `(async () => {
   const meet = (a, b) => a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
   const vp = document.querySelector('.ui-toast-viewport')
   if (!vp) return { error: 'no toast column' }
+  // \`stops\`: check only the stop controls and the parked keep row's buttons. Past the resting scroll position a
+  // folded dock's other rows (the macro keys: senders) scroll with the panes like any pane content, and a pop-up may
+  // stand over them there; what it may never stand over is a stop, or the row that stays parked.
+  const measure = (stops = false) => {
   const v = box(vp)
   // The tallest toast against the column: a column shorter than one toast clips it (CW at 1920×1080,
   // 175 %, once got a 72 px sliver at the bottom for a 74 px toast).
   const tallest = Math.max(0, ...[...vp.querySelectorAll('.ui-toast')].map((t) => t.getBoundingClientRect().height))
   const toasts = [...vp.querySelectorAll('.ui-toast')].map(box)
     .map((t) => [t[0], Math.max(t[1], v[1]), t[2], Math.min(t[3], v[3])]).filter((t) => t[3] > t[1])
-  const controls = [...document.querySelectorAll(${JSON.stringify(TX_AVOID)})]
+  // Every stop control (\`data-stop-control\`: Stop TX, the docks' Esc/Stop, RTTY's sequencer Abort, SSTV's Stop) is
+  // checked wherever it sits, whether or not the list names its surface.
+  const controls = [...document.querySelectorAll(stops ? '[data-stop-control], .cockpit-txdock-keep' : ${JSON.stringify(TX_AVOID + ', [data-stop-control]')})]
     .flatMap((s) => [s, ...s.querySelectorAll('button, [role="button"], [role="switch"]')])
     .filter((e) => e.matches('button, [role="button"], [role="switch"]'))
     .filter((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 })
@@ -97,7 +130,30 @@ const MEASURE = (n, control, then = null) => `(async () => {
     clipped: tallest > v[3] - v[1] + 0.5 ? [Math.round(tallest), Math.round(v[3] - v[1])] : null,
     controls: controls.length,
     covered,
+    // The shown cockpit's keep row: a hidden keep-alive cockpit's copy has no box.
+    fold: [...document.querySelectorAll('.cockpit-txdock-keep')].find((e) => e.getClientRects().length > 0)?.getAttribute('data-fold') ?? null,
   }
+  }
+  if (!${big}) return measure()
+  // THE SCROLL WALK: the shell's scroller (the shown keep row's nearest scrolling ancestor), top to end in steps, each
+  // measured after the column has re-placed itself on the scroll.
+  const keep = [...document.querySelectorAll('.cockpit-txdock-keep')].find((e) => e.getClientRects().length > 0)
+  let sc = keep?.parentElement
+  while (sc && !(sc.scrollHeight > sc.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(sc).overflowY))) sc = sc.parentElement
+  const max = sc ? sc.scrollHeight - sc.clientHeight : 0
+  const steps = Math.max(1, Math.ceil(max / 40))
+  const covered = new Set()
+  let abortSeen = 0
+  let last = null
+  for (let i = 0; i <= steps; i++) {
+    if (sc) sc.scrollTop = Math.round((max * i) / steps)
+    await new Promise((r) => setTimeout(r, 120))
+    last = measure(i > 0)
+    for (const c of last.covered) covered.add(c + ' at scroll ' + (sc ? sc.scrollTop : 0))
+    const ab = [...document.querySelectorAll('[data-stop-control="sequencer-abort"]')].find((e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.bottom > 0 && r.top < innerHeight })
+    if (ab) abortSeen++
+  }
+  return { ...last, covered: [...covered], abortSeen, positions: steps + 1 }
 })()`
 
 const realSrc = await readFile(REAL_API, 'utf8')
@@ -140,7 +196,7 @@ const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 const FEATURES = JSON.stringify({ profile: 'custom', enabled: { js8: true, jtty: true, rtty: true, psk: true, sstv: true } })
 
-async function run(screen, size, corner, n, control, scale = 'auto', then = null) {
+async function run(screen, size, corner, n, control, scale = 'auto', then = null, big = false, rtty = null) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -168,13 +224,17 @@ async function run(screen, size, corner, n, control, scale = 'auto', then = null
       'nexus.features.wizardSeen': '1',
       'probe.settings': JSON.stringify({ popupCorner: corner }),
       'nexus-ui-scale-mode': scale,
+      ...(rtty ? { 'probe.rtty': JSON.stringify(rtty) } : {}),
     }
     await evaluate(`localStorage.clear(); ${Object.entries(store).map(([k, v]) => `localStorage.setItem(${JSON.stringify(k)}, ${JSON.stringify(v)})`).join(';')}; 1`)
     await call('Page.navigate', { url: `${origin}/#${screen}` })
     const drew = await until(`document.querySelector('.app') != null && document.querySelector('.cockpit-txstrip, .cockpit-qso') != null`)
     if (!drew) return { error: 'the app never drew' }
+    // The large notice is raised on a folded dock: wait for the strip to fold it (it decides once the shell has
+    // laid out); a page that never folds is measured anyway, and says so.
+    if (big) await until(`[...document.querySelectorAll('.cockpit-txdock-keep[data-fold="on"]')].some((e) => e.getClientRects().length > 0)`, 60)
     await sleep(1200)
-    return await evaluate(MEASURE(n, control, then))
+    return await evaluate(MEASURE(n, control, then, big))
   } finally {
     await browser.call('Target.closeTarget', { targetId }).catch(() => {})
   }
@@ -224,6 +284,27 @@ try {
           if (faults.length) red++
           console.log(`${faults.length ? 'RED ' : 'ok  '} ${at}: column ${m.column}, ${m.shown} toast(s) shown, ${m.controls} TX controls${faults.length ? '\n     ' + faults.join('\n     ') : ''}`)
         }
+  if (SET === 'all' || SET === 'fold')
+    for (const [screen, size, scale, rtty] of FOLDED)
+      for (const corner of CORNERS) {
+        const at = `${screen} ${size.name} at ${scale}% ${corner}, dock folded${rtty ? ', an auto QSO running' : ''}, one large notice`
+        const m = await run(screen, size, corner, 1, false, scale, null, true, rtty)
+        if (m.error) {
+          undrawn++
+          console.log(`NOT DRAWN ${at}: ${m.error}`)
+          continue
+        }
+        const faults = []
+        if (rtty && !m.abortSeen) faults.push('the sequencer\'s Abort was never on screen, so the auto-QSO case is not tested')
+        if (m.fold !== 'on') faults.push(`the dock did not fold (keep row data-fold ${m.fold}), so the folded case is not tested`)
+        if (m.corner !== corner) faults.push(`the column stands in ${m.corner}, not ${corner}`)
+        if (!m.inside) faults.push(`the column is not inside the window (${m.column})`)
+        if (m.shown === 0) faults.push('the notice is not shown')
+        if (m.controls === 0) faults.push('no transmit control found on the page (the probe would see nothing)')
+        for (const c of m.covered) faults.push(`a toast covers ${c}`)
+        if (faults.length) red++
+        console.log(`${faults.length ? 'RED ' : 'ok  '} ${at}: column ${m.column}, ${m.shown} toast(s) shown, ${m.controls} TX controls, ${m.positions} scroll positions${rtty ? `, Abort on screen at ${m.abortSeen}` : ''}${faults.length ? '\n     ' + faults.join('\n     ') : ''}`)
+      }
   const c = await run('phone', SIZES[0], 'bottom-left', 1, true)
   if (c.error || c.covered.length === 0) {
     red++

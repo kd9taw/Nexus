@@ -16,6 +16,7 @@ import {
   liveMode,
   localTime,
   placeCallCard,
+  txBoxes,
   type Box,
   type CallCardData,
 } from './CallCard'
@@ -187,6 +188,45 @@ describe('it never covers a transmit control', () => {
   it('no room anywhere: it does not show', () => {
     const wall = [box(0, 0, 1366, 380), box(0, 420, 1366, 768)]
     expect(placeCallCard(box(10, 385, 60, 415), SIZE, VIEW, wall)).toBeNull()
+  })
+
+  // What the cards keep off is MEASURED by txBoxes: a folded dock has no box, so its parked keep row and every stop
+  // control (RTTY's sequencer Abort sits in a dock row outside the keep row) are measured on their own. A hidden
+  // keep-alive cockpit's copies have no box and keep nothing clear.
+  it('measures a folded dock’s keep row and every stop control, and never a hidden copy', () => {
+    const rects = new Map<string, Box>([
+      ['cockpit-txdock-keep', box(300, 520, 900, 600)],
+      ['rtty-auto-stop', box(600, 270, 800, 330)],
+    ])
+    // Over the file's every-box-has-a-size stand-in (HTMLElement's, restored after each test).
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      const k = [...rects.keys()].find((c) => this.classList.contains(c))
+      const r = k && !this.closest('[hidden]') ? rects.get(k)! : box(0, 0, 0, 0)
+      return { ...r, x: r.left, y: r.top, width: r.right - r.left, height: r.bottom - r.top, toJSON: () => r } as DOMRect
+    })
+    const folded = () => {
+      const dock = document.createElement('div')
+      dock.className = 'cockpit-txdock'
+      dock.dataset.fold = 'on'
+      const abort = document.createElement('button')
+      abort.className = 'rtty-auto-stop'
+      abort.setAttribute('data-stop-control', 'sequencer-abort')
+      const keep = document.createElement('div')
+      keep.className = 'cockpit-txdock-keep'
+      dock.append(abort, keep)
+      return dock
+    }
+    const hidden = document.createElement('div')
+    hidden.hidden = true
+    hidden.appendChild(folded())
+    const shown = folded()
+    document.body.append(hidden, shown)
+    try {
+      expect(txBoxes()).toEqual([box(600, 270, 800, 330), box(300, 520, 900, 600)])
+    } finally {
+      shown.remove()
+      hidden.remove()
+    }
   })
 })
 
