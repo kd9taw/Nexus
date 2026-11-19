@@ -75,9 +75,12 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 // The transmit surfaces, as features/txSurfaces.ts names them (read from the source, so the two cannot drift).
 const surfacesSrc = await readFile(join(UI, 'src', 'features', 'txSurfaces.ts'), 'utf8')
-const TX_AVOID = /export const TX_AVOID = '([^']+)'/.exec(surfacesSrc)?.[1]
+// TX_AVOID is the surfaces' classes and every stop control (StopLayer.tsx STOP_CONTROL, `[data-stop-control]`).
+const SURFACES = /export const TX_SURFACES = '([^']+)'/.exec(surfacesSrc)?.[1]
+const withStops = /export const TX_AVOID = `\$\{TX_SURFACES\}, \$\{STOP_CONTROL\}`/.test(surfacesSrc)
+const TX_AVOID = SURFACES && withStops ? `${SURFACES}, [data-stop-control]` : null
 if (!TX_AVOID) {
-  console.error('toastcorner-probe: could not read TX_AVOID from src/features/txSurfaces.ts')
+  console.error('toastcorner-probe: could not read TX_AVOID (TX_SURFACES and STOP_CONTROL) from src/features/txSurfaces.ts')
   process.exit(1)
 }
 
