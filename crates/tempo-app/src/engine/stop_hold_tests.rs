@@ -4,7 +4,8 @@
 //! mic and key, but only while nothing holds it: after Stop TX, Esc, TX Off, an FT Halt or a
 //! watchdog trip, TX stays off on every screen the operator visits until one of their own acts
 //! turns it back on. And a halt ends an RTTY Auto run, as it ends JS8's schedule ("The run must be
-//! restarted on purpose").
+//! restarted on purpose"). RTTY's own stop (`rtty_stop`) ends the run as well, because the Remote
+//! can send it without the halt.
 //!
 //! The UI re-asserts the section on every view change, so `set_operating_mode(_, false)` below is
 //! a trip to the Contest screen, the Map or the Logbook and back. The operator's TX On/Off button
@@ -158,6 +159,70 @@ fn an_rtty_auto_run_keys_nothing_after_stop_tx_and_a_round_trip() {
 fn an_rtty_auto_run_keys_nothing_after_stop_tx_without_a_round_trip() {
     let (keyed, state) = rtty_auto_cq_after_stop(false);
     assert_eq!((keyed, state.as_str()), (None, "idle"));
+}
+
+/// An RTTY Auto CQ run with its CQ keyed, then `rtty_stop` ALONE, with no halt after it: the
+/// Remote's `rtty_stop` command reaches the engine on its own, and a link that drops between it
+/// and the halt leaves exactly this. Stopped mid-over or after the CQ played out (the run then
+/// listening). Returns what keyed (right after the stop, or after the listen window), the run's
+/// state, Auto, and TX.
+fn rtty_auto_cq_after_rtty_stop_alone(mid_over: bool) -> (Option<String>, String, bool, bool) {
+    let mut e = Engine::new("K1ABC", "EN61", 0);
+    e.set_license_class("general");
+    e.set_operating_mode("rtty", false);
+    e.set_frequency(14.080, "20m", "LSB");
+    let mut s = e.settings().clone();
+    s.rtty_auto_listen_secs = 5; // the clamp's floor: the test waits 5 s, not 30
+    e.apply_settings(s);
+    e.set_tx_enabled_by_operator(true); // a no-op where entry already armed
+    e.set_rtty_auto(true).unwrap();
+    e.rtty_auto_cq().unwrap();
+    e.set_rtty_sending(true);
+    assert!(
+        e.poll_rtty_one().is_some(),
+        "control: the operator's CQ keys"
+    );
+    if !mid_over {
+        e.set_rtty_sending(false);
+        e.rtty_auto_service(); // the over played out
+    }
+    assert_eq!(
+        e.rtty_state().seq_state,
+        "calling_cq",
+        "control: the run is on"
+    );
+    e.rtty_stop(); // and nothing else
+    e.set_rtty_sending(false); // the loop consumed the abort and unkeyed
+    e.rtty_auto_service();
+    let at_once = e.poll_rtty_one();
+    std::thread::sleep(std::time::Duration::from_millis(5_300));
+    e.rtty_auto_service(); // the radio loop's tick after the listen window
+    let keyed = at_once.or_else(|| e.poll_rtty_one());
+    let state = e.rtty_state();
+    (keyed, state.seq_state, state.auto, e.tx_enabled())
+}
+
+/// ⛔ `rtty_stop` on its own ends the run: nothing keys after it and the run is idle. Auto stays on
+/// and TX stays armed (the halt is the verb that turns TX off; this one stops RTTY).
+#[test]
+fn rtty_stop_alone_ends_an_rtty_auto_run_after_its_cq() {
+    let (keyed, state, auto, tx) = rtty_auto_cq_after_rtty_stop_alone(false);
+    assert_eq!(
+        (keyed, state.as_str(), auto, tx),
+        (None, "idle", true, true),
+        "(what keyed, the run, Auto, TX) after rtty_stop alone"
+    );
+}
+
+/// The same, stopped while the CQ was still on the air.
+#[test]
+fn rtty_stop_alone_ends_an_rtty_auto_run_mid_over() {
+    let (keyed, state, auto, tx) = rtty_auto_cq_after_rtty_stop_alone(true);
+    assert_eq!(
+        (keyed, state.as_str(), auto, tx),
+        (None, "idle", true, true),
+        "(what keyed, the run, Auto, TX) after rtty_stop alone"
+    );
 }
 
 /// A program on Nexus's CAT share (WSJT-X, N1MM) asks for PTT: refused after Stop TX, and still
