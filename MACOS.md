@@ -235,3 +235,55 @@ parts are here.
   platform, macOS included. Worth knowing if you script backups or profile switching.
 - **Keep the clock accurate** — decoding is slot-timed. macOS uses network time by default; do
   not turn it off.
+
+## Notes from a local build on macOS 27 (Apple Silicon)
+
+A self-build on macOS 27 with the Xcode 27 toolchain hits four things the release
+workflow never sees, because `release.yml` builds on an older Xcode. In the order
+they appear:
+
+### The Rust release build dies on proc-macro crates (`E0463`)
+
+Nexus's release profile sets `strip = "debuginfo"`. With the Xcode 27 linker that
+misaligns LINKEDIT in the proc-macro dylibs, and dyld refuses them at build time:
+`cargo build --release` dies with `E0463 can't find crate` for `phf`,
+`serde_derive`, `zerofrom` and friends — while `cargo check` in the dev profile
+passes. This is rust-lang/rust#157750, fixed in newer LLVM. Until the toolchain
+picks that up, strip nothing instead:
+
+    export CARGO_PROFILE_RELEASE_STRIP=none
+
+Leave `Cargo.toml` alone — the env var is enough, and a build on an older Xcode
+does not need it.
+
+### `tauri-cli` is not on Homebrew
+
+`cargo install tauri-cli --version "^2"`. Homebrew has no formula, and one
+unknown name in a `brew install` line aborts the whole transaction, so it goes in
+by cargo.
+
+### The DeepCW model is not in the repo
+
+`src-tauri/resources/deepcw/` is gitignored, because the model's licence is not
+the app's. Copy it from an installed app if you have one:
+
+    cp /Applications/Nexus.app/Contents/Resources/resources/deepcw/model.onnx* \
+       src-tauri/resources/deepcw/
+
+or set `NEXUS_ALLOW_MISSING_AICW=1` to skip that stage.
+
+### Run `cargo tauri build` from inside `src-tauri`
+
+From the repo root the CLI picks up the `remote/` companion app's
+`tauri.conf.json`, and the build dies early on `remote/ui/package.json`.
+`cd src-tauri` first. (And build the UI with `npm ci`, never `npm install`.)
+
+### Signing with your own identity, not an Apple Developer team
+
+`codesign --options runtime` under a self-signed identity builds fine, and then
+the hardened runtime's library validation refuses the bundled Hamlib tools at
+launch: they were not signed by the same team (a self-signed certificate carries
+no Team ID), and Test CAT reports "No such file or directory (os error 2)" for a
+file that is clearly in the bundle. Sign the nested executables and dylibs with
+plain signatures (no `--options runtime`), and re-sign the outer `.app` after
+that — its resource seals go stale whenever an inner signature changes.
