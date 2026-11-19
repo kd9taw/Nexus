@@ -216,6 +216,60 @@ describe('the column takes its measured room, clear of the TX surfaces (#445)', 
     }
   })
 
+  // Every STOP CONTROL is kept clear wherever it sits (`data-stop-control`), not only the rows the list names: RTTY's
+  // sequencer Abort stands in a dock row outside the keep row, and folded that row scrolls with the panes, under no
+  // other surface. A large notice stood over Abort (RTTY at 900×600 at 175 %, an auto QSO running). A hidden
+  // keep-alive cockpit's copy of the same stop has no box and keeps nothing clear.
+  it('a stop control outside every listed surface is kept clear: the sequencer Abort in a folded dock', () => {
+    const rects = new Map<string, Box>([
+      ['cockpit-txdock-keep', { left: 300, top: 520, right: 900, bottom: 600 }],
+      ['rtty-auto-stop', { left: 600, top: 270, right: 800, bottom: 330 }],
+      ['ui-toast-viewport', { left: 544, top: 100, right: 884, bottom: 488 }],
+    ])
+    const spy = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      const k = [...rects.keys()].find((c) => this.classList.contains(c))
+      // The hidden cockpit's copy: no box.
+      const r = k && !this.closest('[hidden]') ? rects.get(k)! : { left: 0, top: 0, right: 0, bottom: 0 }
+      return { ...r, x: r.left, y: r.top, width: r.right - r.left, height: r.bottom - r.top, toJSON: () => r } as DOMRect
+    })
+    const was = [window.innerWidth, window.innerHeight]
+    Object.defineProperty(window, 'innerWidth', { value: 900, configurable: true })
+    Object.defineProperty(window, 'innerHeight', { value: 600, configurable: true })
+    const folded = () => {
+      const dock = document.createElement('div')
+      dock.className = 'cockpit-txdock'
+      dock.dataset.fold = 'on'
+      const row = document.createElement('div')
+      row.className = 'cw-macros rtty-auto-row'
+      const abort = document.createElement('button')
+      abort.className = 'cw-macro rtty-auto-stop'
+      abort.setAttribute('data-stop-control', 'sequencer-abort')
+      row.appendChild(abort)
+      const keep = document.createElement('div')
+      keep.className = 'cockpit-txdock-keep'
+      keep.dataset.fold = 'on'
+      dock.append(row, keep)
+      return dock
+    }
+    try {
+      const shown = folded()
+      const hidden = document.createElement('div')
+      hidden.hidden = true
+      hidden.appendChild(folded())
+      document.body.append(hidden, shown)
+      const { viewport } = mount('bottom-right')
+      // The lowest free stretch at least one toast tall: between Abort and the keep row.
+      expect(viewport.style.getPropertyValue('--toast-inset'), 'the column stands over Abort').toBe(`${600 - (520 - 16)}px`)
+      expect(viewport.style.getPropertyValue('--toast-max-h'), 'the column runs up over Abort').toBe(`${520 - 16 - (330 + 16)}px`)
+      shown.remove()
+      hidden.remove()
+    } finally {
+      spy.mockRestore()
+      Object.defineProperty(window, 'innerWidth', { value: was[0], configurable: true })
+      Object.defineProperty(window, 'innerHeight', { value: was[1], configurable: true })
+    }
+  })
+
   // The surfaces change under a column that is already up: a screen's first visit mounts its TX strip
   // after the toasts (PSK, JTTY), a notice above a strip moves it without resizing it, a banner
   // arrives late. Each is a change in the app's tree, and the column re-measures on it (one frame

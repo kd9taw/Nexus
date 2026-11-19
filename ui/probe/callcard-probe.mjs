@@ -4,8 +4,11 @@
 // src/probe/callcard.tsx with the app's own Vite config at 1366×768 and at the floor (1366×768 at 175 %, a
 // 780×438 window; probe/sizes.mjs): a call just above the TX strip with the TX dock under it, and a call
 // with FT's QSO strip and its Stop TX directly under it. The page's boxes stand at fixed px for a 768-tall
-// window, so a window under 700 px tall (the floor, or the app at 175 %) draws only the QSO strip case. The
-// Best times card also runs at 900×600 at the app's 175 % (514×343 effective, xs).
+// window, so a window under 700 px tall (the floor, or the app at 175 %) draws only the QSO strip case and the
+// folded dock. The Best times card also runs at 900×600 at the app's 175 % (514×343 effective, xs).
+// THE FOLDED DOCK (`case=folded`): a keyboard dock folded as RTTY's is on a small window, which has no box of its
+// own: the sequencer's Abort in a row directly under the call, and the keep row (Esc/Stop, the TX latch) at the
+// foot. The card keeps off both (features/txSurfaces `TX_AVOID`: the keep row and every `data-stop-control`).
 // It clicks the call with a real mouse press and asserts the card is drawn (placed, and the topmost thing
 // at its own centre) and that at nine points across every transmit box — the strip, Stop TX, the dock,
 // the QSO strip — and nine across any part of it the card's box overlaps, the topmost thing is never
@@ -36,7 +39,7 @@ import { FLOOR, LAPTOP, QHD, UHD_200, metrics, offMatrix } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 const SIZES = [LAPTOP, FLOOR]
-const CASES = ['strip', 'qso']
+const CASES = ['strip', 'qso', 'folded']
 /** The station card, then the Best times card (`&card=best`), each against the same boxes. */
 const CARDS = [{ name: 'station card', q: '' }, { name: 'Best times card', q: '&card=best' }]
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -144,7 +147,7 @@ try {
     const where = `${size.name}${zoom ? ` at ${zoom * 100}%` : ''}`
     // At 175% the page's fixed boxes scale with the app, and the floor's window is 438 px tall: either way the
     // strip case's call (top 560) would stand below the window, so only the QSO strip case is drawn there.
-    for (const which of zoom || size.h < 700 ? ['qso'] : CASES) {
+    for (const which of zoom || size.h < 700 ? ['qso', 'folded'] : CASES) {
       const m = await measure(size, which, true, card.q + z)
       console.log(`callcard-probe: ${card.name}, ${which}, window ${where}: ${JSON.stringify(m)}`)
       if (!m || !m.drawn) {
@@ -183,7 +186,7 @@ try {
       code = code || 1
     }
   }
-  if (code === 0) console.log(`callcard-probe: PASS — the station card and the Best times card clear of the TX strip, Stop TX, the TX dock and the QSO strip at ${SIZES.map((s) => s.name).join(', ')}; each control covered with the transmit classes removed; from Phone's Card button the photo shows and the text takes the card's width`)
+  if (code === 0) console.log(`callcard-probe: PASS — the station card and the Best times card clear of the TX strip, Stop TX, the TX dock, the QSO strip and a folded dock's Abort and keep row at ${SIZES.map((s) => s.name).join(', ')}; each control covered with the transmit classes removed; from Phone's Card button the photo shows and the text takes the card's width`)
   process.exitCode = code
 } finally {
   await browser.stop()

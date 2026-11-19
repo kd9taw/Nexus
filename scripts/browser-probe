@@ -92,9 +92,10 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         with a control below the smallest that must come back clipped
                         (ui/probe/spots-probe.mjs; it builds nothing)
   --desktop callcard    the station card and the Best times card beside the transmit controls: a call just above
-                        the TX strip and dock, and one above FT's QSO strip, clicked at
-                        1366×768 and the floor, asserting the card is drawn and covers no
-                        point of the strip, Stop TX, the dock or the QSO strip, with a
+                        the TX strip and dock, one above FT's QSO strip, and one above a
+                        folded keyboard dock's sequencer Abort, clicked at 1366×768 and the
+                        floor, asserting the card is drawn and covers no point of the strip,
+                        Stop TX, the dock, the QSO strip, Abort or the keep row, with a
                         control (the transmit classes removed) where it must cover one
                         (ui/probe/callcard-probe.mjs; it builds nothing)
   --desktop recallcard  FT's callsign card in the real app, Classic and Roster, at the app's fit and 100 %,
@@ -180,8 +181,10 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         covers the lone toast's place too): no toast covers a transmit
                         control (TX strip, TX dock, FT's QSO strip, the top bar's cluster,
                         any Stop) and the column is inside the window; and RTTY and JTTY
-                        with the dock folded under one large notice, whose keep row (Send,
-                        Esc/Stop, the TX latch) no toast covers; with the column
+                        with the dock folded under one large notice (RTTY also with an auto
+                        QSO running), where no toast covers the keep row (Send, Esc/Stop,
+                        the TX latch) or any stop control, Abort included, at any scroll
+                        position; with the column
                         forced back to the bare corner as a control that must be caught
                         (ui/probe/toastcorner-probe.mjs; it builds nothing)
   --desktop radiosetup  the radio setup ("Set up radios…") in the real app, at the CORE
