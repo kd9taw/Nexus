@@ -28955,6 +28955,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// Stop RTTY: drop everything queued and abort the over in progress — the radio
     /// loop consumes the one-shot abort, stops the FSK keying thread / flushes the
     /// AFSK audio and unkeys PTT. The cockpit's Stop button (halt_tx also does this).
+    ///
+    /// ⛔ **It ends a live RTTY Auto run too, so the verb is complete on its own.** The cockpit
+    /// pairs it with `halt_tx`, which ends the run as well, but the Remote's `rtty_stop` command
+    /// reaches here alone: a link that dropped before the halt followed left the run live, and
+    /// at the end of its listen window it called CQ again with nobody at the controls. Ended as
+    /// its own Abort ends it ([`Self::rtty_auto_abort`]). Auto stays on, and Auto CQ starts a new
+    /// run. TX is NOT turned off here: that is the halt's job, and this verb's only other change
+    /// is the run.
     pub fn rtty_stop(&mut self) {
         self.rtty_queue.clear();
         self.rtty_abort = true;
@@ -28964,6 +28972,18 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // precomputed end: without this, Stop TX would drop the queue and the
         // over in flight and the latch would key straight back up next tick.
         self.drop_rtty_latch();
+        // …and the auto run (see above). Logged only when a run was live: Abort and Auto off end
+        // it themselves first, so they reach here with nothing to report.
+        if let Some(seq) = self.rtty_seq.as_mut() {
+            if !matches!(
+                seq.state(),
+                tempo_core::rtty::SeqState::Idle | tempo_core::rtty::SeqState::Done
+            ) {
+                tempo_core::applog::info("tx", "RTTY auto run ended by Stop");
+            }
+            seq.abort();
+        }
+        self.rtty_auto_over = false;
     }
 
     /// Pop the next queued RTTY MESSAGE for the radio loop to key, or `None`.
@@ -29683,6 +29703,8 @@ contact yourself."
     /// Operator kills the live auto session: abort the sequencer (silent), drop the
     /// TX queue + unkey the over in flight, and clear the pending-over latch.
     pub fn rtty_auto_abort(&mut self) {
+        // The sequencer's abort goes first so `rtty_stop` (which ends a live run itself) finds it
+        // idle and does not log this press as a Stop.
         if let Some(seq) = self.rtty_seq.as_mut() {
             seq.abort();
         }

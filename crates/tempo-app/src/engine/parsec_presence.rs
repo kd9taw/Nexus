@@ -273,6 +273,39 @@ mod tests {
         );
     }
 
+    /// The same drop with RTTY Auto on. `rtty_stop` also ends a live auto run now, and continuous
+    /// TX can only latch while the run is idle, so the drop does exactly what it did before:
+    /// latch down, abort armed, TX still armed, and Auto left on with its run idle.
+    #[test]
+    fn rtty_continuous_tx_with_auto_on_is_released_as_before() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        watching(&mut e);
+        e.set_operating_mode("rtty", false);
+        e.set_rtty_auto(true).unwrap();
+        e.set_rtty_latched(true).unwrap();
+        e.rtty_type("CQ CQ DE W9XYZ").unwrap();
+        assert!(e.rtty_latched(), "baseline: latched");
+        let stopped = drop_session(&mut e, &[Disconnected]);
+        assert_eq!(stopped, vec![PresenceStop::Rtty]);
+        assert!(!e.rtty_latched(), "the latch survived");
+        assert!(e.take_rtty_abort(), "no abort armed");
+        assert_eq!(
+            e.poll_rtty_stream(2),
+            RttyStreamTick::Idle,
+            "the stream kept feeding"
+        );
+        assert!(
+            e.tx_enabled(),
+            "rtty_stop leaves TX armed; this went through halt_tx"
+        );
+        let state = e.rtty_state();
+        assert_eq!(
+            (state.auto, state.seq_state.as_str()),
+            (true, "idle"),
+            "(Auto, the run) after the drop"
+        );
+    }
+
     #[test]
     fn psk_continuous_tx_is_released_through_psk_stop() {
         let mut e = psk_latched();

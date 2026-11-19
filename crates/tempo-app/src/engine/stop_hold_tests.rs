@@ -4,7 +4,8 @@
 //! mic and key, but only while nothing holds it: after Stop TX, Esc, TX Off, an FT Halt or a
 //! watchdog trip, TX stays off on every screen the operator visits until one of their own acts
 //! turns it back on. And a halt ends an RTTY Auto run, as it ends JS8's schedule ("The run must be
-//! restarted on purpose").
+//! restarted on purpose"). RTTY's own stop (`rtty_stop`) ends the run as well, because the Remote
+//! can send it without the halt.
 //!
 //! The UI re-asserts the section on every view change, so `set_operating_mode(_, false)` below is
 //! a trip to the Contest screen, the Map or the Logbook and back. The operator's TX On/Off button
@@ -12,6 +13,7 @@
 //! [`Engine::set_tx_enabled_by_operator`].
 
 use super::*;
+use crate::test_util::StoredLog as _;
 
 /// A station with every HF privilege, at launch: TX off, nothing held.
 fn station() -> Engine {
@@ -158,6 +160,70 @@ fn an_rtty_auto_run_keys_nothing_after_stop_tx_and_a_round_trip() {
 fn an_rtty_auto_run_keys_nothing_after_stop_tx_without_a_round_trip() {
     let (keyed, state) = rtty_auto_cq_after_stop(false);
     assert_eq!((keyed, state.as_str()), (None, "idle"));
+}
+
+/// An RTTY Auto CQ run with its CQ keyed, then `rtty_stop` ALONE, with no halt after it: the
+/// Remote's `rtty_stop` command reaches the engine on its own, and a link that drops between it
+/// and the halt leaves exactly this. Stopped mid-over or after the CQ played out (the run then
+/// listening). Returns what keyed (right after the stop, or after the listen window), the run's
+/// state, Auto, and TX.
+fn rtty_auto_cq_after_rtty_stop_alone(mid_over: bool) -> (Option<String>, String, bool, bool) {
+    let mut e = Engine::new("K1ABC", "EN61", 0);
+    e.set_license_class("general");
+    e.set_operating_mode("rtty", false);
+    e.set_frequency(14.080, "20m", "LSB");
+    let mut s = e.settings().clone();
+    s.rtty_auto_listen_secs = 5; // the clamp's floor: the test waits 5 s, not 30
+    e.apply_settings(s);
+    e.set_tx_enabled_by_operator(true); // a no-op where entry already armed
+    e.set_rtty_auto(true).unwrap();
+    e.rtty_auto_cq().unwrap();
+    e.set_rtty_sending(true);
+    assert!(
+        e.poll_rtty_one().is_some(),
+        "control: the operator's CQ keys"
+    );
+    if !mid_over {
+        e.set_rtty_sending(false);
+        e.rtty_auto_service(); // the over played out
+    }
+    assert_eq!(
+        e.rtty_state().seq_state,
+        "calling_cq",
+        "control: the run is on"
+    );
+    e.rtty_stop(); // and nothing else
+    e.set_rtty_sending(false); // the loop consumed the abort and unkeyed
+    e.rtty_auto_service();
+    let at_once = e.poll_rtty_one();
+    std::thread::sleep(std::time::Duration::from_millis(5_300));
+    e.rtty_auto_service(); // the radio loop's tick after the listen window
+    let keyed = at_once.or_else(|| e.poll_rtty_one());
+    let state = e.rtty_state();
+    (keyed, state.seq_state, state.auto, e.tx_enabled())
+}
+
+/// ⛔ `rtty_stop` on its own ends the run: nothing keys after it and the run is idle. Auto stays on
+/// and TX stays armed (the halt is the verb that turns TX off; this one stops RTTY).
+#[test]
+fn rtty_stop_alone_ends_an_rtty_auto_run_after_its_cq() {
+    let (keyed, state, auto, tx) = rtty_auto_cq_after_rtty_stop_alone(false);
+    assert_eq!(
+        (keyed, state.as_str(), auto, tx),
+        (None, "idle", true, true),
+        "(what keyed, the run, Auto, TX) after rtty_stop alone"
+    );
+}
+
+/// The same, stopped while the CQ was still on the air.
+#[test]
+fn rtty_stop_alone_ends_an_rtty_auto_run_mid_over() {
+    let (keyed, state, auto, tx) = rtty_auto_cq_after_rtty_stop_alone(true);
+    assert_eq!(
+        (keyed, state.as_str(), auto, tx),
+        (None, "idle", true, true),
+        "(what keyed, the run, Auto, TX) after rtty_stop alone"
+    );
 }
 
 /// A program on Nexus's CAT share (WSJT-X, N1MM) asks for PTT: refused after Stop TX, and still
@@ -654,5 +720,211 @@ fn a_udp_free_text_never_arms_and_goes_out_only_while_armed() {
         armed.tx_watchdog_start,
         Some(1_000),
         "the free text restarted the watchdog clock"
+    );
+}
+
+// ----- `rtty_stop` alone at every point of an automatic exchange -----
+
+/// Decoded RTTY text as the decoder hands it over, every character certain.
+fn decoded_rtty(text: &str) -> Vec<tempo_core::rtty::DecodedChar> {
+    text.chars()
+        .map(|ch| tempo_core::rtty::DecodedChar {
+            ch,
+            confidence: 1.0,
+        })
+        .collect()
+}
+
+/// RTTY on 20 m, TX on, Auto on, a five-second listen window.
+fn auto_rtty_station() -> Engine {
+    let mut e = Engine::new("K1ABC", "EN61", 0);
+    e.set_license_class("general");
+    e.set_operating_mode("rtty", false);
+    e.set_frequency(14.080, "20m", "LSB");
+    let mut s = e.settings().clone();
+    s.rtty_auto_listen_secs = 5; // the clamp's floor: the test waits 5 s, not 30
+    e.apply_settings(s);
+    e.set_tx_enabled_by_operator(true);
+    e.set_rtty_auto(true).unwrap();
+    e
+}
+
+/// Key what is queued and let it play out: one over.
+fn play_one_over(e: &mut Engine) -> String {
+    e.set_rtty_sending(true);
+    let m = e.poll_rtty_one().expect("an over keys");
+    e.set_rtty_sending(false);
+    e.rtty_auto_service();
+    m
+}
+
+/// After the stop: decodes that would drive a live run, then ticks across two listen windows.
+/// Returns the first thing that keyed, if anything did.
+fn after_the_stop(e: &mut Engine, decodes: &[&str]) -> Option<String> {
+    e.set_rtty_sending(false);
+    let mut keyed = None;
+    for d in decodes {
+        e.push_rtty_decode(&decoded_rtty(d), 0.0, true);
+        e.rtty_auto_service();
+        keyed = keyed.or_else(|| e.poll_rtty_one());
+    }
+    for _ in 0..2 {
+        std::thread::sleep(std::time::Duration::from_millis(5_300));
+        e.rtty_auto_service();
+        keyed = keyed.or_else(|| e.poll_rtty_one());
+    }
+    keyed
+}
+
+/// ⛔ Search & pounce, our answer sent and the reply awaited: after `rtty_stop` alone, the reply
+/// keys no exchange and a later CQ draws nothing. The run is idle, Auto and TX stay on, nothing
+/// is logged.
+#[test]
+fn rtty_stop_alone_ends_an_answer_waiting_for_its_reply() {
+    let mut e = auto_rtty_station();
+    e.rtty_auto_answer("W1AW").unwrap();
+    play_one_over(&mut e);
+    assert_eq!(e.rtty_state().seq_state, "answering", "control");
+    e.rtty_stop();
+    let keyed = after_the_stop(
+        &mut e,
+        &[
+            "K1ABC DE W1AW UR RST 599 599 NAME BOB QTH BOSTON K\n",
+            "CQ CQ DE W2XX W2XX K\n",
+        ],
+    );
+    let st = e.rtty_state();
+    assert_eq!(
+        (
+            keyed,
+            st.seq_state.as_str(),
+            st.auto,
+            e.tx_enabled(),
+            e.stored_log().len()
+        ),
+        (None, "idle", true, true, 0),
+        "(what keyed, the run, Auto, TX, rows logged)"
+    );
+}
+
+/// ⛔ Our report sent mid-exchange, then `rtty_stop` alone: the partner's report neither keys
+/// "QSL TU 73 … SK" nor logs the contact.
+#[test]
+fn rtty_stop_alone_after_our_report_keys_and_logs_nothing() {
+    let mut e = auto_rtty_station();
+    e.rtty_auto_cq().unwrap();
+    play_one_over(&mut e);
+    e.push_rtty_decode(&decoded_rtty("K1ABC DE W1AW W1AW K\n"), 0.0, true);
+    let exch = play_one_over(&mut e);
+    assert!(exch.contains("W1AW"), "control: our report went: {exch}");
+    assert_eq!(e.rtty_state().seq_state, "exchange_sent", "control");
+    e.rtty_stop();
+    let keyed = after_the_stop(
+        &mut e,
+        &["K1ABC DE W1AW R UR RST 599 599 NAME BOB QTH BOSTON K\n"],
+    );
+    let st = e.rtty_state();
+    assert_eq!(
+        (
+            keyed,
+            st.seq_state.as_str(),
+            st.auto,
+            e.tx_enabled(),
+            e.stored_log().len()
+        ),
+        (None, "idle", true, true, 0),
+        "(what keyed, the run, Auto, TX, rows logged)"
+    );
+}
+
+/// An answer decoded in the same lock window as the stop, before it (our exchange already
+/// queued): nothing keys, neither the exchange nor "AGN AGN PSE".
+#[test]
+fn a_decode_then_rtty_stop_in_one_tick_keys_nothing() {
+    let mut e = auto_rtty_station();
+    e.rtty_auto_cq().unwrap();
+    play_one_over(&mut e);
+    e.push_rtty_decode(&decoded_rtty("K1ABC DE W1AW W1AW K\n"), 0.0, true);
+    assert_eq!(e.rtty_state().seq_state, "exchange_sent", "control");
+    e.rtty_stop();
+    e.rtty_auto_service();
+    let keyed = e.poll_rtty_one().or_else(|| after_the_stop(&mut e, &[]));
+    assert_eq!((keyed, e.rtty_state().seq_state.as_str()), (None, "idle"));
+}
+
+/// The same answer decoded just after the stop, in the same tick: it starts no exchange.
+#[test]
+fn rtty_stop_then_a_decode_in_one_tick_keys_nothing() {
+    let mut e = auto_rtty_station();
+    e.rtty_auto_cq().unwrap();
+    play_one_over(&mut e);
+    e.rtty_stop();
+    e.push_rtty_decode(&decoded_rtty("K1ABC DE W1AW W1AW K\n"), 0.0, true);
+    e.rtty_auto_service();
+    let keyed = e.poll_rtty_one().or_else(|| after_the_stop(&mut e, &[]));
+    assert_eq!((keyed, e.rtty_state().seq_state.as_str()), (None, "idle"));
+}
+
+/// `rtty_stop` twice mid-over: nothing keys after it, and a NEW operator press starts a new run.
+#[test]
+fn rtty_stop_twice_keys_nothing_and_a_new_press_restarts_the_run() {
+    let mut e = auto_rtty_station();
+    e.rtty_auto_cq().unwrap();
+    e.set_rtty_sending(true);
+    assert!(e.poll_rtty_one().is_some());
+    e.rtty_stop();
+    e.rtty_stop();
+    assert!(e.take_rtty_abort());
+    let keyed = after_the_stop(&mut e, &["CQ CQ DE W2XX W2XX K\n"]);
+    assert_eq!(
+        (keyed, e.rtty_state().seq_state.as_str(), e.tx_enabled()),
+        (None, "idle", true)
+    );
+    e.rtty_auto_cq().expect("a new press is accepted");
+    assert!(e.poll_rtty_one().is_some(), "the new run's CQ keys");
+    assert_eq!(e.rtty_state().seq_state, "calling_cq");
+}
+
+/// A finished contact (Done), then `rtty_stop`: back to idle as Abort and the halt leave it,
+/// nothing keys, and the contact's log row stays.
+#[test]
+fn rtty_stop_on_a_finished_contact_returns_to_idle_and_keeps_its_log_row() {
+    let mut e = auto_rtty_station();
+    e.rtty_auto_cq().unwrap();
+    play_one_over(&mut e);
+    e.push_rtty_decode(&decoded_rtty("K1ABC DE W1AW W1AW K\n"), 0.0, true);
+    play_one_over(&mut e);
+    e.push_rtty_decode(
+        &decoded_rtty("K1ABC DE W1AW R UR RST 599 599 NAME BOB QTH BOSTON K\n"),
+        0.0,
+        true,
+    );
+    play_one_over(&mut e); // the closing
+    assert_eq!(e.rtty_state().seq_state, "done", "control");
+    e.rtty_stop();
+    let keyed = after_the_stop(&mut e, &[]);
+    assert_eq!(
+        (
+            keyed,
+            e.rtty_state().seq_state.as_str(),
+            e.stored_log().len()
+        ),
+        (None, "idle", 1)
+    );
+}
+
+/// Control: the Remote's Stop TX order under one lock, `rtty_stop` then `halt_tx`. The run ends
+/// and TX is off, as before.
+#[test]
+fn the_remote_stop_order_ends_the_run_with_tx_off() {
+    let mut e = auto_rtty_station();
+    e.rtty_auto_cq().unwrap();
+    play_one_over(&mut e);
+    e.rtty_stop();
+    e.halt_tx();
+    let keyed = after_the_stop(&mut e, &["K1ABC DE W1AW W1AW K\n"]);
+    assert_eq!(
+        (keyed, e.rtty_state().seq_state.as_str(), e.tx_enabled()),
+        (None, "idle", false)
     );
 }
