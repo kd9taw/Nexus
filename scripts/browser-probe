@@ -179,7 +179,9 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         the floor, 1920×1080 and 4K at 200 %, in each corner, with a burst of nine (which
                         covers the lone toast's place too): no toast covers a transmit
                         control (TX strip, TX dock, FT's QSO strip, the top bar's cluster,
-                        any Stop) and the column is inside the window, with the column
+                        any Stop) and the column is inside the window; and RTTY and JTTY
+                        with the dock folded under one large notice, whose keep row (Send,
+                        Esc/Stop, the TX latch) no toast covers; with the column
                         forced back to the bare corner as a control that must be caught
                         (ui/probe/toastcorner-probe.mjs; it builds nothing)
   --desktop radiosetup  the radio setup ("Set up radios…") in the real app, at the CORE

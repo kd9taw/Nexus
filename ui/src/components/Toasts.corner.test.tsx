@@ -179,6 +179,43 @@ describe('the column takes its measured room, clear of the TX surfaces (#445)', 
     }
   })
 
+  // A dock that does not fit FOLDS (cockpit-panes.css `.cockpit-txdock[data-fold='on']`): it has no box at all,
+  // and only its keep row — Send, PTT, Esc/Stop and the TX latch — stays parked at the foot. The column must keep
+  // off that row: measuring the folded dock alone found nothing, and a large notice stood over Esc/Stop (RTTY at
+  // 900×600 at 175 %, scripts/browser-probe --desktop toastcorner).
+  it('a folded dock has no box: the column keeps off its parked keep row (RTTY: Esc/Stop at the bottom right)', () => {
+    const rects = new Map<string, Box>([
+      ['cockpit-txdock-keep', { left: 300, top: 520, right: 900, bottom: 600 }],
+      ['ui-toast-viewport', { left: 544, top: 430, right: 884, bottom: 584 }],
+    ])
+    const spy = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      const k = [...rects.keys()].find((c) => this.classList.contains(c))
+      const r = k ? rects.get(k)! : { left: 0, top: 0, right: 0, bottom: 0 }
+      return { ...r, x: r.left, y: r.top, width: r.right - r.left, height: r.bottom - r.top, toJSON: () => r } as DOMRect
+    })
+    const was = [window.innerWidth, window.innerHeight]
+    Object.defineProperty(window, 'innerWidth', { value: 900, configurable: true })
+    Object.defineProperty(window, 'innerHeight', { value: 600, configurable: true })
+    try {
+      const dock = document.createElement('div')
+      dock.className = 'cockpit-txdock'
+      dock.dataset.fold = 'on'
+      const keep = document.createElement('div')
+      keep.className = 'cockpit-txdock-keep'
+      keep.dataset.fold = 'on'
+      dock.appendChild(keep)
+      document.body.appendChild(dock)
+      const { viewport } = mount('bottom-right')
+      expect(viewport.style.getPropertyValue('--toast-inset'), 'the column stands over the keep row').toBe(`${600 - (520 - 16)}px`)
+      expect(viewport.style.getPropertyValue('--toast-max-h')).toBe(`${520 - 16 - 16}px`)
+      dock.remove()
+    } finally {
+      spy.mockRestore()
+      Object.defineProperty(window, 'innerWidth', { value: was[0], configurable: true })
+      Object.defineProperty(window, 'innerHeight', { value: was[1], configurable: true })
+    }
+  })
+
   // The surfaces change under a column that is already up: a screen's first visit mounts its TX strip
   // after the toasts (PSK, JTTY), a notice above a strip moves it without resizing it, a banner
   // arrives late. Each is a change in the app's tree, and the column re-measures on it (one frame
