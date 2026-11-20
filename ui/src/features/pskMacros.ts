@@ -39,16 +39,16 @@ export type PskMacroKey = MacroKey
 /** The two built-in sets, by the id `macros.activePskProfile` stores. */
 export type PskSetId = MacroSetId
 
-/** EVERYDAY — the casual set the cockpit shipped with (F1–F4, texts unchanged, so an operator
- *  who never opens the editor sees exactly the dock they had), and four empty keys for their
- *  own. */
+/** EVERYDAY — the casual set the cockpit shipped with (F1–F4), and four empty keys for their
+ *  own. The report is `{RST}`, the log entry's RST Sent (599 when it has none), never a literal;
+ *  a key the operator saved keeps its own text. */
 const EVERYDAY: BuiltinMacro[] = [
   { key: 'F1', label: 'CQ', text: 'CQ CQ CQ de {MYCALL} {MYCALL} pse k' },
   { key: 'F2', labelKey: 'psk.macro.answer.label', text: '{CALL} de {MYCALL} {MYCALL} k' },
   {
     key: 'F3',
     labelKey: 'psk.macro.exchange.label',
-    text: '{CALL} de {MYCALL} ur 599 599 btu k',
+    text: '{CALL} de {MYCALL} ur {RST} {RST} btu k',
   },
   { key: 'F4', label: '73', text: '{CALL} de {MYCALL} tnx qso 73 sk' },
   { key: 'F5', text: '' },
@@ -67,11 +67,11 @@ const EVERYDAY: BuiltinMacro[] = [
  *  baud, so every repeated word is paid for in seconds on the air. */
 const CONTEST: BuiltinMacro[] = [
   { key: 'F1', label: 'CQ', text: 'cq test {MYCALL} {MYCALL} cq' },
-  { key: 'F2', labelKey: 'psk.macro.exch.label', text: '{CALL} 599 {EXCH} {EXCH}' },
+  { key: 'F2', labelKey: 'psk.macro.exch.label', text: '{CALL} {RST} {EXCH} {EXCH}' },
   { key: 'F3', label: 'TU', text: 'tu {MYCALL} cq' },
   { key: 'F4', labelKey: 'psk.macro.myCall.label', text: '{MYCALL} {MYCALL}' },
   { key: 'F5', labelKey: 'psk.macro.hisCall.label', text: '{CALL}' },
-  { key: 'F6', labelKey: 'psk.macro.spExch.label', text: 'tu 599 {EXCH} {EXCH}' },
+  { key: 'F6', labelKey: 'psk.macro.spExch.label', text: 'tu {RST} {EXCH} {EXCH}' },
   { key: 'F7', label: 'B4', text: '{CALL} qso b4 tu {MYCALL}' },
   { key: 'F8', label: 'AGN', text: 'agn? agn?' },
 ]

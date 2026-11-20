@@ -41,12 +41,14 @@ export type RttyMacroKey = MacroKey
 /** The two built-in sets, by the id `macros.activeRttyProfile` stores. */
 export type RttySetId = MacroSetId
 
-/** EVERYDAY — the casual set the cockpit shipped with (F1–F4, texts unchanged), and four empty
- *  keys for the operator's own. */
+/** EVERYDAY — the casual set the cockpit shipped with (F1–F4), and four empty keys for the
+ *  operator's own. The report is `{RST}`, the log entry's RST Sent (599 when it has none), never a
+ *  literal: a built-in that spelled out 599 sent one report while the log held another. A key the
+ *  operator saved keeps its own text — built-ins are never copied into the settings file. */
 const EVERYDAY: BuiltinMacro[] = [
   { key: 'F1', label: 'CQ', text: 'CQ CQ CQ DE {MYCALL} {MYCALL} K' },
   { key: 'F2', labelKey: 'rtty.macro.answer.label', text: '{CALL} DE {MYCALL} {MYCALL} K' },
-  { key: 'F3', labelKey: 'rtty.macro.exchange.label', text: '{CALL} DE {MYCALL} UR 599 599 K' },
+  { key: 'F3', labelKey: 'rtty.macro.exchange.label', text: '{CALL} DE {MYCALL} UR {RST} {RST} K' },
   { key: 'F4', label: '73', text: '{CALL} DE {MYCALL} TU 73 SK' },
   { key: 'F5', text: '' },
   { key: 'F6', text: '' },
@@ -62,11 +64,11 @@ const EVERYDAY: BuiltinMacro[] = [
  *  and the S&P exchange leaves out the runner's call. */
 const CONTEST: BuiltinMacro[] = [
   { key: 'F1', label: 'CQ', text: 'CQ TEST {MYCALL} {MYCALL} CQ' },
-  { key: 'F2', labelKey: 'rtty.macro.exch.label', text: '{CALL} 599 {EXCH} {EXCH}' },
+  { key: 'F2', labelKey: 'rtty.macro.exch.label', text: '{CALL} {RST} {EXCH} {EXCH}' },
   { key: 'F3', label: 'TU', text: 'TU {MYCALL} CQ' },
   { key: 'F4', labelKey: 'rtty.macro.myCall.label', text: '{MYCALL} {MYCALL}' },
   { key: 'F5', labelKey: 'rtty.macro.hisCall.label', text: '{CALL}' },
-  { key: 'F6', labelKey: 'rtty.macro.spExch.label', text: 'TU 599 {EXCH} {EXCH}' },
+  { key: 'F6', labelKey: 'rtty.macro.spExch.label', text: 'TU {RST} {EXCH} {EXCH}' },
   { key: 'F7', label: 'B4', text: '{CALL} QSO B4 TU {MYCALL}' },
   { key: 'F8', label: 'AGN', text: 'AGN? AGN?' },
 ]

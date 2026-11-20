@@ -232,6 +232,26 @@ describe('F-keys go through the same send() a click does', () => {
     expect(rttySend.mock.calls[1][0]).toBe(frameForAir('UR 549 549 TNX BOB OP ALEX'))
   })
 
+  it('the built-in Exchange keys the strip’s RST Sent; a key the operator saved keeps its own 599', async () => {
+    await renderCockpit()
+    fireEvent.change(document.querySelector('.rtty-hiscall')!, { target: { value: 'K1ABC' } })
+    act(() => logStrip.props.onMacroFields?.({ rstSent: '549', name: '' }))
+    press('F3')
+    await waitFor(() => expect(rttySend).toHaveBeenLastCalledWith(frameForAir('K1ABC DE W9XYZ UR 549 549 K')))
+    cleanup()
+    rttySend.mockClear()
+    // The operator's own F3, saved with a literal report: their text, never rewritten.
+    await renderCockpit({
+      macros: macrosWith({
+        rttyProfiles: [{ name: 'everyday', macros: [{ key: 'F3', label: 'Exch', text: '{CALL} DE {MYCALL} UR 599 599 K' }] }],
+      }),
+    })
+    fireEvent.change(document.querySelector('.rtty-hiscall')!, { target: { value: 'K1ABC' } })
+    act(() => logStrip.props.onMacroFields?.({ rstSent: '549', name: '' }))
+    press('F3')
+    await waitFor(() => expect(rttySend).toHaveBeenLastCalledWith(frameForAir('K1ABC DE W9XYZ UR 599 599 K')))
+  })
+
   it('refuses {EXCH} with nothing to fill it — a toast, and nothing on the air', async () => {
     await renderCockpit({ macros: macrosWith({ activeRttyProfile: 'contest' }) })
     fireEvent.change(document.querySelector('.rtty-hiscall')!, { target: { value: 'K1ABC' } })
@@ -420,7 +440,7 @@ describe('right-click, Ctrl+Shift+F-key and Send once', () => {
     expect(fireEvent.contextMenu(key('F3')), 'the browser’s menu opened over a transmit key').toBe(false)
     expect(editor()?.getAttribute('aria-label')).toBe('Edit F3')
     expect(document.activeElement, 'the caret is in the message').toBe(field(/^message$/i))
-    expect(field(/^message$/i).value).toBe('{CALL} DE {MYCALL} UR 599 599 K')
+    expect(field(/^message$/i).value).toBe('{CALL} DE {MYCALL} UR {RST} {RST} K')
     // …and an empty key's own editor, from the same gesture.
     fireEvent.contextMenu(key('F6'))
     expect(editor()?.getAttribute('aria-label')).toBe('Edit F6')

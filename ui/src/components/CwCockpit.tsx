@@ -494,11 +494,12 @@ const DEFAULT_MACROS: CwMacro[] = [
 ]
 
 /** THE POTA SET — the built-in keys while a park activation runs and no contest does. {MYPARK} is
- *  every park of the activation, space-separated as a two-fer sends them; the report is the
- *  activator's fixed 5NN, sent twice. On-air shorthand, invariant; the operator's to change. */
+ *  every park of the activation, space-separated as a two-fer sends them; the report is {RST}, the
+ *  log entry's RST Sent (5NN when it has none), sent twice. On-air shorthand; the operator's to
+ *  change. */
 export const CW_POTA_SET: CwMacro[] = [
   { key: 'F1', label: 'CQ', text: 'CQ POTA DE {MYCALL} {MYCALL} K' },
-  { key: 'F2', labelKey: 'cw.macro.reply.label', text: '! UR 5NN 5NN {MYSTATE} {MYPARK} BK' },
+  { key: 'F2', labelKey: 'cw.macro.reply.label', text: '! UR {RST} {RST} {MYSTATE} {MYPARK} BK' },
   { key: 'F3', label: 'TU', text: 'TU 73 {MYCALL} POTA' },
   { key: 'F4', labelKey: 'cw.macro.myCall.label', text: '{MYCALL}' },
   { key: 'F5', labelKey: 'cw.macro.hisCall.label', text: '! ' },

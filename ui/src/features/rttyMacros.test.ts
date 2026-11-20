@@ -23,7 +23,7 @@ describe('the built-in sets', () => {
     expect(resolveRttySet([], 'everyday', tr)).toEqual([
       { key: 'F1', label: 'CQ', text: 'CQ CQ CQ DE {MYCALL} {MYCALL} K', custom: false },
       { key: 'F2', label: '«rtty.macro.answer.label»', text: '{CALL} DE {MYCALL} {MYCALL} K', custom: false },
-      { key: 'F3', label: '«rtty.macro.exchange.label»', text: '{CALL} DE {MYCALL} UR 599 599 K', custom: false },
+      { key: 'F3', label: '«rtty.macro.exchange.label»', text: '{CALL} DE {MYCALL} UR {RST} {RST} K', custom: false },
       { key: 'F4', label: '73', text: '{CALL} DE {MYCALL} TU 73 SK', custom: false },
       { key: 'F5', label: '', text: '', custom: false },
       { key: 'F6', label: '', text: '', custom: false },
@@ -35,11 +35,11 @@ describe('the built-in sets', () => {
   it('Contest is the run/S&P set, one message per key', () => {
     expect(resolveRttySet([], 'contest', tr).map((s) => [s.key, s.label, s.text])).toEqual([
       ['F1', 'CQ', 'CQ TEST {MYCALL} {MYCALL} CQ'],
-      ['F2', '«rtty.macro.exch.label»', '{CALL} 599 {EXCH} {EXCH}'],
+      ['F2', '«rtty.macro.exch.label»', '{CALL} {RST} {EXCH} {EXCH}'],
       ['F3', 'TU', 'TU {MYCALL} CQ'],
       ['F4', '«rtty.macro.myCall.label»', '{MYCALL} {MYCALL}'],
       ['F5', '«rtty.macro.hisCall.label»', '{CALL}'],
-      ['F6', '«rtty.macro.spExch.label»', 'TU 599 {EXCH} {EXCH}'],
+      ['F6', '«rtty.macro.spExch.label»', 'TU {RST} {EXCH} {EXCH}'],
       ['F7', 'B4', '{CALL} QSO B4 TU {MYCALL}'],
       ['F8', 'AGN', 'AGN? AGN?'],
     ])

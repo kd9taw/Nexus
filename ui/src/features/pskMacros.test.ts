@@ -24,7 +24,7 @@ describe('the built-in sets', () => {
     expect(resolvePskSet([], 'everyday', tr)).toEqual([
       { key: 'F1', label: 'CQ', text: 'CQ CQ CQ de {MYCALL} {MYCALL} pse k', custom: false },
       { key: 'F2', label: '«psk.macro.answer.label»', text: '{CALL} de {MYCALL} {MYCALL} k', custom: false },
-      { key: 'F3', label: '«psk.macro.exchange.label»', text: '{CALL} de {MYCALL} ur 599 599 btu k', custom: false },
+      { key: 'F3', label: '«psk.macro.exchange.label»', text: '{CALL} de {MYCALL} ur {RST} {RST} btu k', custom: false },
       { key: 'F4', label: '73', text: '{CALL} de {MYCALL} tnx qso 73 sk', custom: false },
       { key: 'F5', label: '', text: '', custom: false },
       { key: 'F6', label: '', text: '', custom: false },
@@ -36,11 +36,11 @@ describe('the built-in sets', () => {
   it('Contest is the run/S&P set, one message per key', () => {
     expect(resolvePskSet([], 'contest', tr).map((s) => [s.key, s.label, s.text])).toEqual([
       ['F1', 'CQ', 'cq test {MYCALL} {MYCALL} cq'],
-      ['F2', '«psk.macro.exch.label»', '{CALL} 599 {EXCH} {EXCH}'],
+      ['F2', '«psk.macro.exch.label»', '{CALL} {RST} {EXCH} {EXCH}'],
       ['F3', 'TU', 'tu {MYCALL} cq'],
       ['F4', '«psk.macro.myCall.label»', '{MYCALL} {MYCALL}'],
       ['F5', '«psk.macro.hisCall.label»', '{CALL}'],
-      ['F6', '«psk.macro.spExch.label»', 'tu 599 {EXCH} {EXCH}'],
+      ['F6', '«psk.macro.spExch.label»', 'tu {RST} {EXCH} {EXCH}'],
       ['F7', 'B4', '{CALL} qso b4 tu {MYCALL}'],
       ['F8', 'AGN', 'agn? agn?'],
     ])

@@ -277,6 +277,26 @@ describe('F-keys go through the same send() a click does', () => {
     await waitFor(() => expect(pskSend).toHaveBeenLastCalledWith('ur 549 549 tnx Bob op Alex'))
   })
 
+  it('the built-in Exchange keys the strip’s RST Sent; a key the operator saved keeps its own 599', async () => {
+    await renderCockpit()
+    fireEvent.change(document.querySelector('.rtty-hiscall')!, { target: { value: 'K1ABC' } })
+    act(() => logStrip.props.onMacroFields?.({ rstSent: '549', name: '' }))
+    press('F3')
+    await waitFor(() => expect(pskSend).toHaveBeenLastCalledWith('K1ABC de W9XYZ ur 549 549 btu k'))
+    cleanup()
+    pskSend.mockClear()
+    // The operator's own F3, saved with a literal report: their text, never rewritten.
+    await renderCockpit({
+      macros: macrosWith({
+        pskProfiles: [{ name: 'everyday', macros: [{ key: 'F3', label: 'Exch', text: '{CALL} de {MYCALL} ur 599 599 k' }] }],
+      }),
+    })
+    fireEvent.change(document.querySelector('.rtty-hiscall')!, { target: { value: 'K1ABC' } })
+    act(() => logStrip.props.onMacroFields?.({ rstSent: '549', name: '' }))
+    press('F3')
+    await waitFor(() => expect(pskSend).toHaveBeenLastCalledWith('K1ABC de W9XYZ ur 599 599 k'))
+  })
+
   it('keys {EXCH} from the RUNNING contest — the session’s own sent exchange', async () => {
     await renderCockpit({ macros: macrosWith({ activePskProfile: 'contest' }), snap: contest('04 WI') })
     fireEvent.change(document.querySelector('.rtty-hiscall')!, { target: { value: 'K1ABC' } })
@@ -484,7 +504,7 @@ describe('right-click, Ctrl+Shift+F-key and Send once', () => {
     expect(fireEvent.contextMenu(key('F3')), 'the browser’s menu opened over a transmit key').toBe(false)
     expect(editor()?.getAttribute('aria-label')).toBe('Edit F3')
     expect(document.activeElement, 'the caret is in the message').toBe(field(/^message$/i))
-    expect(field(/^message$/i).value).toBe('{CALL} de {MYCALL} ur 599 599 btu k')
+    expect(field(/^message$/i).value).toBe('{CALL} de {MYCALL} ur {RST} {RST} btu k')
     fireEvent.contextMenu(key('F7'))
     expect(editor()?.getAttribute('aria-label')).toBe('Edit F7')
     await act(async () => {})
