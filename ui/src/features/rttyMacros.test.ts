@@ -190,3 +190,21 @@ describe('{NL}', () => {
     expect(expandRttyMacro('{NL}CQ DE {MYCALL}{NL}K{nl}', ctx)).toEqual({ text: '\r\nCQ DE W9XYZ\r\nK\r\n' })
   })
 })
+
+describe('every built-in reaches the air with nothing in braces', () => {
+  // An unknown token is refused rather than sent, but a built-in must never need refusing: every
+  // key of both sets expands, through the one expander the cockpit sends with, to text with no
+  // brace left in it — with the log's report box empty and with a report in it.
+  it('in both sets, with and without a report in the log', () => {
+    for (const set of ['everyday', 'contest'] as const) {
+      for (const slot of resolveRttySet(undefined, set, (k) => k)) {
+        if (!slot.text) continue
+        for (const rst of ['', '549']) {
+          const r = expandRttyMacro(slot.text, { mycall: 'W9XYZ', call: 'K1ABC', exch: '05 IL', rst, myname: '', hisname: '' })
+          expect(r, `${set} ${slot.key}`).toHaveProperty('text')
+          expect('text' in r && /[{}]/.test(r.text), `${set} ${slot.key}: ${JSON.stringify(r)}`).toBe(false)
+        }
+      }
+    }
+  })
+})

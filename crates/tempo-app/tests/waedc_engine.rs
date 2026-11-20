@@ -115,8 +115,10 @@ fn the_cw_keys_send_the_report_and_a_serial_that_counts_up() {
 }
 
 /// ⭐ **RTTY: F2 sends `599` and the serial twice, and the serial moves on.** The RTTY cockpit
-/// fills `{EXCH}` from the snapshot's `sent_exchange`; `{CALL}` and `{EXCH}` are filled here
-/// as `expandRttyMacro` fills them.
+/// fills `{EXCH}` from the snapshot's `sent_exchange` and `{RST}` from the contest strip's sent
+/// report — the session's `rst_sent_box` while that box is on, else 599 (`LogEntry`'s
+/// `sentRstDefault`); `{CALL}`, `{RST}` and `{EXCH}` are filled here as `expandRttyMacro` fills
+/// them, and nothing in braces may be left for the air.
 #[test]
 fn the_rtty_exchange_key_sends_599_and_a_serial_that_counts_up() {
     let mut e = engine("waedc_rtty");
@@ -124,14 +126,19 @@ fn the_rtty_exchange_key_sends_599_and_a_serial_that_counts_up() {
     let f2 = macro_text(RTTY_LAYOUTS, "const CONTEST: BuiltinMacro[] = [", "F2");
     for (n, call) in ["DL1ABC", "K9AAA"].iter().enumerate() {
         e.contest_working(call).expect("a running session");
-        let exch = e
-            .snapshot()
-            .field_day
-            .expect("in the contest")
-            .sent_exchange;
+        let fd = e.snapshot().field_day.expect("in the contest");
+        let exch = fd.sent_exchange;
+        let rst = fd.rst_sent_box.unwrap_or_else(|| "599".to_string());
         let nr = (n + 1).to_string();
         assert_eq!(exch, nr, "contact {nr}");
-        let keyed = f2.replace("{CALL}", call).replace("{EXCH}", &exch);
+        let keyed = f2
+            .replace("{CALL}", call)
+            .replace("{RST}", &rst)
+            .replace("{EXCH}", &exch);
+        assert!(
+            !keyed.contains(['{', '}']),
+            "a token left for the air: {keyed}"
+        );
         assert_eq!(keyed, format!("{call} 599 {nr} {nr}"));
         assert!(e
             .contest_log_manual(
