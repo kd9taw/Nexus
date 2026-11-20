@@ -62,6 +62,11 @@
 //      150 % and 175 %; PSK's and JTTY's Reset layout at 900×600), Tab left focus behind it on a macro key (PSK, CW and
 //      JTTY on a folded dock), and it stood over JTTY's refusal (700×800), all measured. With nothing open and nothing
 //      focused the notice must be on screen: a column that hid itself for good would pass the rest.
+//   14. NO SCROLL, IN THE FRAME IT LANDS, PUTS A STOP CONTROL UNDER THE NOTICE: on the same pages (and Phone's and JS8's at 700×800,
+//      175 %), with the column settled at each of seven scroll positions, the shell is jumped to each of the others and the
+//      notice's boxes and every stop control's visible box are read AT ONCE, before any scroll event or frame. The browser
+//      scrolls first and tells the page after, so a column placed after the fact stood over Stop TX for a frame (CW, Phone and
+//      JS8 at 700×800, 175 %, measured); a wheel or a dragged scrollbar can jump that far in one frame.
 //   And JTTY's longest real refusal, on check 9 and in check 10: a real click on the words stays on the words (they once
 //   passed it to the hidden key behind them), the whole text is in its tooltip, and Tab stops behind it nowhere.
 // THE CONTROLS, run every time: the header forced to stick on top (z 9) at 900×600 / 175 % must make check 1 fail;
@@ -123,9 +128,41 @@ const TOAST_LABEL = 'Test CAT'
 const TOAST_SEEN = '.ui-toast { pointer-events: auto !important }'
 /** Check 13's pages: where a pop-up up broke check 4, 9 or 10 (measured). */
 const TOASTED = [['CW', 'cw', 'main.cw-cockpit', [FLOOR, '100']], ['CW', 'cw', 'main.cw-cockpit', [LAPTOP, '150']],
+  ['Phone', 'phone', 'main.phone-cockpit', [offMatrix(700, 800), '175']], ['JS8', 'js8', 'main.js8-cockpit', [offMatrix(700, 800), '175']],
   ['CW', 'cw', 'main.cw-cockpit', [offMatrix(700, 800), '175']], ['PSK', 'psk', 'main.psk-cockpit', [offMatrix(900, 600), '175']],
   ['PSK', 'psk', 'main.psk-cockpit', [offMatrix(1280, 720), '175']], ['JTTY', 'jtty', 'main.jtty-cockpit', [offMatrix(900, 600), '175']],
   ['JTTY', 'jtty', 'main.jtty-cockpit', [offMatrix(700, 800), '175']], ['JTTY', 'jtty', 'main.jtty-cockpit', [offMatrix(1280, 720), '175']]]
+/** Check 14: from each of seven settled scroll positions, a jump to each other one, read in the frame it lands. */
+const jumpCheck = (sel) => `(async () => {
+  const s = document.querySelector(${JSON.stringify(sel)})
+  const max = Math.max(0, s.scrollHeight - s.clientHeight)
+  const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 0))))
+  const cut = (a, b) => { const q = { left: Math.max(a.left, b.left), top: Math.max(a.top, b.top), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) }; return q.right > q.left && q.bottom > q.top ? q : null }
+  const win = { left: 0, top: 0, right: innerWidth, bottom: innerHeight }
+  // What the operator can see of each stop control: inside the window, and inside the shell if it scrolls with it.
+  const stops = () => [...document.querySelectorAll('[data-stop-control], .op-btn.stop')].filter((b) => b.closest('[hidden]') == null)
+    .map((b) => [b, cut(b.getBoundingClientRect(), s.contains(b) ? cut(win, s.getBoundingClientRect()) ?? win : win)]).filter(([, q]) => q)
+  // Each drawn toast, cut to the column (which scrolls inside); nothing while the column is not drawn.
+  const toasts = () => { const vp = document.querySelector('.ui-toast-viewport'); if (!vp || getComputedStyle(vp).visibility !== 'visible') return []
+    const c = vp.getBoundingClientRect(); return [...vp.querySelectorAll('.ui-toast')].map((t) => cut(t.getBoundingClientRect(), c)).filter(Boolean) }
+  const steps = [...new Set([0, 1, 2, 3, 4, 5, 6].map((k) => Math.round((max * k) / 6)))]
+  const hits = []
+  let n = 0
+  for (const a of steps) {
+    s.scrollTop = a
+    await frame()
+    for (const b of steps) {
+      if (b === a) continue
+      s.scrollTop = b
+      n++
+      for (const t of toasts()) for (const [st, q] of stops()) if (cut(t, q)) hits.push(a + '→' + b + ' ' + ((st.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 12)))
+      s.scrollTop = a
+    }
+  }
+  s.scrollTop = 0
+  await frame()
+  return { n, hits }
+})()`
 /** Check 13's control: the column stretched over the whole right side of the window, whatever it keeps off. */
 const TOAST_EVERYWHERE = ".ui-toast-viewport { top: 0 !important; bottom: 0 !important; max-height: none !important; visibility: visible !important } .ui-toast { flex: 1 1 auto !important }"
 /** The dock's send control: Send on the keyboard docks, PTT on Phone's. */
@@ -670,6 +707,7 @@ async function measureAt(route, sel, [size, scale], css = null, menus = true, co
     if (toast) m.toastShown = await evaluate(`(() => { document.activeElement?.blur?.(); const t = document.querySelector('.ui-toast'); if (!t) return false; const q = t.getBoundingClientRect()
       if (q.width < 1 || q.height < 1 || getComputedStyle(t).visibility !== 'visible') return false
       const x = Math.min(Math.max(q.left + q.width / 2, 0), innerWidth - 1), y = Math.min(Math.max(q.top + q.height / 2, 0), innerHeight - 1); const h = document.elementFromPoint(x, y); return h != null && t.contains(h) })()`)
+    if (toast) m.jump = await evaluate(jumpCheck(sel))
     if (menus) {
       m.menuTop = await evaluate(menuCheck(sel, 'top'))
       m.menuEnd = await evaluate(menuCheck(sel, 'end'))
@@ -778,8 +816,9 @@ try {
       throw new Error('no screen')
     }
     const menu = (mc) => (mc?.opened ? `${mc.ok}/${mc.n}${mc.covered.length ? `, ${mc.covered.length} covered` : ''}${mc.unreached?.length ? `, ${mc.unreached.length} unreached` : ''}` : 'not opened')
-    console.log(`digishell-probe: ${name} check 13: notice ${m.toastShown ? 'on screen' : 'NOT on screen'} · ⊞ Panels at top ${menu(m.menuTop)}, at end ${menu(m.menuEnd)} · check 8: ${coverLine(m.cover)}${m.focus ? ` · check 9: ${m.focus.n} focused, ${m.focus.hidden.length} hidden` : ''}${m.refusal ? ` · check 10: ${JSON.stringify(m.refusal)}` : ''}`)
+    console.log(`digishell-probe: ${name} check 13: notice ${m.toastShown ? 'on screen' : 'NOT on screen'} · ⊞ Panels at top ${menu(m.menuTop)}, at end ${menu(m.menuEnd)} · check 8: ${coverLine(m.cover)}${m.focus ? ` · check 9: ${m.focus.n} focused, ${m.focus.hidden.length} hidden` : ''}${m.refusal ? ` · check 10: ${JSON.stringify(m.refusal)}` : ''} · check 14: ${m.jump.n} jumps, ${m.jump.hits.length} over a stop`)
     if (!m.toastShown) red(`${name}: with nothing open and nothing focused, the notice is not on screen`)
+    if (m.jump.hits.length) red(`${name}: in the frame a scroll lands, the notice stands over a stop control on ${m.jump.hits.length} of ${m.jump.n} jumps (${m.jump.hits.slice(0, 6).join(', ')})`)
     for (const r of [...reds(name, m), ...coverReds(name, m.cover), ...focusReds(name, m), ...pinReds(name, m)]) red(r)
   }
   // THE CONTROL.
