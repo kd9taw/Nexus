@@ -13330,6 +13330,29 @@ impl RadioLoop {
                                                      write after the split frequency",
                                                 );
                                             }
+                                            // …and on the CW screen VFO B's MODE, the RX VFO's
+                                            // own (`md`, blank = obey the radio, sends nothing).
+                                            // The press wrote VFO B's frequency only, so the
+                                            // radio transmitted in whatever mode VFO B was left
+                                            // in: DATA-U after an FT8 Rig split's `X PKTUSB`,
+                                            // USB after Phone, where the key and break-in do
+                                            // nothing (the FTDX10 report: "split disables
+                                            // break-in"). Hamlib's newcat `set_mode` reads VFO
+                                            // B's mode first and writes `MD1` only when it
+                                            // differs. A miss leaves the split as it was before.
+                                            // Never while a satellite is held: the uplink's mode
+                                            // is the pass's own (`sat_tx_mode_for_split` below),
+                                            // and `md` there is the DOWNLINK's (FM on KOSEN-1).
+                                            let terrestrial = section_cw
+                                                && engine_lock(engine)
+                                                    .sat_transponder_held()
+                                                    .is_none();
+                                            if terrestrial && rig.set_split_mode(&md, -1).is_err() {
+                                                crate::civ::diag::note(
+                                                    "split: rigctld did not take the CW mode \
+                                                     for VFO B",
+                                                );
+                                            }
                                         }
                                     }
                                     let ok = set.is_ok();
@@ -47272,6 +47295,73 @@ mod tests {
                     "I 14238000",
                     "W FB014238000; 0",
                 ],
+                "model {model}"
+            );
+        }
+    }
+
+    /// The split writes a CW press makes, through Hamlib: split on at the dial + 1 kHz from the
+    /// CW screen, then one + press. `model` is the Hamlib model the radio is set to.
+    fn cw_split_presses_on_the_wire(model: u32) -> Vec<String> {
+        let (addr, seen) = recording_rigctld_stub();
+        let engine = engine_on(model);
+        engine.lock().unwrap().set_operating_mode("cw", false);
+        split_ticks(
+            &engine,
+            Rig::rigctld(&addr),
+            vec![
+                |_, _| {},
+                |e, _| e.request_operator_split(Some(14.031)).unwrap(),
+                |e, _| e.request_operator_split(Some(14.032)).unwrap(),
+            ],
+        );
+        let lines = seen.lock().unwrap().clone();
+        lines
+            .iter()
+            .map(|l| l.trim().to_string())
+            .filter(|l| {
+                l.starts_with("S ")
+                    || l.starts_with("I ")
+                    || l.starts_with("X ")
+                    || l.starts_with("W FB")
+            })
+            .collect()
+    }
+
+    /// ⭐ A CW SPLIT ON A HAMLIB NEWCAT YAESU PUTS VFO B IN CW TOO (the FTDX10 field report: SPLIT
+    /// on the CW screen "disabled break-in"). The press wrote VFO B's frequency and never its
+    /// mode, so the radio transmitted in whatever mode VFO B was left in: DATA-U after an FT8
+    /// session with Split Operation = Rig (whose overs write `X PKTUSB`), USB after Phone. Out
+    /// of CW the key and the radio's break-in do nothing. `X CW -1` is what the FT overs already
+    /// send for their own mode; Hamlib's newcat backend reads VFO B's mode first and writes `MD1`
+    /// only when it differs, so a VFO B already in CW is sent nothing.
+    #[test]
+    fn a_cw_split_press_on_a_hamlib_newcat_yaesu_puts_vfo_b_in_cw() {
+        for model in [1035u32, 1036, 1040, 1042, 1044, 1049] {
+            assert_eq!(
+                cw_split_presses_on_the_wire(model),
+                vec![
+                    "S 1 VFOB",
+                    "I 14031000",
+                    "W FB014031000; 0",
+                    "X CW -1",
+                    "S 1 VFOB",
+                    "I 14032000",
+                    "W FB014032000; 0",
+                    "X CW -1",
+                ],
+                "model {model}"
+            );
+        }
+    }
+
+    /// CONTROL: a CW split on any other Hamlib radio writes no TX VFO mode, as before.
+    #[test]
+    fn a_cw_split_press_on_any_other_hamlib_radio_writes_no_tx_mode() {
+        for model in [3073u32, 2014, 1051] {
+            assert_eq!(
+                cw_split_presses_on_the_wire(model),
+                vec!["S 1 VFOB", "I 14031000", "S 1 VFOB", "I 14032000"],
                 "model {model}"
             );
         }
