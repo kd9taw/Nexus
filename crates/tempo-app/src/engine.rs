@@ -14860,7 +14860,7 @@ impl Engine {
     /// with its hard end). What [`TxOwner::Cw`] means, asked on its own by the keying paths that
     /// take no owner: a tune carrier, manual PTT and the FT slot planner each refuse a NEW key
     /// while it holds, so nothing keys on top of a CW word.
-    fn cw_sending(&self) -> bool {
+    pub fn cw_sending(&self) -> bool {
         !self.cw_queue.is_empty() || self.cw_keying()
     }
 

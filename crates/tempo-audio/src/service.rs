@@ -8669,20 +8669,32 @@ impl RadioLoop {
         now: f64,
     ) {
         self.operator_split_mode_owed = None;
-        let wanted = {
+        let (wanted, cw_sending) = {
             let eng = engine_lock(engine);
-            eng.settings().operating_mode != tempo_app::settings::OperatingMode::Digital
-                && eng.sat_transponder_held().is_none()
+            (
+                eng.settings().operating_mode != tempo_app::settings::OperatingMode::Digital
+                    && eng.sat_transponder_held().is_none()
+                    // ⛔ ONLY WHILE NEXUS'S SPLIT STANDS. A split the radio refused
+                    // (`Engine::split_rejected`) is simplex in Nexus, and Hamlib's `X` turns split
+                    // back ON where its cache says it is off.
+                    && eng.split_tx_mhz().is_some(),
+                eng.cw_sending(),
+            )
         };
         if !wanted {
             self.operator_split_mode = None;
             return;
         }
+        // CW counts as keyed while words are still queued, and for the radio's hang time after the
+        // last one (`CW_HANG_MS`): on the CAT keyer and the WinKeyer `cw_keying_until` is the
+        // ESTIMATED end of the word, which a radio's own keyer can run past.
         let keyed = self.operator_keyed()
             || self.holds_tx()
             || self.tuning_keyed
             || rig.keyed
-            || now < self.cw_keying_until;
+            || cw_sending
+            || now < self.cw_keying_until
+            || (self.cw_keying_until > 0.0 && now < self.cw_keying_until + CW_HANG_MS);
         if keyed && !md.trim().is_empty() {
             self.operator_split_mode_owed = Some(md.to_string());
             return;
@@ -13412,6 +13424,9 @@ impl RadioLoop {
                                         let mut eng = engine_lock(engine);
                                         eng.split_rejected(tx_mhz);
                                     }
+                                    // No split: nothing is owed to, or known of, VFO B's mode.
+                                    self.operator_split_mode = None;
+                                    self.operator_split_mode_owed = None;
                                     retune_note = Some(reason);
                                     self.last_split_mode = None;
                                 }
@@ -13484,6 +13499,8 @@ impl RadioLoop {
                                             let mut eng = engine_lock(engine);
                                             eng.split_rejected(tx_mhz);
                                         }
+                                        self.operator_split_mode = None;
+                                        self.operator_split_mode_owed = None;
                                         // A silence is said as one, never as a refusal.
                                         match &set {
                                             Err(e) if is_link_fault(e) => format!(
@@ -47609,6 +47626,26 @@ mod tests {
             |_, _| {},
             |_, _| {},
         ]);
+        assert!(wire.iter().any(|l| l == "T 0"), "{wire:?}");
+        assert!(!wire.iter().any(|l| l.starts_with("X ")), "{wire:?}");
+    }
+
+    /// ⛔ A SPLIT THE RADIO REFUSED OWES VFO B NOTHING. `Engine::split_rejected` makes it simplex
+    /// in Nexus with no `S 0` to send, and Hamlib's `X` would turn split back ON where its cache
+    /// says it is off: the mode owed from a keyed press is dropped with the split.
+    #[test]
+    fn a_split_refused_after_a_keyed_press_owes_vfo_b_no_mode() {
+        let wire = keyed_split_mode_wire(vec![
+            |e, _| e.request_split(Some(14.345)),
+            |e, _| e.split_rejected(14.345),
+            |e, _| e.set_ptt(false),
+            |_, _| {},
+            |_, _| {},
+        ]);
+        assert!(
+            wire.iter().any(|l| l == "I 14345000"),
+            "precondition: {wire:?}"
+        );
         assert!(wire.iter().any(|l| l == "T 0"), "{wire:?}");
         assert!(!wire.iter().any(|l| l.starts_with("X ")), "{wire:?}");
     }
