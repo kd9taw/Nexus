@@ -124,11 +124,25 @@ describe('the tokens', () => {
   })
 
   it('flags every token it does not know, and a stray brace, and refuses to send them', () => {
-    expect(unknownRttyTokens('CQ {MYCALL} {MYCALL} {NAME} {QTH} {NAME}')).toEqual(['{NAME}', '{QTH}'])
+    expect(unknownRttyTokens('CQ {MYCALL} {MYCALL} {QTH} {OPNAME} {QTH}')).toEqual(['{QTH}', '{OPNAME}'])
     expect(unknownRttyTokens('CQ {MYCALL')).toEqual(['{'])
     expect(unknownRttyTokens('CQ MYCALL}')).toEqual(['}'])
-    expect(unknownRttyTokens('{CALL} {RST} {EXCH} {MYCALL} {call}')).toEqual([])
-    expect(expandRttyMacro('{CALL} {NAME}', ctx)).toEqual({ unknown: '{NAME}' })
+    expect(unknownRttyTokens('{CALL} {RST} {EXCH} {MYCALL} {call} {NAME} {HISNAME}')).toEqual([])
+    expect(expandRttyMacro('{CALL} {QTH}', ctx)).toEqual({ unknown: '{QTH}' })
+  })
+
+  it('{RST} sends the RST Sent in the log entry, and 599 only when none is set', () => {
+    expect(expandRttyMacro('{CALL} UR {RST} {RST}', { ...ctx, rst: ' 549 ' })).toEqual({ text: 'K1ABC UR 549 549' })
+    expect(expandRttyMacro('UR {RST}', { ...ctx, rst: '' })).toEqual({ text: 'UR 599' })
+    expect(expandRttyMacro('UR {RST}', { ...ctx, rst: null })).toEqual({ text: 'UR 599' })
+  })
+
+  it('{NAME} is your name and {HISNAME} theirs; an empty one leaves no gap, as CW does', () => {
+    const named = { ...ctx, myname: 'alex', hisname: 'bob' }
+    expect(expandRttyMacro('R FB {HISNAME} NAME {NAME} {NAME}', named)).toEqual({ text: 'R FB BOB NAME ALEX ALEX' })
+    expect(expandRttyMacro('{NAME} vs {HISNAME}', named), '{HISNAME} is not {NAME}').toEqual({ text: 'ALEX vs BOB' })
+    expect(expandRttyMacro('R TU {HISNAME} DE {MYCALL}', ctx)).toEqual({ text: 'R TU DE W9XYZ' })
+    expect(expandRttyMacro('{HISNAME} GM{NL}', ctx)).toEqual({ text: 'GM\r\n' })
   })
 })
 

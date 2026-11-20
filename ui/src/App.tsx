@@ -4658,6 +4658,7 @@ function App() {
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 panels={rttyPanels}
                 macros={settings?.macros}
+                opName={settings?.opName}
                 onMacrosSaved={saveMacrosMirror}
                 onOpenSettings={openSettingsAt}
               />
@@ -4677,6 +4678,7 @@ function App() {
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 panels={pskPanels}
                 macros={settings?.macros}
+                opName={settings?.opName}
                 onMacrosSaved={saveMacrosMirror}
                 onOpenSettings={openSettingsAt}
               />

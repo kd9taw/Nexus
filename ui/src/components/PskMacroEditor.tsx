@@ -39,6 +39,8 @@ const TOKEN_HINTS: { token: (typeof PSK_TOKENS)[number]; hintKey: MessageKey }[]
   { token: '{CALL}', hintKey: 'psk.macroEditor.token.call' },
   { token: '{RST}', hintKey: 'psk.macroEditor.token.rst' },
   { token: '{EXCH}', hintKey: 'psk.macroEditor.token.exch' },
+  { token: '{NAME}', hintKey: 'psk.macroEditor.token.name' },
+  { token: '{HISNAME}', hintKey: 'psk.macroEditor.token.hisname' },
 ]
 
 /** A slot with neither caption nor message: clicking it opens the editor instead of sending. */

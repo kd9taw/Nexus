@@ -38,6 +38,8 @@ const TOKEN_HINTS: { token: (typeof RTTY_TOKENS)[number]; hintKey: MessageKey }[
   { token: '{CALL}', hintKey: 'rtty.macroEditor.token.call' },
   { token: '{RST}', hintKey: 'rtty.macroEditor.token.rst' },
   { token: '{EXCH}', hintKey: 'rtty.macroEditor.token.exch' },
+  { token: '{NAME}', hintKey: 'rtty.macroEditor.token.name' },
+  { token: '{HISNAME}', hintKey: 'rtty.macroEditor.token.hisname' },
   { token: '{NL}', hintKey: 'rtty.macroEditor.token.nl' },
 ]
 

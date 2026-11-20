@@ -168,9 +168,24 @@ describe('the tokens', () => {
   })
 
   it('flags every token it does not know, and a stray brace, and refuses to send them', () => {
-    expect(unknownPskTokens('tnx {NAME} es {NAME} {QTH} }')).toEqual(['{NAME}', '{QTH}', '}'])
-    expect(unknownPskTokens('{CALL} de {MYCALL}'), 'the known ones are not flagged').toEqual([])
-    expect(expandPskMacro('tnx {NAME}', ctx)).toEqual({ unknown: '{NAME}' })
+    expect(unknownPskTokens('tnx {OPNAME} es {OPNAME} {QTH} }')).toEqual(['{OPNAME}', '{QTH}', '}'])
+    expect(unknownPskTokens('{CALL} de {MYCALL} {NAME} {HISNAME}'), 'the known ones are not flagged').toEqual([])
+    expect(expandPskMacro('tnx {QTH}', ctx)).toEqual({ unknown: '{QTH}' })
+  })
+
+  it('{RST} sends the RST Sent in the log entry, and 599 only when none is set', () => {
+    expect(sent('{CALL} ur {RST} {RST} btu k'), 'no report set').toBe('K1ABC ur 599 599 btu k')
+    const r = expandPskMacro('ur {RST} {RST}', { ...ctx, rst: ' 549 ' })
+    expect(r).toEqual({ text: 'ur 549 549' })
+    expect(expandPskMacro('ur {RST}', { ...ctx, rst: '' })).toEqual({ text: 'ur 599' })
+  })
+
+  it('{NAME} is your name and {HISNAME} theirs, as typed; an empty one leaves no gap', () => {
+    const named = { ...ctx, myname: 'Alex', hisname: 'Bob' }
+    expect(expandPskMacro('r fb {HISNAME} name {NAME} {NAME}', named)).toEqual({ text: 'r fb Bob name Alex Alex' })
+    expect(expandPskMacro('{NAME} vs {HISNAME}', named)).toEqual({ text: 'Alex vs Bob' })
+    expect(expandPskMacro('r tu {HISNAME} de {MYCALL}', ctx)).toEqual({ text: 'r tu de W9XYZ' })
+    expect(expandPskMacro('{HISNAME} gm', ctx)).toEqual({ text: 'gm' })
   })
 })
 

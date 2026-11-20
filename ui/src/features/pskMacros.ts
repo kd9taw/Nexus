@@ -18,6 +18,7 @@
 import type { KeyboardMacroProfile } from '../types'
 import {
   MACRO_KEYS,
+  fillNames,
   knownTokenPattern,
   macroSetId,
   resolveMacroSet,
@@ -114,10 +115,9 @@ export function withPskSetReset(
   return withMacroSetReset(profiles, set)
 }
 
-/** The tokens the expander fills, as the editor lists them. RTTY's four, because they are the
- *  four facts a keyboard QSO is made of and an operator working both modes types the same
- *  message in each. */
-export const PSK_TOKENS = ['{MYCALL}', '{CALL}', '{RST}', '{EXCH}'] as const
+/** The tokens the expander fills, as the editor lists them. RTTY's, because they are the facts a
+ *  keyboard QSO is made of and an operator working both modes types the same message in each. */
+export const PSK_TOKENS = ['{MYCALL}', '{CALL}', '{RST}', '{EXCH}', '{NAME}', '{HISNAME}'] as const
 
 const KNOWN = knownTokenPattern(PSK_TOKENS)
 
@@ -139,14 +139,22 @@ export type PskRefusal = MacroRefusal
 
 /** `text` with every token filled, or the reason it cannot be.
  *
- *  `{RST}` is 599 — PSK's own convention, and the report the cockpit's built-in exchange has
- *  always sent. `{CALL}` goes up (the Call box already stores it that way); `{MYCALL}` is passed
- *  through as the station holds it, which is what a click on these keys has always sent and is
- *  not this change's to alter. `exch` is the running contest's sent exchange WITHOUT the report,
+ *  `{RST}` is `rst`, the RST Sent in the log entry, and 599 when there is none. `{NAME}` is
+ *  `myname` (Settings ▸ Station) and `{HISNAME}` is `hisname` (the log entry's Name), as typed —
+ *  mixed case is PSK's — and an unknown name sends nothing (`fillNames`). `{CALL}` goes up (the
+ *  Call box already stores it that way); `{MYCALL}` is passed through as the station holds it,
+ *  which is what a click on these keys has always sent and is not this change's to alter. `exch` is the running contest's sent exchange WITHOUT the report,
  *  and null outside a contest, where `{EXCH}` is refused exactly as `{CALL}` is with no call. */
 export function expandPskMacro(
   text: string,
-  ctx: { mycall: string; call: string; exch: string | null },
+  ctx: {
+    mycall: string
+    call: string
+    exch: string | null
+    rst?: string | null
+    myname?: string
+    hisname?: string
+  },
 ): { text: string } | PskRefusal {
   const unknown = unknownPskTokens(text)
   if (unknown.length > 0) return { unknown: unknown[0] }
@@ -157,6 +165,8 @@ export function expandPskMacro(
   if (uses('MYCALL') && !mycall) return { missing: 'mycall' }
   if (uses('CALL') && !call) return { missing: 'call' }
   if (uses('EXCH') && !exch) return { missing: 'exch' }
-  const value: Record<string, string> = { MYCALL: mycall, CALL: call, RST: '599', EXCH: exch }
-  return { text: text.replace(KNOWN, (_, token: string) => value[token.toUpperCase()]) }
+  const rst = (ctx.rst ?? '').trim().toUpperCase() || '599'
+  const named = fillNames(text, ctx.myname ?? '', ctx.hisname ?? '')
+  const value: Record<string, string> = { MYCALL: mycall, CALL: call, RST: rst, EXCH: exch }
+  return { text: named.replace(KNOWN, (_, token: string) => value[token.toUpperCase()]) }
 }

@@ -5054,6 +5054,10 @@ pub struct Engine {
     cw_peer_call: String,
     cw_peer_name: String,
     cw_peer_state: String,
+    /// The RST Sent in the CW cockpit's log entry, for the `{RST}` CW-macro token, pushed by the
+    /// frontend as the box changes (`set_cw_rst_sent`). Empty until it says, and then `{RST}` keys
+    /// 599: a report sent that the log does not hold was the bug this field closes.
+    cw_rst_sent: String,
     /// #293: names from callbook lookups already answered this session, `(CALL, name)`, newest
     /// last, bounded by [`CALLBOOK_NAMES_CAP`]. Filled by the shell when a lookup resolves (the
     /// engine has no callbook of its own), read by [`Self::qso_record`] so a sequencer-logged
@@ -8070,6 +8074,7 @@ impl Engine {
             cw_peer_call: String::new(),
             cw_peer_name: String::new(),
             cw_peer_state: String::new(),
+            cw_rst_sent: String::new(),
             callbook_names: VecDeque::new(),
             callbook_answers: VecDeque::new(),
             callbook_fixes: VecDeque::new(),
@@ -13242,10 +13247,11 @@ impl Engine {
 
     /// Queue CW to transmit. `text` is an F-key macro template OR literal type-ahead;
     /// it's expanded with the current QSO context (mycall/name/grid + the worked call +
-    /// a 599 report) and the radio loop keys it via `rig.send_morse`.
+    /// the log entry's RST Sent) and the radio loop keys it via `rig.send_morse`.
     /// Expand a CW macro template with the live QSO context (mycall/name/grid + the worked
-    /// call via `!` + a 599 report). Shared by [`Self::send_cw`] and [`Self::preview_cw`] so
-    /// the cockpit's "what F2 will send" preview matches exactly what gets sent.
+    /// call via `!` + the log entry's RST Sent, 599 when it holds none). Shared by
+    /// [`Self::send_cw`] and [`Self::preview_cw`] so the cockpit's "what F2 will send" preview
+    /// matches exactly what gets sent.
     fn expand_cw(&self, text: &str) -> String {
         let hiscall = self
             .app
@@ -13313,7 +13319,13 @@ impl Engine {
             hiscall: &hiscall,
             hisname,
             hisstate,
-            rst: "599",
+            // The log entry's RST Sent, so the report keyed is the report logged; 599 when the
+            // entry has none (`set_cw_rst_sent`).
+            rst: if self.cw_rst_sent.is_empty() {
+                "599"
+            } else {
+                &self.cw_rst_sent
+            },
             class,
             section,
             exch: &exch,
@@ -13454,6 +13466,16 @@ impl Engine {
         self.cw_peer_call = call.trim().to_string();
         self.cw_peer_name = tempo_core::cw::sendable_text(&name);
         self.cw_peer_state = tempo_core::cw::sendable_text(&state);
+    }
+
+    /// Record the RST Sent in the CW cockpit's log entry, for the `{RST}` CW-macro token (cut on
+    /// the way out, so `549` keys `54N`). Pushed by the frontend whenever the box changes; empty
+    /// puts `{RST}` back on 599.
+    ///
+    /// ⛔ The box is typed text and a macro keys it, so it keeps only what Nexus's keyers may be
+    /// handed ([`tempo_core::cw::sendable_text`]), as the worked station's name does.
+    pub fn set_cw_rst_sent(&mut self, rst: String) {
+        self.cw_rst_sent = tempo_core::cw::sendable_text(&rst);
     }
 
     /// #293: remember the name a callbook lookup returned for `call`, replacing any earlier
@@ -66728,6 +66750,27 @@ mod tests {
             Some("K1ABC"),
             "a declined restore must not disturb the contact in flight (#100)"
         );
+    }
+
+    /// ⭐ **`{RST}` keys the RST Sent in the log entry**, cut, and 5NN only when none is set.
+    /// It was always 599: an operator whose log said 549 keyed 5NN at the station.
+    #[test]
+    fn cw_rst_keys_the_log_entrys_rst_sent_and_5nn_only_without_one() {
+        let mut e = Engine::new("W8ABC", "EN82", 0);
+        assert_eq!(e.preview_cw("UR {RST} {RST}"), "UR 5NN 5NN", "none set yet");
+        e.set_cw_rst_sent(" 549 ".into());
+        assert_eq!(
+            e.preview_cw("UR {RST} {RST}"),
+            "UR 54N 54N",
+            "cut numbers still apply"
+        );
+        e.set_cw_rst_sent("579".into());
+        assert_eq!(e.preview_cw("UR {RST}"), "UR 57N", "the latest wins");
+        // What the strip holds is keyed, so it keeps only what a keyer may be handed.
+        e.set_cw_rst_sent("5;49".into());
+        assert_eq!(e.preview_cw("UR {RST}"), "UR 54N");
+        e.set_cw_rst_sent(String::new());
+        assert_eq!(e.preview_cw("UR {RST}"), "UR 5NN", "cleared: back to 599");
     }
 
     /// ⭐ **`{EXCH}` keys the exchange of the contest that is running**, not Field Day's.

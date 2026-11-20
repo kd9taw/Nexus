@@ -106,6 +106,8 @@ interface Props {
    *  `activePskProfile`. Passed down rather than fetched here, so this cockpit adds no settings
    *  read of its own — RTTY's shape. Absent ⇒ every key is its built-in. */
   macros?: Settings['macros'] | null
+  /** The operator's name (Settings ▸ Station), for the `{NAME}` macro token. */
+  opName?: string
   /** The engine saved the macro sets: here is the `macros` it now holds, for the mirror. */
   onMacrosSaved?: (macros: Settings['macros']) => void
   /** Open Settings at a section id: the rotor strip's "configured but not answering" chip
@@ -164,7 +166,7 @@ function fmtAfc(hz: number): string {
  * Mounted in a keep-alive host (like RTTY/SSTV) so the decoded stream keeps
  * accumulating while the operator is on another section.
  */
-export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, onEntryCall, panels, macros, onMacrosSaved, onOpenSettings }: Props) {
+export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, onEntryCall, panels, macros, opName, onMacrosSaved, onOpenSettings }: Props) {
   // md and up, the read-only TX meters in the strip's meters cell (SSTV's, JS8's and Phone's
   // arrangement, #489): the audio drive is set against the radio's ALC, and Po shows the carrier.
   const chrome = useCompactChrome()
@@ -285,6 +287,9 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   // refused (surfaced as a toast).
   const [text, setText] = useState('')
   const [hisCall, setHisCall] = useState('')
+  // The log strip's RST Sent and Name, as it last reported them (LogEntry `onMacroFields`): what a
+  // macro's {RST} and {HISNAME} key, so the report sent is the report logged. Read at send time.
+  const logFields = useRef({ rstSent: '', name: '' })
   const snapRef = useRef(snap)
   snapRef.current = snap
   // `line`, not `t` — the catalog lookup is `t()` in every migrated file, so a parameter by
@@ -516,6 +521,9 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
       mycall: snapRef.current?.mycall ?? '',
       call: hisCall,
       exch: exch ? exch : null,
+      rst: logFields.current.rstSent,
+      myname: opName ?? '',
+      hisname: logFields.current.name,
     })
     if ('unknown' in expanded) {
       pushToast(t('psk.send.unknownToken', { token: expanded.unknown }), 'info', 3500)
@@ -1002,6 +1010,9 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
             onEntryCall={(c) => {
               setStatsCall(c)
               onEntryCall?.(c)
+            }}
+            onMacroFields={(f) => {
+              logFields.current = f
             }}
             snap={snap}
             // The sub-mode table's names ARE the ADIF Mode tokens (PSK31 / QPSK31), so the

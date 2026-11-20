@@ -70,7 +70,14 @@ vi.mock('../toast', () => {
     }),
   }
 })
-vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> }))
+// The stub keeps the props it was last rendered with, so a test can speak as the log strip.
+const logStrip = vi.hoisted(() => ({ props: {} as { onMacroFields?: (f: { rstSent: string; name: string }) => void } }))
+vi.mock('./LogEntry', () => ({
+  LogEntry: (p: typeof logStrip.props) => {
+    logStrip.props = p
+    return <div data-testid="log-stub" />
+  },
+}))
 vi.mock('./CockpitHeader', () => ({ CockpitHeader: () => <header className="cockpit-header" /> }))
 vi.mock('./Waterfall', () => ({ Waterfall: () => <div className="waterfall-wrap" /> }))
 
@@ -253,6 +260,21 @@ describe('F-keys go through the same send() a click does', () => {
     // POSITIVE CONTROL: F5 is {CALL} alone, and goes.
     press('F5')
     await waitFor(() => expect(pskSend).toHaveBeenCalledWith('K1ABC'))
+  })
+
+  it('keys {RST} as the log strip’s RST Sent, {HISNAME} as its name and {NAME} as yours', async () => {
+    await renderCockpit({
+      opName: 'Alex',
+      macros: macrosWith({
+        pskProfiles: [{ name: 'everyday', macros: [{ key: 'F5', label: 'Rpt', text: 'ur {RST} {RST} tnx {HISNAME} op {NAME}' }] }],
+      }),
+    })
+    // Nothing set in the strip yet: the 599 report, and no name leaves no gap.
+    fireEvent.click(key('F5'))
+    await waitFor(() => expect(pskSend).toHaveBeenCalledWith('ur 599 599 tnx op Alex'))
+    act(() => logStrip.props.onMacroFields?.({ rstSent: '549', name: 'Bob' }))
+    fireEvent.click(key('F5'))
+    await waitFor(() => expect(pskSend).toHaveBeenLastCalledWith('ur 549 549 tnx Bob op Alex'))
   })
 
   it('keys {EXCH} from the RUNNING contest — the session’s own sent exchange', async () => {

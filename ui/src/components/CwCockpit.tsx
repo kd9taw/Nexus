@@ -94,6 +94,7 @@ import {
   setAiCw,
   selectPeer,
   previewCw,
+  setCwRstSent,
   setScopeSpan,
   setYaesuScopeMode,
   setScopeRef,
@@ -1072,8 +1073,19 @@ export function CwCockpit({
   }
   const macrosRef = useRef(macros)
   macrosRef.current = macros
+  // The log strip's RST Sent, which `{RST}` keys (the engine holds it: `set_cw_rst_sent`). Set
+  // only once the engine has it, so the previews below are asked again after it does.
+  const [rstSent, setRstSent] = useState('')
+  const rstPushed = useRef<string | null>(null)
+  const onMacroFields = ({ rstSent: rst }: { rstSent: string }) => {
+    if (rst === rstPushed.current) return
+    rstPushed.current = rst
+    void setCwRstSent(rst)
+      .catch(() => {})
+      .then(() => setRstSent(rst))
+  }
   // Reply preview: the exact text each F-key WILL send (macros expanded with the worked
-  // call). Refetched from the backend when the worked station changes — cheap, once per QSO.
+  // call and the strip's RST Sent). Refetched from the backend when either changes — cheap.
   const [previews, setPreviews] = useState<Record<string, string>>({})
   useEffect(() => {
     let alive = true
@@ -1089,7 +1101,7 @@ export function CwCockpit({
     return () => {
       alive = false
     }
-  }, [guide.workedCall, macros])
+  }, [guide.workedCall, macros, rstSent])
   useEffect(() => {
     if (!active) return
     const tick = (owns: () => boolean) =>
@@ -2309,6 +2321,7 @@ export function CwCockpit({
             : null
         }
         onCallChange={onStripCall}
+        onMacroFields={onMacroFields}
         onReset={onStripReset}
         onSnap={onSnap}
         fieldDay={fieldDay}
