@@ -7155,6 +7155,8 @@ export const ES: PartialCatalog = {
   "settings.accessibility.decodeTick.hint": "Un tic suave cada ciclo en que se decodifican señales nuevas — el ritmo de la banda, sin mirar.",
   "settings.accessibility.cwTurnSound.label": "Sonido de turno en CW",
   "settings.accessibility.cwTurnSound.hint": "Un breve chirrido ascendente cuando el aviso de turno de CW indica que te toca transmitir. Nunca mientras transmites.",
+  "settings.accessibility.logPromptSound.label": "Sonido del aviso de registro",
+  "settings.accessibility.logPromptSound.hint": "Un breve doble tono descendente cuando un contacto terminado pide ser registrado, o cuando el registro automático lo registra por ti.",
   "settings.accessibility.decodeTick.label": "Tic de lote de decodificación",
   "settings.accessibility.legend": "Accesibilidad y sin mirar",
   "settings.accessibility.note": "Voz y señales sonoras para operar de oído (usuarios de lector de pantalla, o cualquiera que quiera respuesta audible). Las etiquetas de teclado y de lector de pantalla de todo Nexus están siempre activas — estos ajustes solo controlan lo que sale por los altavoces.",

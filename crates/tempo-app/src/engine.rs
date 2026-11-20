@@ -4625,6 +4625,11 @@ pub struct Engine {
     /// "clear DX call after logging" wipe on the auto-log path, which used to be
     /// invisible to the frontend because it intercepted only its own log actions.
     logged_tick: u32,
+    /// Bumped when Auto-log writes a completed contact with no confirm popup to show it
+    /// ([`Self::auto_log_complete_contact`]); a contact the operator logs, or one held for the
+    /// popup, leaves it alone. The UI plays the log prompt's sound on it (Settings
+    /// `sound_log_prompt`), the popup appearing being the cue for a held one.
+    auto_logged_tick: u32,
     /// Bumped on every BAND change, by any route ([`Engine::on_band_change`]): the cockpits
     /// clear their call boxes on change (the FT DX call and grid, the JS8 To box, the JTTY Call
     /// box, the log strip's un-logged call). A move within one band never bumps it.
@@ -7973,6 +7978,7 @@ impl Engine {
             udp_free_text: None,
             rx_freq_clear_tick: 0,
             logged_tick: 0,
+            auto_logged_tick: 0,
             band_change_tick: 0,
             pending_udp_clear: None,
             pending_udp_qsos: std::collections::VecDeque::new(),
@@ -23596,6 +23602,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             self.hold_pending_log(HeldQso::built(rec, grid_source));
         } else {
             self.log_built_qso(HeldQso::built(rec, grid_source));
+            self.auto_logged_tick = self.auto_logged_tick.wrapping_add(1);
         }
     }
 
@@ -33573,6 +33580,7 @@ contact yourself."
         s.udp_free_text = self.udp_free_text.clone();
         s.rx_freq_clear_tick = self.rx_freq_clear_tick;
         s.logged_tick = self.logged_tick;
+        s.auto_logged_tick = self.auto_logged_tick;
         s.band_change_tick = self.band_change_tick;
         s.work_tick = self.work_tick;
         s.work_view = self.work_view.clone();
@@ -69132,6 +69140,60 @@ mod tests {
             "disabled feature never retunes"
         );
         assert!(e.snapshot().qsy.is_none());
+    }
+
+    /// The log prompt's sound plays for a contact Auto-log writes with no popup to show it, and
+    /// `auto_logged_tick` is how the UI hears of one: it moves for that contact only. A contact
+    /// held for the popup does not move it (the popup appearing is the cue there), and nor does a
+    /// contact the operator logs (they pressed Log; nothing needs announcing).
+    #[test]
+    fn auto_logged_tick_moves_only_for_a_contact_auto_log_writes_unprompted() {
+        let work = |e: &mut Engine, call: &str| {
+            e.call_station(call);
+            e.ingest_decodes_for_test(&[dec_snr(&format!("K2DEF {call} -10"), -7)], 1);
+            e.ingest_decodes_for_test(&[dec_snr(&format!("K2DEF {call} RR73"), -7)], 3);
+        };
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.auto_log = true;
+        e.settings.prompt_to_log = false;
+        let before = e.snapshot().auto_logged_tick;
+        work(&mut e, "W9XYZ");
+        assert_eq!(e.stored_log().len(), 1, "the contact was auto-logged");
+        assert_eq!(
+            e.snapshot().auto_logged_tick,
+            before.wrapping_add(1),
+            "auto-log moves it"
+        );
+
+        let logged = e.snapshot().logged_tick;
+        let mut other = (*e.stored_log()[0]).clone();
+        other.call = "W1AW".into();
+        e.log_qso(other);
+        assert_ne!(
+            e.snapshot().logged_tick,
+            logged,
+            "the operator's log is a logged contact"
+        );
+        assert_eq!(
+            e.snapshot().auto_logged_tick,
+            before.wrapping_add(1),
+            "but not an auto-log"
+        );
+
+        let mut held = Engine::new("K2DEF", "FN31", 0);
+        held.settings.auto_log = true;
+        held.settings.prompt_to_log = true;
+        let before = held.snapshot().auto_logged_tick;
+        work(&mut held, "W9XYZ");
+        assert!(
+            held.snapshot().pending_log.is_some(),
+            "the contact waits in the popup"
+        );
+        assert_eq!(
+            held.snapshot().auto_logged_tick,
+            before,
+            "a held contact does not move it"
+        );
     }
 
     #[test]

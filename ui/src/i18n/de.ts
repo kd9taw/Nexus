@@ -1519,6 +1519,8 @@ export const DE: PartialCatalog = {
   "settings.accessibility.decodeTick.hint": "Ein leiser Tick in jedem Zyklus, in dem neue Signale dekodiert werden — der Rhythmus des Bandes, ohne hinzusehen.",
   "settings.accessibility.cwTurnSound.label": "CW-Ton bei Ihrem Durchgang",
   "settings.accessibility.cwTurnSound.hint": "Ein kurzes ansteigendes Zirpen, wenn der Durchgangs-Hinweis meldet, dass Sie mit Senden dran sind. Nie, während Sie senden.",
+  "settings.accessibility.logPromptSound.label": "Ton beim Log-Fenster",
+  "settings.accessibility.logPromptSound.hint": "Ein kurzer fallender Zweiklang, wenn eine fertige Verbindung geloggt werden will oder Auto-Log sie für Sie loggt.",
   "settings.pounce.legend": "Pounce — New-One-Alarm",
   "settings.pounce.note": "Meldet sich in dem MOMENT, in dem eine benötigte Station im Cluster oder auf dem RBN erscheint, statt auf die Aktualisierung des Spot-Boards zu warten. Ein lauter Ton kommt auch dann, wenn Nexus nicht das Fenster im Vordergrund ist, und ein Banner bietet das QSO mit einem Klick an. Aus, bis es eingeschaltet wird. Wie selten „selten“ ist, hängt vom eigenen Stand ab: Wer noch die ersten hundert Gebiete jagt, für den ist fast jeder DX-Spot ein New One — dann redet das hier ununterbrochen. Mit <em>Nur neues DXCC-Gebiet</em> anfangen, sobald das Logbuch weit genug ist, dass ein New One wirklich ein Ereignis ist. Jede Station meldet sich einmal pro Band und Betriebsart.",
   "settings.pounce.threshold.label": "Alarm für",

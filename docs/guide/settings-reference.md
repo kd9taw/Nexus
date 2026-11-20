@@ -3058,6 +3058,11 @@ be photographed, and were not exercised for this capture.*
 - **CW turn sound** — "A short rising chirp when the CW turn cue says it is your
   turn to send. Never while you transmit." Off as it comes. The cue itself is on
   the CW screen ([Turn Cue](../manual/CW.md#turn-cue)).
+- **Log prompt sound** — "A short falling two-tone when a finished contact asks to
+  be logged, or when Auto-log logs one for you." Off as it comes. It sounds once
+  when the log prompt comes up (not again for the next contact waiting behind it)
+  and once for each contact Auto-log writes with the prompt off; never for a
+  contact you log yourself.
 
 ---
 

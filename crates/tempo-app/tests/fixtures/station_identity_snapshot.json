@@ -25,6 +25,7 @@
     "status": "",
     "text": ""
   },
+  "autoLoggedTick": null,
   "b4MatchMode": false,
   "bandChangeTick": null,
   "chatCq": "off",

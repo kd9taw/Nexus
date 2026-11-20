@@ -3678,6 +3678,8 @@ export const RU: PartialCatalog = {
   "settings.accessibility.decodeTick.hint": "Тихий щелчок в каждом цикле, когда декодированы новые сигналы, — ритм диапазона без взгляда на экран.",
   "settings.accessibility.cwTurnSound.label": "Звук очереди CW",
   "settings.accessibility.cwTurnSound.hint": "Короткий восходящий сигнал, когда подсказка очерёдности CW показывает, что ваша очередь передавать. Никогда во время передачи.",
+  "settings.accessibility.logPromptSound.label": "Звук запроса записи в журнал",
+  "settings.accessibility.logPromptSound.hint": "Короткий нисходящий двухтональный сигнал, когда завершённую связь предлагается записать в журнал или когда автожурнал записывает её за вас.",
   "settings.colours.legend": "Цвета",
   "settings.colours.hint": "Несколько вариантов для каждого цвета, каждый проверен на контраст в обеих темах и на тёмных дисплеях. Красный передачи, оранжевый оповещений и цвета «Нужные» не меняются.",
   "settings.colours.reset": "Сбросить",

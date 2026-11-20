@@ -3868,6 +3868,11 @@ pub struct Settings {
     /// never plays it while anything is keyed.
     #[serde(default)]
     pub sound_cw_turn: bool,
+    /// The log prompt's sound: a short falling two-tone when the confirm-before-log popup comes
+    /// up, and when Auto-log writes a completed contact with no popup to show it. Off by
+    /// default, like every earcon, and off for a settings file from before it.
+    #[serde(default)]
+    pub sound_log_prompt: bool,
 
     // --- Auto-CQ caller selection (W1.4) ---
     /// When running CQ and several stations answer, which one to work first:
@@ -7481,6 +7486,7 @@ impl Default for Settings {
             sound_tx_state: false,
             sound_decode_tick: false,
             sound_cw_turn: false,
+            sound_log_prompt: false,
             lotw_username: String::new(),
             lotw_last_qsl: String::new(),
             lotw_cursor_every_call: false,
@@ -14072,6 +14078,29 @@ mod tests {
         };
         let back: Settings = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
         assert!(back.sound_cw_turn, "on survives a save and a load");
+    }
+
+    /// The log prompt's sound ships off, on the exact wire key the UI writes (`soundLogPrompt`), a
+    /// settings file from before it loads with it off, and a choice of on survives a save.
+    #[test]
+    fn the_log_prompt_sound_ships_off_on_its_wire_key_and_round_trips() {
+        let s = Settings::default();
+        assert!(!s.sound_log_prompt, "an earcon ships off");
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains("\"soundLogPrompt\":false"),
+            "the wire key the UI writes"
+        );
+        let mut older: serde_json::Value = serde_json::from_str(&json).unwrap();
+        older.as_object_mut().unwrap().remove("soundLogPrompt");
+        let older: Settings = serde_json::from_value(older).unwrap();
+        assert!(!older.sound_log_prompt, "a file from before it: off");
+        let on = Settings {
+            sound_log_prompt: true,
+            ..Settings::default()
+        };
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert!(back.sound_log_prompt, "on survives a save and a load");
     }
 
     /// The SSTV section's four fields, on the exact wire keys the UI hand-writes.

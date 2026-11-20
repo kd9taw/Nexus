@@ -11505,6 +11505,8 @@ export const EN = {
     "A soft tick each cycle new signals are decoded — the band's rhythm, eyes-free.",
   'settings.accessibility.cwTurnSound.label': 'CW turn sound',
   'settings.accessibility.cwTurnSound.hint': 'A short rising chirp when the CW turn cue says it is your turn to send. Never while you transmit.',
+  'settings.accessibility.logPromptSound.label': 'Log prompt sound',
+  'settings.accessibility.logPromptSound.hint': 'A short falling two-tone when a finished contact asks to be logged, or when Auto-log logs one for you.',
 
   // ── Connect — the board, its pane grid, and the one-line pane projections ───────────
   // ⚠️ THE UNITS RULE OWNS THIS SURFACE. Band and mode names, bearings (`~47°`), MUF and
