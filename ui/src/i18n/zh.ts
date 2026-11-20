@@ -279,6 +279,8 @@ export const ZH: PartialCatalog = {
   "logPrompt.waiting": "还有 {{count}} 个通联在此之后等待",
   "logPrompt.autoLogged": "{{count}} 个通联在未经你确认的情况下被记录——队列已满。它们已写入你的日志，连接器将上传它们；连接日志中会标明它们。",
   "logPrompt.discard": "丢弃",
+  "logPrompt.widen.aria": "加宽记录提示",
+  "logPrompt.widen.title": "拖动以加宽记录提示",
   "logPrompt.log": "记录 QSO",
   "status.newEntity.label": "新实体（ATNO）",
   "status.newBand.label": "新波段",

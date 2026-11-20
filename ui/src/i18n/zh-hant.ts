@@ -281,6 +281,8 @@ export const ZH_HANT: PartialCatalog = {
   "logPrompt.waiting": "還有 {{count}} 筆通聯在此之後等待",
   "logPrompt.autoLogged": "{{count}} 筆通聯在未經你確認的情況下被記錄——佇列已滿。它們已寫入你的日誌，聯結器將上傳它們；連線日誌中會標明它們。",
   "logPrompt.discard": "丟棄",
+  "logPrompt.widen.aria": "加寬記錄提示",
+  "logPrompt.widen.title": "拖曳以加寬記錄提示",
   "logPrompt.log": "記錄 QSO",
   "status.newEntity.label": "新實體（ATNO）",
   "status.newBand.label": "新波段",

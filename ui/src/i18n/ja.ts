@@ -1970,6 +1970,8 @@ export const JA: PartialCatalog = {
   "logPrompt.waiting": "このあとに{{count}}件の交信が待っています",
   "logPrompt.autoLogged": "待ち行列が満杯のため、{{count}}件の交信を確認なしで記録しました。すでにログに入っており、各接続サービスへもアップロードされます。接続ログに詳細があります。",
   "logPrompt.discard": "破棄",
+  "logPrompt.widen.aria": "ログ確認を広げる",
+  "logPrompt.widen.title": "ドラッグしてログ確認の幅を広げます",
   "logPrompt.log": "QSOを記録",
   "roster.title": "局一覧",
   "roster.band.label": "バンド—CQ呼び出し",
