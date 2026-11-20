@@ -543,8 +543,10 @@ export const PANES: PaneDef[] = [
     },
     category: 'bands',
     basic: openingsLine,
+    // No openings → null, so the frame falls back to the Basic "no openings" line: OpeningStrip draws
+    // nothing for an empty list, and handed that element the box's body was empty.
     expert: (c) =>
-      c.prop && c.prop.source !== 'offline' ? (
+      c.prop && c.prop.source !== 'offline' && c.prop.openings.length ? (
         <OpeningStrip openings={c.prop.openings} onBandClick={c.toggleFocusBand} />
       ) : null,
   },
