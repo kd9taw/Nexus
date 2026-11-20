@@ -4636,6 +4636,10 @@ struct RadioLoop {
     /// reconnection. A press that finds this standing sends no `X`
     /// ([`Self::write_operator_split_mode`]).
     operator_split_mode: Option<(String, u64)>,
+    /// A [`Self::write_operator_split_mode`] the press could not send because the transmitter
+    /// was keyed: the mode VFO A was in then. Sent on the first unkeyed tick while the split
+    /// stands and VFO A's mode is unchanged; dropped with the split, a mode change or a new rig.
+    operator_split_mode_owed: Option<String>,
     /// Consecutive failed `set_mode` attempts for the current target mode. Bounds the
     /// retune retry so a rig that flatly rejects a mode (e.g. no DATA/PKT submode)
     /// gets a budget of tries (covers a rig/rigctld still settling) then we give up
@@ -5635,6 +5639,7 @@ impl RadioLoop {
             last_split_mode: None,
             split_on_sub: false,
             operator_split_mode: None,
+            operator_split_mode_owed: None,
             mode_fail_count: 0,
             mode_giveup: None,
             mode_saw_reject: false,
@@ -8648,16 +8653,42 @@ impl RadioLoop {
     /// ⛔ NOT ON THE FT SCREENS (`Digital`): their split and its mode are the over's
     /// ([`crate::slot`], Split Operation). ⛔ NOT WHILE A SATELLITE IS HELD: the uplink's mode is
     /// the pass's own (`Engine::sat_tx_mode_for_split`), and `md` there is the DOWNLINK's (FM
-    /// on KOSEN-1's CW uplink). A blank `md` (obey the radio) sends nothing.
-    fn write_operator_split_mode(&mut self, engine: &Mutex<Engine>, rig: &mut Rig, md: &str) {
+    /// on KOSEN-1's CW uplink). Either one forgets what was put on VFO B. A blank `md` (obey the
+    /// radio) sends nothing.
+    ///
+    /// ⛔ NEVER WHILE ANYTHING MAY BE TRANSMITTING. Keyed, Hamlib drops the `X` and answers
+    /// `RPRT 0` (recorded as done, the bug back); a radio Hamlib cannot target gets the mode by
+    /// turning split off and swapping VFOs, mid-over, onto VFO A, where the licence check did not
+    /// judge it; the Icom `26 01` reaches the selected VFO's partner while VFO B transmits. A
+    /// keyed press OWES it ([`Self::operator_split_mode_owed`]), sent on the first unkeyed tick.
+    fn write_operator_split_mode(
+        &mut self,
+        engine: &Mutex<Engine>,
+        rig: &mut Rig,
+        md: &str,
+        now: f64,
+    ) {
+        self.operator_split_mode_owed = None;
         let wanted = {
             let eng = engine_lock(engine);
             eng.settings().operating_mode != tempo_app::settings::OperatingMode::Digital
                 && eng.sat_transponder_held().is_none()
         };
+        if !wanted {
+            self.operator_split_mode = None;
+            return;
+        }
+        let keyed = self.operator_keyed()
+            || self.holds_tx()
+            || self.tuning_keyed
+            || rig.keyed
+            || now < self.cw_keying_until;
+        if keyed && !md.trim().is_empty() {
+            self.operator_split_mode_owed = Some(md.to_string());
+            return;
+        }
         let drops = rig.connection_drops();
-        if !wanted
-            || md.trim().is_empty()
+        if md.trim().is_empty()
             || self
                 .operator_split_mode
                 .as_ref()
@@ -9343,6 +9374,9 @@ impl RadioLoop {
 
     fn reset_for_handoff(&mut self) {
         self.remote_connection = None;
+        // Another radio: what was put on, or owed to, the old one's VFO B is not this one's.
+        self.operator_split_mode = None;
+        self.operator_split_mode_owed = None;
         // Another connection: judged afresh (`judge_data_word`), by the next tick's engine lock,
         // before it works out the mode word.
         self.link_judgement_stale = true;
@@ -10373,6 +10407,9 @@ impl RadioLoop {
                 }
                 self.rig_asserted = false; // fresh rig: unclaimed caches make the retune re-assert this tick
                 *rig = new_rig;
+                // …and nothing known or owed about its VFO B's mode.
+                self.operator_split_mode = None;
+                self.operator_split_mode_owed = None;
                 // Carry the keyed belief onto the fresh rig so the idle self-heal stays armed if the
                 // unkey below cannot land (reopened link still dead). The unconditional unkey clears
                 // it when it succeeds; when it fails, the self-heal keeps retrying — restoring the
@@ -13231,13 +13268,26 @@ impl RadioLoop {
             // Apply a pending SPLIT request (after the dial/mode retune so the TX
             // VFO programs against the fresh dial). Pile-up spots ("UP 2") set it;
             // any plain QSY clears it back to simplex.
-            // VFO A's mode moved on (an FT session, a sideband change): VFO B's may have too.
+            // VFO A's mode moved on (an FT session, a sideband change): VFO B's may have too, and
+            // a mode owed from a keyed press is no longer the one wanted.
             if self
                 .operator_split_mode
                 .as_ref()
                 .is_some_and(|(m, _)| *m != md)
             {
                 self.operator_split_mode = None;
+            }
+            if self
+                .operator_split_mode_owed
+                .as_ref()
+                .is_some_and(|m| *m != md)
+            {
+                self.operator_split_mode_owed = None;
+            }
+            // A mode a keyed press owes VFO B goes out on the first unkeyed tick. A split press this
+            // tick does its own write below; the split going off drops it there.
+            if can_retune && split_req.is_none() && self.operator_split_mode_owed.is_some() {
+                self.write_operator_split_mode(engine, rig, &md, now);
             }
             if can_retune {
                 if let Some(req) = split_req {
@@ -13404,7 +13454,7 @@ impl RadioLoop {
                                     // CW "split disables break-in", Phone split stuck in DATA-U).
                                     // [`Self::operator_split_mode`] says when, and who serves it.
                                     if set.is_ok() && tx_vfo == "VFOB" && rig.has_control() {
-                                        self.write_operator_split_mode(engine, rig, &md);
+                                        self.write_operator_split_mode(engine, rig, &md, now);
                                     }
                                     let ok = set.is_ok();
                                     retune_note = Some(if ok {
@@ -13520,6 +13570,7 @@ impl RadioLoop {
                         }
                         None => {
                             self.operator_split_mode = None;
+                            self.operator_split_mode_owed = None;
                             // Back to simplex — TX returns to the main/RX VFO, which
                             // carries its own mode again. A split that rode the SUB
                             // BAND is released the same way it was engaged: the
@@ -47483,6 +47534,180 @@ mod tests {
             x,
             vec!["X USB -1", "X USB -1"],
             "VFO B put in USB at each Phone split: {:?}",
+            mode_writes(&seen)
+        );
+    }
+
+    /// An Extra in Phone at 14.340 USB with TX armed and PTT held (the first tick keys), on a
+    /// Hamlib FTDX10: every `S`, `I`, `X` and `T` line the loop sends for `between`.
+    fn keyed_split_mode_wire(between: Vec<fn(&mut Engine, &mut RadioLoop)>) -> Vec<String> {
+        let (addr, seen) = recording_rigctld_stub();
+        let engine = engine_on(1042);
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.license_class = tempo_app::settings::LicenseClass::Extra;
+            s.split_mode = tempo_app::settings::SplitMode::None;
+            e.apply_settings(s);
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.340, "20m", "USB");
+            e.set_tx_enabled(true);
+            e.set_ptt(true);
+            assert!(e.manual_ptt(), "precondition: PTT is held in privileges");
+        }
+        let mut ticks: Vec<fn(&mut Engine, &mut RadioLoop)> = vec![|_, _| {}];
+        ticks.extend(between);
+        split_ticks(&engine, Rig::rigctld(&addr), ticks);
+        let wire = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|l| l.trim().to_string())
+            .filter(|l| {
+                l.starts_with("S ") || l.starts_with("I ") || l.starts_with("X ") || l == "T 0"
+            })
+            .collect();
+        wire
+    }
+
+    /// ⛔ NEVER A TX VFO MODE INTO A KEYED RADIO. A split pressed under a held PTT is written at
+    /// once, but its `X` is owed: keyed, Hamlib drops it and answers `RPRT 0`, and a radio it
+    /// cannot target gets it by a VFO swap onto VFO A mid-over. It goes out once, after the
+    /// unkey.
+    #[test]
+    fn a_split_pressed_under_a_held_ptt_sets_vfo_bs_mode_after_the_unkey() {
+        let wire = keyed_split_mode_wire(vec![
+            |e, _| e.request_split(Some(14.345)),
+            |_, _| {},
+            |e, _| e.set_ptt(false),
+            |_, _| {},
+            |_, _| {},
+        ]);
+        let unkey = wire.iter().position(|l| l == "T 0");
+        let x: Vec<usize> = (0..wire.len())
+            .filter(|&i| wire[i].starts_with("X "))
+            .collect();
+        assert!(
+            wire.iter().any(|l| l == "I 14345000"),
+            "the split itself: {wire:?}"
+        );
+        assert_eq!(x.len(), 1, "one X: {wire:?}");
+        assert_eq!(wire[x[0]], "X USB -1", "{wire:?}");
+        assert!(
+            unkey.is_some_and(|u| x[0] > u),
+            "the X only after the unkey: {wire:?}"
+        );
+    }
+
+    /// …and a split let go of while still keyed owes nothing.
+    #[test]
+    fn a_split_cleared_while_keyed_owes_vfo_b_no_mode() {
+        let wire = keyed_split_mode_wire(vec![
+            |e, _| e.request_split(Some(14.345)),
+            |e, _| e.request_split(None),
+            |e, _| e.set_ptt(false),
+            |_, _| {},
+            |_, _| {},
+        ]);
+        assert!(wire.iter().any(|l| l == "T 0"), "{wire:?}");
+        assert!(!wire.iter().any(|l| l.starts_with("X ")), "{wire:?}");
+    }
+
+    /// The same for a CW message the radio is still sending (`cw_keying_until`).
+    #[test]
+    fn a_cw_split_pressed_while_cw_is_keying_sets_vfo_bs_mode_after_it() {
+        let (addr, seen) = recording_rigctld_stub();
+        let engine = engine_on(1042);
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.split_mode = tempo_app::settings::SplitMode::None;
+            e.apply_settings(s);
+            e.set_operating_mode("cw", false);
+        }
+        fn press(e: &mut Engine, l: &mut RadioLoop) {
+            l.cw_keying_until = 60_000.0;
+            let dial = e.settings().dial_hz() as f64 / 1e6;
+            e.request_split(Some(dial + 0.001));
+        }
+        split_ticks(
+            &engine,
+            Rig::rigctld(&addr),
+            vec![
+                |_, _| {},
+                press,
+                |_, l| l.cw_keying_until = 60_000.0,
+                |_, l| {
+                    let before = l.operator_split_mode_owed.clone();
+                    assert_eq!(before.as_deref(), Some("CW"), "owed while CW keys");
+                    l.cw_keying_until = 0.0;
+                },
+                |_, _| {},
+            ],
+        );
+        let (x, _) = split_mode_lines(&seen);
+        assert_eq!(x, vec!["X CW -1"], "{:?}", mode_writes(&seen));
+    }
+
+    /// ⭐ A SATELLITE BETWEEN TWO SPLITS. A Phone split puts VFO B in USB; an inverting bird's
+    /// uplink then puts it in LSB; back on 20 m in USB, the next Phone split must put it in USB
+    /// again, not trust the first.
+    #[test]
+    fn a_phone_split_after_an_inverting_bird_puts_vfo_b_back_in_usb() {
+        const RS44: tempo_core::doppler::Transponder = tempo_core::doppler::Transponder {
+            uplink_centre_hz: 145_965_000,
+            downlink_centre_hz: 435_640_000,
+            invert: true,
+            half_width_hz: 30_000,
+        };
+        let (addr, seen) = recording_rigctld_stub();
+        let engine = engine_on(1035);
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.split_mode = tempo_app::settings::SplitMode::None;
+            e.apply_settings(s);
+            e.set_operating_mode("phone", false);
+            e.set_frequency(14.240, "20m", "USB");
+        }
+        split_ticks(
+            &engine,
+            Rig::rigctld(&addr),
+            vec![
+                |_, _| {},
+                |e, _| e.request_split(Some(14.241)),
+                |e, _| {
+                    e.confirm_sat_uplink(None, Some(tempo_app::settings::SatVfoMap::ADownBUp));
+                    e.set_sat_transponder(Some(("bird|transponder".into(), 0, RS44)));
+                    e.set_sat_single_channel_fm(false);
+                    e.set_sat_uplink_cw(false);
+                    e.sat_tune_nominal(SSB_BIRD, 1_000_000);
+                },
+                |_, _| {},
+                |e, _| {
+                    e.set_sat_transponder(None);
+                    e.set_frequency(14.240, "20m", "USB");
+                },
+                |_, _| {},
+                |e, _| e.request_split(Some(14.241)),
+            ],
+        );
+        let (x, _) = split_mode_lines(&seen);
+        assert_eq!(
+            x.first().map(String::as_str),
+            Some("X USB -1"),
+            "{:?}",
+            mode_writes(&seen)
+        );
+        assert!(
+            x.iter().any(|l| l.starts_with("X LSB")),
+            "precondition: the bird's uplink went to LSB: {:?}",
+            mode_writes(&seen)
+        );
+        assert_eq!(
+            x.last().map(String::as_str),
+            Some("X USB -1"),
+            "{:?}",
             mode_writes(&seen)
         );
     }
