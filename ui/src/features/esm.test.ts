@@ -543,7 +543,7 @@ describe('esmPress — the step, its message and the guards, in one answer', () 
       kind: 'send',
       role: 'callExch',
       keys: ['F2'],
-      text: '{CALL} 599 {EXCH} {EXCH}',
+      text: '{CALL} {RST} {EXCH} {EXCH}',
       log: false,
       caret: 'ex0',
       next: { ...RUN, exchTo: 'K9AAA' },

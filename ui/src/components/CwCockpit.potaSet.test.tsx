@@ -162,7 +162,7 @@ describe('the POTA set while a park activation runs', () => {
     await pressF(1)
     expect(api.sendCw).toHaveBeenLastCalledWith('CQ POTA DE {MYCALL} {MYCALL} K')
     await pressF(2)
-    expect(api.sendCw).toHaveBeenLastCalledWith('! UR 5NN 5NN {MYSTATE} {MYPARK} BK')
+    expect(api.sendCw).toHaveBeenLastCalledWith('! UR {RST} {RST} {MYSTATE} {MYPARK} BK')
     await pressF(3)
     expect(api.sendCw).toHaveBeenLastCalledWith('TU 73 {MYCALL} POTA')
 
@@ -208,7 +208,7 @@ describe('the POTA set while a park activation runs', () => {
     await pressF(1)
     expect(api.sendCw).toHaveBeenLastCalledWith('CQ CQ DE {MYCALL} {MYCALL} K')
     await pressF(2)
-    expect(api.sendCw).not.toHaveBeenLastCalledWith('! UR 5NN 5NN {MYSTATE} {MYPARK} BK')
+    expect(api.sendCw).not.toHaveBeenLastCalledWith('! UR {RST} {RST} {MYSTATE} {MYPARK} BK')
     activation = { program: 'POTA', reference: 'US-1234', qsoCount: 0, restored: false }
     r.rerender(<CwCockpit snap={withActivation()} theme="dark" onWorkSpot={() => {}} spots={[]} />)
     await pressF(1)
@@ -232,7 +232,7 @@ describe('the POTA set while a park activation runs', () => {
     })
     expect(saved.profiles[0].macros.map((m) => m.text)).toEqual([
       'CQ POTA DE {MYCALL} {MYCALL} K',
-      '! UR 5NN 5NN {MYSTATE} {MYPARK} BK',
+      '! UR {RST} {RST} {MYSTATE} {MYPARK} BK',
       'TU 72 {MYCALL} POTA',
       '{MYCALL}',
       '! ',

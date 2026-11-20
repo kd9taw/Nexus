@@ -70,7 +70,14 @@ vi.mock('../toast', () => {
     }),
   }
 })
-vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> }))
+// The stub keeps the props it was last rendered with, so a test can speak as the log strip.
+const logStrip = vi.hoisted(() => ({ props: {} as { onMacroFields?: (f: { rstSent: string; name: string }) => void } }))
+vi.mock('./LogEntry', () => ({
+  LogEntry: (p: typeof logStrip.props) => {
+    logStrip.props = p
+    return <div data-testid="log-stub" />
+  },
+}))
 vi.mock('./CockpitHeader', () => ({ CockpitHeader: () => <header className="cockpit-header" /> }))
 vi.mock('./Waterfall', () => ({ Waterfall: () => <div className="waterfall-wrap" /> }))
 
@@ -253,6 +260,41 @@ describe('F-keys go through the same send() a click does', () => {
     // POSITIVE CONTROL: F5 is {CALL} alone, and goes.
     press('F5')
     await waitFor(() => expect(pskSend).toHaveBeenCalledWith('K1ABC'))
+  })
+
+  it('keys {RST} as the log strip’s RST Sent, {HISNAME} as its name and {NAME} as yours', async () => {
+    await renderCockpit({
+      opName: 'Alex',
+      macros: macrosWith({
+        pskProfiles: [{ name: 'everyday', macros: [{ key: 'F5', label: 'Rpt', text: 'ur {RST} {RST} tnx {HISNAME} op {NAME}' }] }],
+      }),
+    })
+    // Nothing set in the strip yet: the 599 report, and no name leaves no gap.
+    fireEvent.click(key('F5'))
+    await waitFor(() => expect(pskSend).toHaveBeenCalledWith('ur 599 599 tnx op Alex'))
+    act(() => logStrip.props.onMacroFields?.({ rstSent: '549', name: 'Bob' }))
+    fireEvent.click(key('F5'))
+    await waitFor(() => expect(pskSend).toHaveBeenLastCalledWith('ur 549 549 tnx Bob op Alex'))
+  })
+
+  it('the built-in Exchange keys the strip’s RST Sent; a key the operator saved keeps its own 599', async () => {
+    await renderCockpit()
+    fireEvent.change(document.querySelector('.rtty-hiscall')!, { target: { value: 'K1ABC' } })
+    act(() => logStrip.props.onMacroFields?.({ rstSent: '549', name: '' }))
+    press('F3')
+    await waitFor(() => expect(pskSend).toHaveBeenLastCalledWith('K1ABC de W9XYZ ur 549 549 btu k'))
+    cleanup()
+    pskSend.mockClear()
+    // The operator's own F3, saved with a literal report: their text, never rewritten.
+    await renderCockpit({
+      macros: macrosWith({
+        pskProfiles: [{ name: 'everyday', macros: [{ key: 'F3', label: 'Exch', text: '{CALL} de {MYCALL} ur 599 599 k' }] }],
+      }),
+    })
+    fireEvent.change(document.querySelector('.rtty-hiscall')!, { target: { value: 'K1ABC' } })
+    act(() => logStrip.props.onMacroFields?.({ rstSent: '549', name: '' }))
+    press('F3')
+    await waitFor(() => expect(pskSend).toHaveBeenLastCalledWith('K1ABC de W9XYZ ur 599 599 k'))
   })
 
   it('keys {EXCH} from the RUNNING contest — the session’s own sent exchange', async () => {
@@ -462,7 +504,7 @@ describe('right-click, Ctrl+Shift+F-key and Send once', () => {
     expect(fireEvent.contextMenu(key('F3')), 'the browser’s menu opened over a transmit key').toBe(false)
     expect(editor()?.getAttribute('aria-label')).toBe('Edit F3')
     expect(document.activeElement, 'the caret is in the message').toBe(field(/^message$/i))
-    expect(field(/^message$/i).value).toBe('{CALL} de {MYCALL} ur 599 599 btu k')
+    expect(field(/^message$/i).value).toBe('{CALL} de {MYCALL} ur {RST} {RST} btu k')
     fireEvent.contextMenu(key('F7'))
     expect(editor()?.getAttribute('aria-label')).toBe('Edit F7')
     await act(async () => {})

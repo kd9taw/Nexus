@@ -132,6 +132,8 @@ interface Props {
    *  `activeRttyProfile`. Passed down rather than fetched here, so this cockpit adds no settings
    *  read of its own. Absent → the built-in sets. */
   macros?: Settings['macros'] | null
+  /** The operator's name (Settings ▸ Station), for the `{NAME}` macro token. */
+  opName?: string
   /** The engine saved the macro sets: here is the `macros` it now holds, for the mirror. */
   onMacrosSaved?: (macros: Settings['macros']) => void
   /** Open Settings at a section id: the rotor strip's "configured but not answering" chip
@@ -344,7 +346,7 @@ function knownCode(domain: string | undefined, value: string): boolean {
  * host (like Operate) so the decoded stream keeps accumulating while the
  * operator is on another section.
  */
-export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, onEntryCall, panels, macros, onMacrosSaved, onOpenSettings, esmSetting }: Props) {
+export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, onEntryCall, panels, macros, opName, onMacrosSaved, onOpenSettings, esmSetting }: Props) {
   // md and up, the read-only TX meters in the strip's meters cell (SSTV's, JS8's and Phone's
   // arrangement, #489): the audio drive is set against the radio's ALC, and Po shows the carrier.
   const chrome = useCompactChrome()
@@ -510,6 +512,9 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // ownership and returns why a send was refused (surfaced as a toast).
   const [text, setText] = useState('')
   const [hisCall, setHisCall] = useState('')
+  // The log strip's RST Sent and Name, as it last reported them (LogEntry `onMacroFields`): what a
+  // macro's {RST} and {HISNAME} key, so the report sent is the report logged. Read at send time.
+  const logFields = useRef({ rstSent: '', name: '' })
   // THE CALL BOX AND THE LOG STRIP'S CALLSIGN ARE ONE FIELD, shown twice. The dock → strip half
   // is PSK's bridge (PskCockpit.tsx `settledHisCall`, whose comment carries the reasoning): the
   // strip's live machine-fill channel, which moves no caret, DEBOUNCED so typing K, K1, K1A… does
@@ -587,9 +592,10 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   //
   // THE ONE PATH TO `rtty_send`, for the compose bar, a click on a macro and an F-key alike —
   // there is no second way to the transmitter to keep honest. Tokens go through the RTTY
-  // expander (`features/rttyMacros.ts`, never `cw::expand`): {MYCALL}, {CALL}, {RST} = 599 and
-  // {EXCH}, the running contest's exchange — none yet, so a message using it is refused exactly
-  // like a {CALL} with no call. A token it does not know is refused too: RTTY cannot send
+  // expander (`features/rttyMacros.ts`, never `cw::expand`): {MYCALL}, {CALL}, {RST} = the log
+  // strip's RST Sent (599 when it has none), {NAME} and {HISNAME} (yours, and the strip's Name),
+  // and {EXCH}, the running contest's exchange — none yet, so a message using it is refused
+  // exactly like a {CALL} with no call. A token it does not know is refused too: RTTY cannot send
   // braces, so it would otherwise go out as a bare word. `macro` frames an F-key message for the
   // air (ending in a space); what is typed in the compose bar goes as typed. {NL} is CR LF, and
   // the new line at each end of an over is the engine's (Settings ▸ RTTY, `rttyOverNewlines`).
@@ -607,6 +613,9 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       mycall: snapRef.current?.mycall ?? '',
       call,
       exch: exch ? exch : null,
+      rst: logFields.current.rstSent,
+      myname: opName ?? '',
+      hisname: logFields.current.name,
     })
     if ('unknown' in expanded) {
       return { refusal: t('rtty.send.unknownToken', { token: expanded.unknown }), ms: 3500 }
@@ -1507,6 +1516,9 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             onEntryCall={(c) => {
               setStatsCall(c)
               onEntryCall?.(c)
+            }}
+            onMacroFields={(f) => {
+              logFields.current = f
             }}
             snap={snap}
             mode={RTTY}

@@ -3576,6 +3576,12 @@ export async function setCwPeerInfo(call: string, name: string, peerState: strin
   await invoke('set_cw_peer_info', { call, name, peerState })
 }
 
+/** Record the RST Sent in the CW cockpit's log entry for the {RST} CW-macro token (empty: 599).
+ *  Fire-and-forget. */
+export async function setCwRstSent(rst: string): Promise<void> {
+  await invoke('set_cw_rst_sent', { rst })
+}
+
 /** Set the CW keyer speed in WPM (5–50). */
 /** Set CW sending speed. `commit` persists it to settings — pass false for the continuous
  * paths (slider drag, decoder auto speed-match) and true once the operator settles, so a

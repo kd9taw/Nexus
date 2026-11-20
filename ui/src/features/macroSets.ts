@@ -167,6 +167,21 @@ export function unknownTokens(text: string, known: RegExp): string[] {
   return [...new Set(found)]
 }
 
+/** `text` with `{NAME}` (the operator's own name) and `{HISNAME}` (the worked station's) filled,
+ *  without regard to case — the CW expander's two name tokens, with its meaning. A name nobody
+ *  has yet is not a refusal, as a missing call is: the token goes, and with it the gap it would
+ *  leave, so `R TU {HISNAME} DE …` reads `R TU DE …`. A name's own braces are dropped, so a name
+ *  can never read as another token. */
+export function fillNames(text: string, myname: string, hisname: string): string {
+  const clean = (v: string) => v.replace(/[{}]/g, '').trim()
+  const names: Record<string, string> = { NAME: clean(myname), HISNAME: clean(hisname) }
+  return text.replace(/([ \t]*)\{(HISNAME|NAME)\}([ \t]*)/gi, (_, before: string, token: string, after: string) => {
+    const name = names[token.toUpperCase()]
+    if (name) return `${before}${name}${after}`
+    return before && after ? ' ' : ''
+  })
+}
+
 /** Why a macro cannot be sent as it stands. */
 export type MacroRefusal = { missing: 'mycall' | 'call' | 'exch' } | { unknown: string }
 

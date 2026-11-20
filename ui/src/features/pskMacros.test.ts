@@ -24,7 +24,7 @@ describe('the built-in sets', () => {
     expect(resolvePskSet([], 'everyday', tr)).toEqual([
       { key: 'F1', label: 'CQ', text: 'CQ CQ CQ de {MYCALL} {MYCALL} pse k', custom: false },
       { key: 'F2', label: '«psk.macro.answer.label»', text: '{CALL} de {MYCALL} {MYCALL} k', custom: false },
-      { key: 'F3', label: '«psk.macro.exchange.label»', text: '{CALL} de {MYCALL} ur 599 599 btu k', custom: false },
+      { key: 'F3', label: '«psk.macro.exchange.label»', text: '{CALL} de {MYCALL} ur {RST} {RST} btu k', custom: false },
       { key: 'F4', label: '73', text: '{CALL} de {MYCALL} tnx qso 73 sk', custom: false },
       { key: 'F5', label: '', text: '', custom: false },
       { key: 'F6', label: '', text: '', custom: false },
@@ -36,11 +36,11 @@ describe('the built-in sets', () => {
   it('Contest is the run/S&P set, one message per key', () => {
     expect(resolvePskSet([], 'contest', tr).map((s) => [s.key, s.label, s.text])).toEqual([
       ['F1', 'CQ', 'cq test {MYCALL} {MYCALL} cq'],
-      ['F2', '«psk.macro.exch.label»', '{CALL} 599 {EXCH} {EXCH}'],
+      ['F2', '«psk.macro.exch.label»', '{CALL} {RST} {EXCH} {EXCH}'],
       ['F3', 'TU', 'tu {MYCALL} cq'],
       ['F4', '«psk.macro.myCall.label»', '{MYCALL} {MYCALL}'],
       ['F5', '«psk.macro.hisCall.label»', '{CALL}'],
-      ['F6', '«psk.macro.spExch.label»', 'tu 599 {EXCH} {EXCH}'],
+      ['F6', '«psk.macro.spExch.label»', 'tu {RST} {EXCH} {EXCH}'],
       ['F7', 'B4', '{CALL} qso b4 tu {MYCALL}'],
       ['F8', 'AGN', 'agn? agn?'],
     ])
@@ -168,9 +168,24 @@ describe('the tokens', () => {
   })
 
   it('flags every token it does not know, and a stray brace, and refuses to send them', () => {
-    expect(unknownPskTokens('tnx {NAME} es {NAME} {QTH} }')).toEqual(['{NAME}', '{QTH}', '}'])
-    expect(unknownPskTokens('{CALL} de {MYCALL}'), 'the known ones are not flagged').toEqual([])
-    expect(expandPskMacro('tnx {NAME}', ctx)).toEqual({ unknown: '{NAME}' })
+    expect(unknownPskTokens('tnx {OPNAME} es {OPNAME} {QTH} }')).toEqual(['{OPNAME}', '{QTH}', '}'])
+    expect(unknownPskTokens('{CALL} de {MYCALL} {NAME} {HISNAME}'), 'the known ones are not flagged').toEqual([])
+    expect(expandPskMacro('tnx {QTH}', ctx)).toEqual({ unknown: '{QTH}' })
+  })
+
+  it('{RST} sends the RST Sent in the log entry, and 599 only when none is set', () => {
+    expect(sent('{CALL} ur {RST} {RST} btu k'), 'no report set').toBe('K1ABC ur 599 599 btu k')
+    const r = expandPskMacro('ur {RST} {RST}', { ...ctx, rst: ' 549 ' })
+    expect(r).toEqual({ text: 'ur 549 549' })
+    expect(expandPskMacro('ur {RST}', { ...ctx, rst: '' })).toEqual({ text: 'ur 599' })
+  })
+
+  it('{NAME} is your name and {HISNAME} theirs, as typed; an empty one leaves no gap', () => {
+    const named = { ...ctx, myname: 'Alex', hisname: 'Bob' }
+    expect(expandPskMacro('r fb {HISNAME} name {NAME} {NAME}', named)).toEqual({ text: 'r fb Bob name Alex Alex' })
+    expect(expandPskMacro('{NAME} vs {HISNAME}', named)).toEqual({ text: 'Alex vs Bob' })
+    expect(expandPskMacro('r tu {HISNAME} de {MYCALL}', ctx)).toEqual({ text: 'r tu de W9XYZ' })
+    expect(expandPskMacro('{HISNAME} gm', ctx)).toEqual({ text: 'gm' })
   })
 })
 

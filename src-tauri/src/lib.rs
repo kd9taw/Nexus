@@ -31953,6 +31953,15 @@ fn set_cw_peer_info(
     Ok(())
 }
 
+/// Record the RST Sent in the CW cockpit's log entry, for the `{RST}` CW-macro token. Pushed by
+/// the CW cockpit whenever the box changes; empty puts `{RST}` back on 599. Fire-and-forget, like
+/// `set_cw_peer_info`.
+#[tauri::command(async)]
+fn set_cw_rst_sent(state: State<'_, SharedEngine>, rst: String) -> Result<(), String> {
+    engine_lock(&state).set_cw_rst_sent(rst);
+    Ok(())
+}
+
 /// CW speed match on or off, from the contest strip's switch: saved alone, never a settings-form
 /// save. It changes only the speed an answer keys at.
 #[tauri::command(async)]
@@ -55266,6 +55275,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         send_cw,
         send_cw_armed,
         set_cw_peer_info,
+        set_cw_rst_sent,
         set_cw_speed_match,
         set_cw_wpm,
         set_decode_depth,

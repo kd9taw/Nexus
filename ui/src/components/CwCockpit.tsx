@@ -94,6 +94,7 @@ import {
   setAiCw,
   selectPeer,
   previewCw,
+  setCwRstSent,
   setScopeSpan,
   setYaesuScopeMode,
   setScopeRef,
@@ -493,11 +494,12 @@ const DEFAULT_MACROS: CwMacro[] = [
 ]
 
 /** THE POTA SET — the built-in keys while a park activation runs and no contest does. {MYPARK} is
- *  every park of the activation, space-separated as a two-fer sends them; the report is the
- *  activator's fixed 5NN, sent twice. On-air shorthand, invariant; the operator's to change. */
+ *  every park of the activation, space-separated as a two-fer sends them; the report is {RST}, the
+ *  log entry's RST Sent (5NN when it has none), sent twice. On-air shorthand; the operator's to
+ *  change. */
 export const CW_POTA_SET: CwMacro[] = [
   { key: 'F1', label: 'CQ', text: 'CQ POTA DE {MYCALL} {MYCALL} K' },
-  { key: 'F2', labelKey: 'cw.macro.reply.label', text: '! UR 5NN 5NN {MYSTATE} {MYPARK} BK' },
+  { key: 'F2', labelKey: 'cw.macro.reply.label', text: '! UR {RST} {RST} {MYSTATE} {MYPARK} BK' },
   { key: 'F3', label: 'TU', text: 'TU 73 {MYCALL} POTA' },
   { key: 'F4', labelKey: 'cw.macro.myCall.label', text: '{MYCALL}' },
   { key: 'F5', labelKey: 'cw.macro.hisCall.label', text: '! ' },
@@ -1072,8 +1074,19 @@ export function CwCockpit({
   }
   const macrosRef = useRef(macros)
   macrosRef.current = macros
+  // The log strip's RST Sent, which `{RST}` keys (the engine holds it: `set_cw_rst_sent`). Set
+  // only once the engine has it, so the previews below are asked again after it does.
+  const [rstSent, setRstSent] = useState('')
+  const rstPushed = useRef<string | null>(null)
+  const onMacroFields = ({ rstSent: rst }: { rstSent: string }) => {
+    if (rst === rstPushed.current) return
+    rstPushed.current = rst
+    void setCwRstSent(rst)
+      .catch(() => {})
+      .then(() => setRstSent(rst))
+  }
   // Reply preview: the exact text each F-key WILL send (macros expanded with the worked
-  // call). Refetched from the backend when the worked station changes — cheap, once per QSO.
+  // call and the strip's RST Sent). Refetched from the backend when either changes — cheap.
   const [previews, setPreviews] = useState<Record<string, string>>({})
   useEffect(() => {
     let alive = true
@@ -1089,7 +1102,7 @@ export function CwCockpit({
     return () => {
       alive = false
     }
-  }, [guide.workedCall, macros])
+  }, [guide.workedCall, macros, rstSent])
   useEffect(() => {
     if (!active) return
     const tick = (owns: () => boolean) =>
@@ -2309,6 +2322,7 @@ export function CwCockpit({
             : null
         }
         onCallChange={onStripCall}
+        onMacroFields={onMacroFields}
         onReset={onStripReset}
         onSnap={onSnap}
         fieldDay={fieldDay}

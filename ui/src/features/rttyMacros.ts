@@ -6,8 +6,9 @@
 // is below.
 //
 // ⚠️ NOT `cw::expand`, and not a copy of it. The CW expander sends `!` as the worked call and
-// `{RST}` as 5NN — both CW conventions. RTTY reports 599 in figures, and `!` is a character an
-// RTTY operator types.
+// `{RST}` in cut numbers (5NN) — both CW conventions. RTTY sends its report in figures, and `!` is
+// a character an RTTY operator types. The name tokens are CW's, with CW's meaning: `{NAME}` yours,
+// `{HISNAME}` theirs, and an empty one collapses rather than leaving a gap.
 //
 // ⚠️ A TOKEN THIS DOES NOT KNOW IS REFUSED, NEVER SENT. RTTY has no braces — ITA2 cannot encode
 // them — so an unknown `{TOKEN}` would not fail anywhere downstream: the keyboard filter drops
@@ -16,6 +17,7 @@
 import type { KeyboardMacroProfile } from '../types'
 import {
   MACRO_KEYS,
+  fillNames,
   isStopLikeLabel,
   knownTokenPattern,
   macroSetId,
@@ -39,12 +41,14 @@ export type RttyMacroKey = MacroKey
 /** The two built-in sets, by the id `macros.activeRttyProfile` stores. */
 export type RttySetId = MacroSetId
 
-/** EVERYDAY — the casual set the cockpit shipped with (F1–F4, texts unchanged), and four empty
- *  keys for the operator's own. */
+/** EVERYDAY — the casual set the cockpit shipped with (F1–F4), and four empty keys for the
+ *  operator's own. The report is `{RST}`, the log entry's RST Sent (599 when it has none), never a
+ *  literal: a built-in that spelled out 599 sent one report while the log held another. A key the
+ *  operator saved keeps its own text — built-ins are never copied into the settings file. */
 const EVERYDAY: BuiltinMacro[] = [
   { key: 'F1', label: 'CQ', text: 'CQ CQ CQ DE {MYCALL} {MYCALL} K' },
   { key: 'F2', labelKey: 'rtty.macro.answer.label', text: '{CALL} DE {MYCALL} {MYCALL} K' },
-  { key: 'F3', labelKey: 'rtty.macro.exchange.label', text: '{CALL} DE {MYCALL} UR 599 599 K' },
+  { key: 'F3', labelKey: 'rtty.macro.exchange.label', text: '{CALL} DE {MYCALL} UR {RST} {RST} K' },
   { key: 'F4', label: '73', text: '{CALL} DE {MYCALL} TU 73 SK' },
   { key: 'F5', text: '' },
   { key: 'F6', text: '' },
@@ -60,11 +64,11 @@ const EVERYDAY: BuiltinMacro[] = [
  *  and the S&P exchange leaves out the runner's call. */
 const CONTEST: BuiltinMacro[] = [
   { key: 'F1', label: 'CQ', text: 'CQ TEST {MYCALL} {MYCALL} CQ' },
-  { key: 'F2', labelKey: 'rtty.macro.exch.label', text: '{CALL} 599 {EXCH} {EXCH}' },
+  { key: 'F2', labelKey: 'rtty.macro.exch.label', text: '{CALL} {RST} {EXCH} {EXCH}' },
   { key: 'F3', label: 'TU', text: 'TU {MYCALL} CQ' },
   { key: 'F4', labelKey: 'rtty.macro.myCall.label', text: '{MYCALL} {MYCALL}' },
   { key: 'F5', labelKey: 'rtty.macro.hisCall.label', text: '{CALL}' },
-  { key: 'F6', labelKey: 'rtty.macro.spExch.label', text: 'TU 599 {EXCH} {EXCH}' },
+  { key: 'F6', labelKey: 'rtty.macro.spExch.label', text: 'TU {RST} {EXCH} {EXCH}' },
   { key: 'F7', label: 'B4', text: '{CALL} QSO B4 TU {MYCALL}' },
   { key: 'F8', label: 'AGN', text: 'AGN? AGN?' },
 ]
@@ -113,7 +117,7 @@ export function withRttySetReset(
 /** The tokens the expander fills, as the editor lists them. `{NL}` is a line break on the air:
  *  CR then LF, the RTTY order — the auto-sequencer's templates fill it the same way
  *  (`tempo_core::rtty::seq`, `RttySeq::render`). */
-export const RTTY_TOKENS = ['{MYCALL}', '{CALL}', '{RST}', '{EXCH}', '{NL}'] as const
+export const RTTY_TOKENS = ['{MYCALL}', '{CALL}', '{RST}', '{EXCH}', '{NAME}', '{HISNAME}', '{NL}'] as const
 
 const KNOWN = knownTokenPattern(RTTY_TOKENS)
 
@@ -126,12 +130,21 @@ export function unknownRttyTokens(text: string): string[] {
 /** Why a macro cannot be sent as it stands. */
 export type RttyRefusal = MacroRefusal
 
-/** `text` with every token filled — `{RST}` is always 599, the RTTY report — or the reason it
- *  cannot be. `exch` is the running contest's sent exchange WITHOUT the report, and null outside
- *  a contest, where `{EXCH}` is refused exactly as `{CALL}` is with no call. */
+/** `text` with every token filled, or the reason it cannot be. `{RST}` is `rst`, the RST Sent in
+ *  the log entry, and 599 — the RTTY report — when there is none. `exch` is the running contest's
+ *  sent exchange WITHOUT the report, and null outside a contest, where `{EXCH}` is refused exactly
+ *  as `{CALL}` is with no call. `{NAME}` is `myname` (Settings ▸ Station) and `{HISNAME}` is
+ *  `hisname` (the log entry's Name); unlike a call, an unknown name sends nothing (`fillNames`). */
 export function expandRttyMacro(
   text: string,
-  ctx: { mycall: string; call: string; exch: string | null },
+  ctx: {
+    mycall: string
+    call: string
+    exch: string | null
+    rst?: string | null
+    myname?: string
+    hisname?: string
+  },
 ): { text: string } | RttyRefusal {
   const unknown = unknownRttyTokens(text)
   if (unknown.length > 0) return { unknown: unknown[0] }
@@ -142,8 +155,10 @@ export function expandRttyMacro(
   if (uses('MYCALL') && !mycall) return { missing: 'mycall' }
   if (uses('CALL') && !call) return { missing: 'call' }
   if (uses('EXCH') && !exch) return { missing: 'exch' }
-  const value: Record<string, string> = { MYCALL: mycall, CALL: call, RST: '599', EXCH: exch, NL: '\r\n' }
-  return { text: text.replace(KNOWN, (_, token: string) => value[token.toUpperCase()]) }
+  const rst = (ctx.rst ?? '').trim().toUpperCase() || '599'
+  const named = fillNames(text, (ctx.myname ?? '').toUpperCase(), (ctx.hisname ?? '').toUpperCase())
+  const value: Record<string, string> = { MYCALL: mycall, CALL: call, RST: rst, EXCH: exch, NL: '\r\n' }
+  return { text: named.replace(KNOWN, (_, token: string) => value[token.toUpperCase()]) }
 }
 
 /** How an F-key message goes on the air: ending in a space — the published RTTY contest
