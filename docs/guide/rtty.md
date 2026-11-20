@@ -158,7 +158,7 @@ four empty keys for your own:
 |---|---|---|
 | `F1` | CQ | `CQ CQ CQ DE {MYCALL} {MYCALL} K` |
 | `F2` | Answer | `{CALL} DE {MYCALL} {MYCALL} K` |
-| `F3` | Exchange | `{CALL} DE {MYCALL} UR 599 599 K` |
+| `F3` | Exchange | `{CALL} DE {MYCALL} UR {RST} {RST} K` |
 | `F4` | 73 | `{CALL} DE {MYCALL} TU 73 SK` |
 | `F5`–`F8` | — | empty |
 
@@ -169,11 +169,11 @@ the next caller:
 | Key | Label | Sends |
 |---|---|---|
 | `F1` | CQ | `CQ TEST {MYCALL} {MYCALL} CQ` |
-| `F2` | Exch | `{CALL} 599 {EXCH} {EXCH}` |
+| `F2` | Exch | `{CALL} {RST} {EXCH} {EXCH}` |
 | `F3` | TU | `TU {MYCALL} CQ` |
 | `F4` | My call | `{MYCALL} {MYCALL}` |
 | `F5` | His call | `{CALL}` |
-| `F6` | S&P exch | `TU 599 {EXCH} {EXCH}` |
+| `F6` | S&P exch | `TU {RST} {EXCH} {EXCH}` |
 | `F7` | B4 | `{CALL} QSO B4 TU {MYCALL}` |
 | `F8` | AGN | `AGN? AGN?` |
 

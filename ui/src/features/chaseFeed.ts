@@ -14,7 +14,7 @@ import type {
   PathPrediction,
   NeedAlert,
 } from '../types'
-import { buildChaseTargets } from './chase'
+import { buildChaseTargets, chaseWhere } from './chase'
 import { modeClassOf } from './needs'
 import { t } from '../i18n'
 
@@ -120,11 +120,13 @@ export function buildChaseFeed(
       target.priority +
       (target.openNow ? OPEN_NOW : target.window ? HAS_WINDOW : 0) +
       (rarity ? (RARITY[rarity] ?? 0) : 0)
+    // The spot's frequency and mode where it carried one ("14.074 FT8"), its band where not.
+    const band = chaseWhere(target.band, target.freqMhz, target.exactMode ?? target.mode)
     const why = target.openNow
-      ? t('chase.why.openNow', { band: target.band })
+      ? t('chase.why.openNow', { band })
       : target.window
-        ? t('chase.why.closedBest', { band: target.band, window: target.window })
-        : t('chase.why.heardOn', { band: target.band })
+        ? t('chase.why.closedBest', { band, window: target.window })
+        : t('chase.why.heardOn', { band })
     items.push({
       kind: 'spot',
       call: target.call,

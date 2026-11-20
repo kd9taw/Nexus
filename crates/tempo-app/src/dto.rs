@@ -5474,6 +5474,11 @@ pub struct AppSnapshot {
     /// clears the cockpit's DX fields just like a manual log does.
     #[serde(default)]
     pub logged_tick: u32,
+    /// Bumped when Auto-log writes a completed contact with no confirm popup to show it; a
+    /// contact the operator logs, or one held for the popup, leaves it alone. The UI plays the
+    /// log prompt's sound on change (Settings `soundLogPrompt`).
+    #[serde(default)]
+    pub auto_logged_tick: u32,
     /// Bumped on every band change, by any route — the cockpits clear their call boxes on
     /// change (the FT DX call, the JS8 To box, the JTTY Call box, the log strip's call).
     #[serde(default)]

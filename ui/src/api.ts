@@ -1538,9 +1538,9 @@ export async function connectWebStatus(): Promise<ConnectWebStatus> {
 }
 
 /** Test the N3FJP TCP API ("N3FJP's Field Day Contest Log v6.6") — run at the
- * club site before the event. */
-export async function n3fjpTestConnection(): Promise<string> {
-  return invoke<string>('n3fjp_test_connection', {})
+ * club site before the event — at `host`:`port` as the Settings form shows them, saving neither. */
+export async function n3fjpTestConnection(host: string, port: number): Promise<string> {
+  return invoke<string>('n3fjp_test_connection', { host, port })
 }
 
 /** One-click hunt: remember the activator + park so the next QSO logged with
@@ -3576,6 +3576,12 @@ export async function setCwPeerInfo(call: string, name: string, peerState: strin
   await invoke('set_cw_peer_info', { call, name, peerState })
 }
 
+/** Record the RST Sent in the CW cockpit's log entry for the {RST} CW-macro token (empty: 599).
+ *  Fire-and-forget. */
+export async function setCwRstSent(rst: string): Promise<void> {
+  await invoke('set_cw_rst_sent', { rst })
+}
+
 /** Set the CW keyer speed in WPM (5–50). */
 /** Set CW sending speed. `commit` persists it to settings — pass false for the continuous
  * paths (slider drag, decoder auto speed-match) and true once the operator settles, so a
@@ -4039,6 +4045,9 @@ export interface RadioProfilePatch {
    * obeyed only on a radio that has one (`APRS_DATA_FM_MODELS`). Rides the patch like its
    * neighbours — a per-radio field missing here is blanked on Save. */
   aprsDataFm: boolean
+  /** Log Settings ▸ Station power instead of the radio's measured power: an amplifier Nexus can't
+   * read is inline (#534). Per radio, off by default; logging only. */
+  logStationPowerWithAmp: boolean
   /** Phone's PTT feeds this computer's microphone to the radio, from `pcMicDevice` at `pcMicGainDb`.
    * Per radio, so it rides the patch like its neighbours. */
   pcMic: boolean

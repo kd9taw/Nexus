@@ -70,6 +70,7 @@ import { ALARM_CELL_VIEWS } from './features/alarmCellViews'
 import { resolveUnits, setUnitsMirror } from './units'
 import { setSwrCutoffMirror } from './swrCutoff'
 import { doubleBeep, processDecodes, txEarcon, type NeededAlert } from './alerts'
+import { useLogPromptSound } from './useLogPromptSound'
 import { openingToastSpec } from './openingAlert'
 import { announce } from './announce'
 import { Announcer } from './components/Announcer'
@@ -1931,6 +1932,10 @@ function App() {
       refreshNeeds()
     }
   }, [snap?.loggedTick, settings?.clearDxAfterLog, refreshNeeds])
+
+  // The log prompt's sound (#541, off by default): the popup coming up, or a contact Auto-log
+  // wrote with no popup to show it. Once each, never on a re-render (useLogPromptSound).
+  useLogPromptSound(snap ? (snap.pendingLog ?? null) : undefined, snap?.autoLoggedTick, settings?.soundLogPrompt === true)
 
   // The station refused the answer (its `expectedKey` is not the head's any more) or the call
   // failed: RE-READ rather than leave the operator looking at a hold that has moved on. Nothing
@@ -4658,6 +4663,7 @@ function App() {
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 panels={rttyPanels}
                 macros={settings?.macros}
+                opName={settings?.opName}
                 onMacrosSaved={saveMacrosMirror}
                 onOpenSettings={openSettingsAt}
               />
@@ -4677,6 +4683,7 @@ function App() {
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 panels={pskPanels}
                 macros={settings?.macros}
+                opName={settings?.opName}
                 onMacrosSaved={saveMacrosMirror}
                 onOpenSettings={openSettingsAt}
               />

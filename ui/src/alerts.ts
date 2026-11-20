@@ -139,6 +139,14 @@ export function turnEarcon(): void {
   osc.stop(now + 0.13)
 }
 
+/** The log prompt's sound (Settings `soundLogPrompt`, off by default; `useLogPromptSound` plays it):
+ * a falling two-tone, E6 to B5, when a contact wants logging. Pitches no other alert uses, and
+ * falling where the TX key and the AOS earcons rise, so the ear tells it apart. */
+export function logPromptEarcon(): void {
+  beep(1319)
+  window.setTimeout(() => beep(988), 120)
+}
+
 /** Pass-start (AOS) earcon for the ARMED satellite track (satPassAlert.ts): a
  * rising three-tone. Three notes, not two, and frequencies no other alert
  * uses (BEEP_HZ, the 990 Hz ⏰ alarm, the 660/880 TX pair) — the operator's

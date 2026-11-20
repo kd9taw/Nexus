@@ -132,6 +132,9 @@ export const PER_SURFACE = [
   'nexus.jtty.includeTime',
   'nexus.jtty.lowerCase',
   'nexus.logbook.globespin',
+  // The width the operator dragged the log prompt to (#551, LogConfirm): a size in THIS window, fitted
+  // into it when the prompt opens, like the rail widths.
+  'nexus.logPrompt.width',
   // The 2-D maps' style, Atlas or Dark (features/mapStyle): how THIS window's flat map and 2-D globe
   // look, one record for Connect's map and the APRS map, like the Layers panel's fold.
   'nexus.map.style',

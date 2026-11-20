@@ -1024,6 +1024,7 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     // the patch blanks on the profile it touches.
     sstvHoldDataSubmode: s.sstvHoldDataSubmode ?? false,
     aprsDataFm: s.aprsDataFm ?? false,
+    logStationPowerWithAmp: s.logStationPowerWithAmp ?? false,
     pcMic: s.pcMic ?? false,
     pcMicDevice: s.pcMicDevice ?? '',
     pcMicGainDb: s.pcMicGainDb ?? 0,
@@ -1736,7 +1737,8 @@ export function SettingsPanel({
   const [n3fjpTest, setN3fjpTest] = useState<{ state: 'idle' | 'testing' | 'ok' | 'fail'; msg: string }>({ state: 'idle', msg: '' })
   const runN3fjpTest = () => {
     setN3fjpTest({ state: 'testing', msg: t('settings.connections.test.testing') })
-    n3fjpTestConnection()
+    // The host and port as the form shows them, saved or not: the Test saves nothing.
+    n3fjpTestConnection((form?.n3fjpHost ?? '').trim(), form?.n3fjpPort ?? 1100)
       .then((msg) => setN3fjpTest({ state: 'ok', msg }))
       .catch((e) => setN3fjpTest({ state: 'fail', msg: n3fjpTestFailure(String(e)) }))
   }
@@ -10028,6 +10030,21 @@ export function SettingsPanel({
                   />
                   <span className="settings-hint">{t('settings.digital.stationPower.hint')}</span>
                 </div>
+                {/* #534. Beside Station power because it logs that figure. Per radio (it rides the
+                    radio patch); LOGGING ONLY — nothing here touches RF power or keying. */}
+                <label className="settings-field">
+                  <span className="settings-label">{t('settings.digital.stationPowerWithAmp.label')}</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.logStationPowerWithAmp ?? false}
+                    className={`toggle${form.logStationPowerWithAmp ? ' on' : ''}`}
+                    onClick={() => updateBool('logStationPowerWithAmp', !form.logStationPowerWithAmp)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                  <span className="settings-hint">{t('settings.digital.stationPowerWithAmp.hint')}</span>
+                </label>
                 {/* Units moved to Station ▸ Operator & Radio (#248) — it is app-wide. */}
               </div>
             </div>
@@ -12115,6 +12132,25 @@ export function SettingsPanel({
                 </label>
                 <span className="settings-hint">
                   {t('settings.accessibility.cwTurnSound.hint')}
+                </span>
+              </div>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">
+                    {t('settings.accessibility.logPromptSound.label')}
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.soundLogPrompt ?? false}
+                    className={`toggle${form.soundLogPrompt ? ' on' : ''}`}
+                    onClick={() => updateBool('soundLogPrompt', !form.soundLogPrompt)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">
+                  {t('settings.accessibility.logPromptSound.hint')}
                 </span>
               </div>
             </div>

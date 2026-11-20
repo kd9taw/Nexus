@@ -23,7 +23,7 @@ describe('the built-in sets', () => {
     expect(resolveRttySet([], 'everyday', tr)).toEqual([
       { key: 'F1', label: 'CQ', text: 'CQ CQ CQ DE {MYCALL} {MYCALL} K', custom: false },
       { key: 'F2', label: '«rtty.macro.answer.label»', text: '{CALL} DE {MYCALL} {MYCALL} K', custom: false },
-      { key: 'F3', label: '«rtty.macro.exchange.label»', text: '{CALL} DE {MYCALL} UR 599 599 K', custom: false },
+      { key: 'F3', label: '«rtty.macro.exchange.label»', text: '{CALL} DE {MYCALL} UR {RST} {RST} K', custom: false },
       { key: 'F4', label: '73', text: '{CALL} DE {MYCALL} TU 73 SK', custom: false },
       { key: 'F5', label: '', text: '', custom: false },
       { key: 'F6', label: '', text: '', custom: false },
@@ -35,11 +35,11 @@ describe('the built-in sets', () => {
   it('Contest is the run/S&P set, one message per key', () => {
     expect(resolveRttySet([], 'contest', tr).map((s) => [s.key, s.label, s.text])).toEqual([
       ['F1', 'CQ', 'CQ TEST {MYCALL} {MYCALL} CQ'],
-      ['F2', '«rtty.macro.exch.label»', '{CALL} 599 {EXCH} {EXCH}'],
+      ['F2', '«rtty.macro.exch.label»', '{CALL} {RST} {EXCH} {EXCH}'],
       ['F3', 'TU', 'TU {MYCALL} CQ'],
       ['F4', '«rtty.macro.myCall.label»', '{MYCALL} {MYCALL}'],
       ['F5', '«rtty.macro.hisCall.label»', '{CALL}'],
-      ['F6', '«rtty.macro.spExch.label»', 'TU 599 {EXCH} {EXCH}'],
+      ['F6', '«rtty.macro.spExch.label»', 'TU {RST} {EXCH} {EXCH}'],
       ['F7', 'B4', '{CALL} QSO B4 TU {MYCALL}'],
       ['F8', 'AGN', 'AGN? AGN?'],
     ])
@@ -124,11 +124,25 @@ describe('the tokens', () => {
   })
 
   it('flags every token it does not know, and a stray brace, and refuses to send them', () => {
-    expect(unknownRttyTokens('CQ {MYCALL} {MYCALL} {NAME} {QTH} {NAME}')).toEqual(['{NAME}', '{QTH}'])
+    expect(unknownRttyTokens('CQ {MYCALL} {MYCALL} {QTH} {OPNAME} {QTH}')).toEqual(['{QTH}', '{OPNAME}'])
     expect(unknownRttyTokens('CQ {MYCALL')).toEqual(['{'])
     expect(unknownRttyTokens('CQ MYCALL}')).toEqual(['}'])
-    expect(unknownRttyTokens('{CALL} {RST} {EXCH} {MYCALL} {call}')).toEqual([])
-    expect(expandRttyMacro('{CALL} {NAME}', ctx)).toEqual({ unknown: '{NAME}' })
+    expect(unknownRttyTokens('{CALL} {RST} {EXCH} {MYCALL} {call} {NAME} {HISNAME}')).toEqual([])
+    expect(expandRttyMacro('{CALL} {QTH}', ctx)).toEqual({ unknown: '{QTH}' })
+  })
+
+  it('{RST} sends the RST Sent in the log entry, and 599 only when none is set', () => {
+    expect(expandRttyMacro('{CALL} UR {RST} {RST}', { ...ctx, rst: ' 549 ' })).toEqual({ text: 'K1ABC UR 549 549' })
+    expect(expandRttyMacro('UR {RST}', { ...ctx, rst: '' })).toEqual({ text: 'UR 599' })
+    expect(expandRttyMacro('UR {RST}', { ...ctx, rst: null })).toEqual({ text: 'UR 599' })
+  })
+
+  it('{NAME} is your name and {HISNAME} theirs; an empty one leaves no gap, as CW does', () => {
+    const named = { ...ctx, myname: 'alex', hisname: 'bob' }
+    expect(expandRttyMacro('R FB {HISNAME} NAME {NAME} {NAME}', named)).toEqual({ text: 'R FB BOB NAME ALEX ALEX' })
+    expect(expandRttyMacro('{NAME} vs {HISNAME}', named), '{HISNAME} is not {NAME}').toEqual({ text: 'ALEX vs BOB' })
+    expect(expandRttyMacro('R TU {HISNAME} DE {MYCALL}', ctx)).toEqual({ text: 'R TU DE W9XYZ' })
+    expect(expandRttyMacro('{HISNAME} GM{NL}', ctx)).toEqual({ text: 'GM\r\n' })
   })
 })
 
@@ -174,5 +188,23 @@ describe('{NL}', () => {
     expect(RTTY_TOKENS).toContain('{NL}')
     expect(unknownRttyTokens('{NL}CQ{nl}')).toEqual([])
     expect(expandRttyMacro('{NL}CQ DE {MYCALL}{NL}K{nl}', ctx)).toEqual({ text: '\r\nCQ DE W9XYZ\r\nK\r\n' })
+  })
+})
+
+describe('every built-in reaches the air with nothing in braces', () => {
+  // An unknown token is refused rather than sent, but a built-in must never need refusing: every
+  // key of both sets expands, through the one expander the cockpit sends with, to text with no
+  // brace left in it — with the log's report box empty and with a report in it.
+  it('in both sets, with and without a report in the log', () => {
+    for (const set of ['everyday', 'contest'] as const) {
+      for (const slot of resolveRttySet(undefined, set, (k) => k)) {
+        if (!slot.text) continue
+        for (const rst of ['', '549']) {
+          const r = expandRttyMacro(slot.text, { mycall: 'W9XYZ', call: 'K1ABC', exch: '05 IL', rst, myname: '', hisname: '' })
+          expect(r, `${set} ${slot.key}`).toHaveProperty('text')
+          expect('text' in r && /[{}]/.test(r.text), `${set} ${slot.key}: ${JSON.stringify(r)}`).toBe(false)
+        }
+      }
+    }
   })
 })

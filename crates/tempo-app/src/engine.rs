@@ -4625,6 +4625,11 @@ pub struct Engine {
     /// "clear DX call after logging" wipe on the auto-log path, which used to be
     /// invisible to the frontend because it intercepted only its own log actions.
     logged_tick: u32,
+    /// Bumped when Auto-log writes a completed contact with no confirm popup to show it
+    /// ([`Self::auto_log_complete_contact`]); a contact the operator logs, or one held for the
+    /// popup, leaves it alone. The UI plays the log prompt's sound on it (Settings
+    /// `sound_log_prompt`), the popup appearing being the cue for a held one.
+    auto_logged_tick: u32,
     /// Bumped on every BAND change, by any route ([`Engine::on_band_change`]): the cockpits
     /// clear their call boxes on change (the FT DX call and grid, the JS8 To box, the JTTY Call
     /// box, the log strip's un-logged call). A move within one band never bumps it.
@@ -5054,6 +5059,10 @@ pub struct Engine {
     cw_peer_call: String,
     cw_peer_name: String,
     cw_peer_state: String,
+    /// The RST Sent in the CW cockpit's log entry, for the `{RST}` CW-macro token, pushed by the
+    /// frontend as the box changes (`set_cw_rst_sent`). Empty until it says, and then `{RST}` keys
+    /// 599: a report sent that the log does not hold was the bug this field closes.
+    cw_rst_sent: String,
     /// #293: names from callbook lookups already answered this session, `(CALL, name)`, newest
     /// last, bounded by [`CALLBOOK_NAMES_CAP`]. Filled by the shell when a lookup resolves (the
     /// engine has no callbook of its own), read by [`Self::qso_record`] so a sequencer-logged
@@ -7973,6 +7982,7 @@ impl Engine {
             udp_free_text: None,
             rx_freq_clear_tick: 0,
             logged_tick: 0,
+            auto_logged_tick: 0,
             band_change_tick: 0,
             pending_udp_clear: None,
             pending_udp_qsos: std::collections::VecDeque::new(),
@@ -8070,6 +8080,7 @@ impl Engine {
             cw_peer_call: String::new(),
             cw_peer_name: String::new(),
             cw_peer_state: String::new(),
+            cw_rst_sent: String::new(),
             callbook_names: VecDeque::new(),
             callbook_answers: VecDeque::new(),
             callbook_fixes: VecDeque::new(),
@@ -13242,10 +13253,11 @@ impl Engine {
 
     /// Queue CW to transmit. `text` is an F-key macro template OR literal type-ahead;
     /// it's expanded with the current QSO context (mycall/name/grid + the worked call +
-    /// a 599 report) and the radio loop keys it via `rig.send_morse`.
+    /// the log entry's RST Sent) and the radio loop keys it via `rig.send_morse`.
     /// Expand a CW macro template with the live QSO context (mycall/name/grid + the worked
-    /// call via `!` + a 599 report). Shared by [`Self::send_cw`] and [`Self::preview_cw`] so
-    /// the cockpit's "what F2 will send" preview matches exactly what gets sent.
+    /// call via `!` + the log entry's RST Sent, 599 when it holds none). Shared by
+    /// [`Self::send_cw`] and [`Self::preview_cw`] so the cockpit's "what F2 will send" preview
+    /// matches exactly what gets sent.
     fn expand_cw(&self, text: &str) -> String {
         let hiscall = self
             .app
@@ -13313,7 +13325,13 @@ impl Engine {
             hiscall: &hiscall,
             hisname,
             hisstate,
-            rst: "599",
+            // The log entry's RST Sent, so the report keyed is the report logged; 599 when the
+            // entry has none (`set_cw_rst_sent`).
+            rst: if self.cw_rst_sent.is_empty() {
+                "599"
+            } else {
+                &self.cw_rst_sent
+            },
             class,
             section,
             exch: &exch,
@@ -13454,6 +13472,16 @@ impl Engine {
         self.cw_peer_call = call.trim().to_string();
         self.cw_peer_name = tempo_core::cw::sendable_text(&name);
         self.cw_peer_state = tempo_core::cw::sendable_text(&state);
+    }
+
+    /// Record the RST Sent in the CW cockpit's log entry, for the `{RST}` CW-macro token (cut on
+    /// the way out, so `549` keys `54N`). Pushed by the frontend whenever the box changes; empty
+    /// puts `{RST}` back on 599.
+    ///
+    /// ⛔ The box is typed text and a macro keys it, so it keeps only what Nexus's keyers may be
+    /// handed ([`tempo_core::cw::sendable_text`]), as the worked station's name does.
+    pub fn set_cw_rst_sent(&mut self, rst: String) {
+        self.cw_rst_sent = tempo_core::cw::sendable_text(&rst);
     }
 
     /// #293: remember the name a callbook lookup returned for `call`, replacing any earlier
@@ -19040,7 +19068,19 @@ impl Engine {
     /// Otherwise the watts the operator gave Settings ▸ Station power, and nothing when none is
     /// set: a radio that reports no forward power, or no over Nexus saw. Never derived from the
     /// rig's power slider: that is a fraction of a rated output nobody may have entered.
+    ///
+    /// ⭐ AN AMPLIFIER NEXUS CANNOT READ (an IC-PW2 behind an IC-7300, #534) leaves the radio
+    /// measuring only its drive, so with the radio's switch for it on
+    /// ([`crate::settings::RadioProfile::log_station_power_with_amp`]) Station power is logged
+    /// ahead of the measured figure. Logging only: nothing on the transmit path reads this.
     fn log_power_now(&self, start_unix: Option<u64>) -> Option<f64> {
+        let station = self
+            .settings
+            .station_power_w
+            .filter(|w| w.is_finite() && *w > 0.0);
+        if self.settings.log_station_power_with_amp && station.is_some() {
+            return station;
+        }
         let measured = self
             .measured_over
             .as_ref()
@@ -19050,11 +19090,7 @@ impl Engine {
                 })
             })
             .map(|over| watts_for_log(over.peak_w));
-        measured.or_else(|| {
-            self.settings
-                .station_power_w
-                .filter(|w| w.is_finite() && *w > 0.0)
-        })
+        measured.or(station)
     }
 
     /// The power a contest row records (`LoggedQso::tx_power`): [`Self::log_power_now`] as the
@@ -23596,6 +23632,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             self.hold_pending_log(HeldQso::built(rec, grid_source));
         } else {
             self.log_built_qso(HeldQso::built(rec, grid_source));
+            self.auto_logged_tick = self.auto_logged_tick.wrapping_add(1);
         }
     }
 
@@ -33573,6 +33610,7 @@ contact yourself."
         s.udp_free_text = self.udp_free_text.clone();
         s.rx_freq_clear_tick = self.rx_freq_clear_tick;
         s.logged_tick = self.logged_tick;
+        s.auto_logged_tick = self.auto_logged_tick;
         s.band_change_tick = self.band_change_tick;
         s.work_tick = self.work_tick;
         s.work_view = self.work_view.clone();
@@ -55861,6 +55899,43 @@ mod tests {
         assert_eq!(power("K9AAA"), Some(5.0), "the record's own power wins");
     }
 
+    /// ⭐ An amplifier Nexus cannot read (an IC-PW2 behind an IC-7300) leaves the radio measuring
+    /// its own ~8 W of drive, and that is what was logged. With the radio's "an amplifier I can't
+    /// read is inline" switch on, a contact logs Settings ▸ Station power instead — in a contest
+    /// row too — and the switch is off by default, so the radio's figure still wins without it.
+    #[test]
+    fn an_unread_amplifier_inline_logs_station_power_not_the_exciters() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.station_power_w = Some(500.0);
+        assert!(!e.settings.log_station_power_with_amp, "off by default");
+        let barefoot = e.qso_record("W9XYZ".into(), None, None);
+        an_over(&mut e, &[8.1, 8.0]);
+        e.log_qso(barefoot);
+        e.settings.log_station_power_with_amp = true;
+        let amped = e.qso_record("K9AMP".into(), None, None);
+        an_over(&mut e, &[8.1, 8.0]);
+        e.log_qso(amped);
+        assert_eq!(e.fd_row_power(), "500", "a contest row logs it too");
+        let mut own = e.qso_record("K9AAA".into(), None, None);
+        own.tx_power = Some(5.0);
+        e.log_qso(own);
+        // No Station power set: the switch has nothing to log, so the radio's figure stands.
+        e.settings.station_power_w = None;
+        let unset = e.qso_record("K9UNS".into(), None, None);
+        an_over(&mut e, &[8.1]);
+        e.log_qso(unset);
+        let log = e.stored_log();
+        let power = |call: &str| log.iter().find(|r| r.call == call).and_then(|r| r.tx_power);
+        assert_eq!(power("W9XYZ"), Some(8.1), "switch off: the radio's figure");
+        assert_eq!(power("K9AMP"), Some(500.0), "switch on: Station power");
+        assert_eq!(
+            power("K9AAA"),
+            Some(5.0),
+            "the record's own power still wins"
+        );
+        assert_eq!(power("K9UNS"), Some(8.1));
+    }
+
     /// Where the radio's figure is not this contact's power, the log falls back to Settings ▸
     /// Station power and never writes the reading: a tune carrier, an over that ended well before
     /// the contact started, an amplifier on the radio (the radio's power is its drive), and an
@@ -66730,6 +66805,27 @@ mod tests {
         );
     }
 
+    /// ⭐ **`{RST}` keys the RST Sent in the log entry**, cut, and 5NN only when none is set.
+    /// It was always 599: an operator whose log said 549 keyed 5NN at the station.
+    #[test]
+    fn cw_rst_keys_the_log_entrys_rst_sent_and_5nn_only_without_one() {
+        let mut e = Engine::new("W8ABC", "EN82", 0);
+        assert_eq!(e.preview_cw("UR {RST} {RST}"), "UR 5NN 5NN", "none set yet");
+        e.set_cw_rst_sent(" 549 ".into());
+        assert_eq!(
+            e.preview_cw("UR {RST} {RST}"),
+            "UR 54N 54N",
+            "cut numbers still apply"
+        );
+        e.set_cw_rst_sent("579".into());
+        assert_eq!(e.preview_cw("UR {RST}"), "UR 57N", "the latest wins");
+        // What the strip holds is keyed, so it keeps only what a keyer may be handed.
+        e.set_cw_rst_sent("5;49".into());
+        assert_eq!(e.preview_cw("UR {RST}"), "UR 54N");
+        e.set_cw_rst_sent(String::new());
+        assert_eq!(e.preview_cw("UR {RST}"), "UR 5NN", "cleared: back to 599");
+    }
+
     /// ⭐ **`{EXCH}` keys the exchange of the contest that is running**, not Field Day's.
     ///
     /// The CW expander read `fd_class`/`fd_section` whenever the contest switch was on,
@@ -69132,6 +69228,60 @@ mod tests {
             "disabled feature never retunes"
         );
         assert!(e.snapshot().qsy.is_none());
+    }
+
+    /// The log prompt's sound plays for a contact Auto-log writes with no popup to show it, and
+    /// `auto_logged_tick` is how the UI hears of one: it moves for that contact only. A contact
+    /// held for the popup does not move it (the popup appearing is the cue there), and nor does a
+    /// contact the operator logs (they pressed Log; nothing needs announcing).
+    #[test]
+    fn auto_logged_tick_moves_only_for_a_contact_auto_log_writes_unprompted() {
+        let work = |e: &mut Engine, call: &str| {
+            e.call_station(call);
+            e.ingest_decodes_for_test(&[dec_snr(&format!("K2DEF {call} -10"), -7)], 1);
+            e.ingest_decodes_for_test(&[dec_snr(&format!("K2DEF {call} RR73"), -7)], 3);
+        };
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.auto_log = true;
+        e.settings.prompt_to_log = false;
+        let before = e.snapshot().auto_logged_tick;
+        work(&mut e, "W9XYZ");
+        assert_eq!(e.stored_log().len(), 1, "the contact was auto-logged");
+        assert_eq!(
+            e.snapshot().auto_logged_tick,
+            before.wrapping_add(1),
+            "auto-log moves it"
+        );
+
+        let logged = e.snapshot().logged_tick;
+        let mut other = (*e.stored_log()[0]).clone();
+        other.call = "W1AW".into();
+        e.log_qso(other);
+        assert_ne!(
+            e.snapshot().logged_tick,
+            logged,
+            "the operator's log is a logged contact"
+        );
+        assert_eq!(
+            e.snapshot().auto_logged_tick,
+            before.wrapping_add(1),
+            "but not an auto-log"
+        );
+
+        let mut held = Engine::new("K2DEF", "FN31", 0);
+        held.settings.auto_log = true;
+        held.settings.prompt_to_log = true;
+        let before = held.snapshot().auto_logged_tick;
+        work(&mut held, "W9XYZ");
+        assert!(
+            held.snapshot().pending_log.is_some(),
+            "the contact waits in the popup"
+        );
+        assert_eq!(
+            held.snapshot().auto_logged_tick,
+            before,
+            "a held contact does not move it"
+        );
     }
 
     #[test]
@@ -72904,6 +73054,7 @@ mod tests {
             data_modes_plain_ssb: p.data_modes_plain_ssb,
             sstv_hold_data_submode: p.sstv_hold_data_submode,
             aprs_data_fm: p.aprs_data_fm,
+            log_station_power_with_amp: Some(p.log_station_power_with_amp),
             pc_mic: None,
             pc_mic_device: None,
             pc_mic_gain_db: None,

@@ -3020,6 +3020,8 @@ export const EN = {
     other: '{{count}} contacts were logged without your confirmation — the queue was full. They are in your log and your connectors will upload them; the Connections log names them.',
   },
   'logPrompt.discard': 'Discard',
+  'logPrompt.widen.aria': 'Widen the log prompt',
+  'logPrompt.widen.title': 'Drag to widen the log prompt',
   'logPrompt.log': 'Log QSO',
 
   // ── Station roster (the Stations list and its cards) ────────────────────────────────
@@ -9936,6 +9938,8 @@ export const EN = {
   'settings.digital.clockCheck.label': 'Clock check (NTP)',
   'settings.digital.clockCheck.hint':
     'Measure your PC clock against public NTP servers and CORRECT for it: TempoFast/TempoDeep are slot-timed to UTC, and Nexus shifts its own transmit and decode windows by the measured offset so they land on the true UTC grid even when the clock is off. The top bar shows what is being applied. Turn off for fully-offline operation (no network calls) — the last measurement then keeps steering until it ages out.',
+  'settings.digital.stationPowerWithAmp.label': "An amplifier Nexus can't read is inline: log my Station power",
+  'settings.digital.stationPowerWithAmp.hint': "For this radio. Nexus logs the power the radio measures, and behind an amplifier it can't read (an Icom IC-PW2, say) that is only the radio's drive. Turn this on and contacts log the Station power above instead. Logging only: your power and keying are unchanged.",
   'settings.digital.stationPower.label': 'Station power (W)',
   'settings.digital.stationPower.hint':
     'Your transmit power in watts — logged on every contact as its power (ADIF TX_PWR), and unlocks the Journey miles-per-watt & QRP feats. Leave blank if unknown.',
@@ -10891,7 +10895,7 @@ export const EN = {
   'settings.n3fjp.forwardAll.hint':
     "Also push <b>every</b> logged QSO (not just contest contacts) to N3FJP ACLog on the host above — everyday general logging. N3FJP dedupes, so it's safe to run alongside the contest push.",
   'settings.n3fjp.test.label': 'Connection test',
-  'settings.n3fjp.test.title': 'Save settings, then test the N3FJP TCP connection',
+  'settings.n3fjp.test.title': 'Test the N3FJP TCP connection at the host and port above. Nothing is saved.',
   'settings.n3fjp.test.action': 'Test N3FJP',
   'settings.n3fjp.test.hint':
     'Run this at the club site before the event starts to confirm the API link works.',
@@ -11505,6 +11509,8 @@ export const EN = {
     "A soft tick each cycle new signals are decoded — the band's rhythm, eyes-free.",
   'settings.accessibility.cwTurnSound.label': 'CW turn sound',
   'settings.accessibility.cwTurnSound.hint': 'A short rising chirp when the CW turn cue says it is your turn to send. Never while you transmit.',
+  'settings.accessibility.logPromptSound.label': 'Log prompt sound',
+  'settings.accessibility.logPromptSound.hint': 'A short falling two-tone when a finished contact asks to be logged, or when Auto-log logs one for you.',
 
   // ── Connect — the board, its pane grid, and the one-line pane projections ───────────
   // ⚠️ THE UNITS RULE OWNS THIS SURFACE. Band and mode names, bearings (`~47°`), MUF and
@@ -13061,8 +13067,10 @@ export const EN = {
   'rtty.macroEditor.tokens.aria': 'Insert a token',
   'rtty.macroEditor.token.mycall': 'Your callsign',
   'rtty.macroEditor.token.call': 'Their callsign, from the Call box',
-  'rtty.macroEditor.token.rst': 'The signal report, 599',
+  'rtty.macroEditor.token.rst': "The report you send: the log's Sent box, or 599 when it is empty",
   'rtty.macroEditor.token.exch': 'Your contest exchange, without the report',
+  'rtty.macroEditor.token.name': 'Your name, from Settings ▸ Station',
+  'rtty.macroEditor.token.hisname': "Their name, from the log's Name box",
   'rtty.macroEditor.token.nl': 'A new line (CR LF)',
   'rtty.macroEditor.stopTitle': 'A macro transmits, so its title can’t look like a stop button (Stop, Esc, Abort).',
   'rtty.macroEditor.unknownToken': 'Unknown token {{token}} — RTTY can’t send braces, so it would go out as a bare word.',
@@ -13147,8 +13155,10 @@ export const EN = {
   'psk.macroEditor.tokens.aria': 'Insert a token',
   'psk.macroEditor.token.mycall': 'Your callsign',
   'psk.macroEditor.token.call': 'Their callsign, from the Call box',
-  'psk.macroEditor.token.rst': 'The signal report, 599',
+  'psk.macroEditor.token.rst': "The report you send: the log's Sent box, or 599 when it is empty",
   'psk.macroEditor.token.exch': 'Your contest exchange, without the report',
+  'psk.macroEditor.token.name': 'Your name, from Settings ▸ Station',
+  'psk.macroEditor.token.hisname': "Their name, from the log's Name box",
   'psk.macroEditor.stopTitle': 'A macro transmits, so its title can’t look like a stop button (Stop, Esc, Abort).',
   'psk.macroEditor.unknownToken': 'Unknown token {{token}} — it would go out on the air exactly as written.',
   'psk.macroEditor.save': 'Save',
@@ -14203,7 +14213,7 @@ export const EN = {
   'cw.macroEditor.tokens.aria': 'Insert a token',
   'cw.macroEditor.token.mycall': 'Your callsign',
   'cw.macroEditor.token.call': 'Their callsign: the station you are working',
-  'cw.macroEditor.token.rst': 'The signal report, sent as 5NN',
+  'cw.macroEditor.token.rst': "The report you send: the log's Sent box (599 when it is empty), keyed in cut numbers as 5NN",
   'cw.macroEditor.token.exch': 'Your contest exchange, without the report (with the serial, where the contest has one)',
   'cw.macroEditor.token.name': 'Your name, from Settings ▸ Station',
   'cw.macroEditor.token.hisname': 'Their name, from the callbook lookup',

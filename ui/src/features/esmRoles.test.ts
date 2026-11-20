@@ -44,10 +44,10 @@ describe('the contest layout on RTTY\'s contest set, as it ships', () => {
   it('sends each step from its key', () => {
     expect(messages(CONTEST_LAYOUT_ROLES, rttyContest)).toEqual({
       cq: 'CQ TEST {MYCALL} {MYCALL} CQ',
-      callExch: '{CALL} 599 {EXCH} {EXCH}',
+      callExch: '{CALL} {RST} {EXCH} {EXCH}',
       tu: 'TU {MYCALL} CQ',
       myCall: '{MYCALL} {MYCALL}',
-      exch: 'TU 599 {EXCH} {EXCH}',
+      exch: 'TU {RST} {EXCH} {EXCH}',
       again: 'AGN? AGN?',
       b4: '{CALL} QSO B4 TU {MYCALL}',
     })

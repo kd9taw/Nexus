@@ -31953,6 +31953,15 @@ fn set_cw_peer_info(
     Ok(())
 }
 
+/// Record the RST Sent in the CW cockpit's log entry, for the `{RST}` CW-macro token. Pushed by
+/// the CW cockpit whenever the box changes; empty puts `{RST}` back on 599. Fire-and-forget, like
+/// `set_cw_peer_info`.
+#[tauri::command(async)]
+fn set_cw_rst_sent(state: State<'_, SharedEngine>, rst: String) -> Result<(), String> {
+    engine_lock(&state).set_cw_rst_sent(rst);
+    Ok(())
+}
+
 /// CW speed match on or off, from the contest strip's switch: saved alone, never a settings-form
 /// save. It changes only the speed an answer keys at.
 #[tauri::command(async)]
@@ -38488,6 +38497,11 @@ fn hrdlog_health_of(
     }
 }
 
+/// Whether the auto-push sends a WRL result again: only "pending" (rate limit, busy server).
+fn wrl_retries(result: &str) -> bool {
+    result == "pending"
+}
+
 /// WRL's twin of [`hrdlog_health_of`], with the same missing-`Err` history.
 fn wrl_health_of(res: &Result<tempo_app::dto::WrlPushResultDto, String>) -> (bool, ConnDetail) {
     match res {
@@ -43001,12 +43015,25 @@ async fn qrz_push_qso(
 /// Test the N3FJP connection: handshake `<CMD><PROGRAM></CMD>` and report
 /// what's listening ("N3FJP's Field Day Contest Log v6.6") — run this at the
 /// club site BEFORE the event starts.
+///
+/// ⭐ It tries `host` and `port` as the Settings form shows them, saved or not, and saves
+/// neither; the saved ones only when it is handed none (a caller from before they were passed).
+/// Reading only the saved ones meant a port typed into the form was never tried until Save.
 #[tauri::command]
-async fn n3fjp_test_connection(state: State<'_, SharedEngine>) -> Result<String, String> {
+async fn n3fjp_test_connection(
+    state: State<'_, SharedEngine>,
+    host: Option<String>,
+    port: Option<u16>,
+) -> Result<String, String> {
     let (host, port) = {
         let eng = engine_lock(&state);
         let st = eng.settings();
-        (st.n3fjp_host.trim().to_string(), st.n3fjp_port)
+        (
+            host.unwrap_or_else(|| st.n3fjp_host.clone())
+                .trim()
+                .to_string(),
+            port.unwrap_or(st.n3fjp_port),
+        )
     };
     if host.is_empty() {
         return Err(N3FJP_NO_HOST.into());
@@ -46757,7 +46784,7 @@ fn auto_push_one(
                     "pending" => "WRL ✗ busy".to_string(),
                     _ => "WRL ✗ rejected".to_string(),
                 };
-                (part, ok, detail, r.result.as_str() == "pending")
+                (part, ok, detail, wrl_retries(&r.result))
             }
             Err(e) => {
                 conn_log(
@@ -55248,6 +55275,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         send_cw,
         send_cw_armed,
         set_cw_peer_info,
+        set_cw_rst_sent,
         set_cw_speed_match,
         set_cw_wpm,
         set_decode_depth,
@@ -56475,6 +56503,29 @@ fn winlink_disconnect() -> Result<(), String> {
         conn_log("Winlink", "info", "disconnecting");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod wrl_duplicate_tests {
+    /// WRL's answer for a QSO it already has (its spec's 409 `DUPLICATE_CONTACT`, "treat it as
+    /// already logged") counts as uploaded: the auto-push stamps it healthy and does not leave
+    /// it owed, so it is not sent again. It read "WRL ✗ busy" and was re-sent forever.
+    #[test]
+    fn a_contact_wrl_already_has_is_logged_and_not_sent_again() {
+        let body = r#"{"data":null,"meta":null,"error":{"code":"DUPLICATE_CONTACT","message":"This QSO is already in the operator's log.","existingContactId":"3f2b8c1e-5d4a-4f6b-9a7c-2e1d0b9a8c7f"}}"#;
+        let r: tempo_app::dto::WrlPushResultDto =
+            tempo_core::wrl::classify_response(409, body).into();
+        assert_eq!(r.result, "duplicate");
+        assert!(super::wrl_stamp(&r.result).0, "stamped as uploaded");
+        assert!(!super::wrl_retries(&r.result), "never owed again");
+        // CONTROL: a busy server is still retried.
+        let busy: tempo_app::dto::WrlPushResultDto = tempo_core::wrl::classify_response(
+            429,
+            r#"{"data":null,"meta":null,"error":{"code":"RATE_LIMITED","message":"x"}}"#,
+        )
+        .into();
+        assert!(super::wrl_retries(&busy.result));
+    }
 }
 
 #[cfg(test)]
@@ -76265,30 +76316,63 @@ mod remote_credential_reply_tests {
     /// An N3FJP Test, run as the command lane runs it for a remote client, answers ok with what
     /// is listening, or the error: a closed port and a blank host each by the code the UI words.
     /// N3FJP takes no credential at all.
+    ///
+    /// ⭐ It tests the host and port it is HANDED — what the Settings form shows, saved or not —
+    /// and the saved ones only when it is handed none. It read the saved ones only, so a port
+    /// typed into the form was never tried until Save, and the Test looked broken.
     #[test]
     fn an_n3fjp_test_from_afar_answers_ok_or_an_error() {
         use crate::command_dispatch::{tauri_runner, Runner};
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
         let port = listener.local_addr().unwrap().port();
+        // Two Tests reach it: the saved settings', and the form's.
         let serving = std::thread::spawn(move || {
-            let (mut peer, _) = listener.accept().expect("the Test connects");
-            let mut asked = [0u8; 64];
-            let n = peer.read(&mut asked).unwrap();
-            assert_eq!(&asked[..n], b"<CMD><PROGRAM></CMD>\r\n");
-            peer.write_all(
-                b"<CMD><PROGRAMRESPONSE><PGM>N3FJP's Test Log</PGM><VER>6.6</VER></CMD>",
-            )
-            .unwrap();
+            for _ in 0..2 {
+                let (mut peer, _) = listener.accept().expect("the Test connects");
+                let mut asked = [0u8; 64];
+                let n = peer.read(&mut asked).unwrap();
+                assert_eq!(&asked[..n], b"<CMD><PROGRAM></CMD>\r\n");
+                peer.write_all(
+                    b"<CMD><PROGRAMRESPONSE><PGM>N3FJP's Test Log</PGM><VER>6.6</VER></CMD>",
+                )
+                .unwrap();
+            }
         });
         let closed = std::net::TcpListener::bind("127.0.0.1:0")
             .and_then(|l| l.local_addr())
             .map(|a| a.port())
             .expect("a port no one listens on");
-        for (host, to, expected) in [
-            ("127.0.0.1", port, Ok("N3FJP's Test Log v6.6")),
-            ("127.0.0.1", closed, Err("n3fjpRefused")),
-            ("", port, Err("n3fjpNoHost")),
+        let form = |host: &str, port: u16| serde_json::json!({ "host": host, "port": port });
+        // (saved host, saved port, what the Test is handed, its answer)
+        for (host, to, args, expected) in [
+            (
+                "127.0.0.1",
+                port,
+                serde_json::json!({}),
+                Ok("N3FJP's Test Log v6.6"),
+            ),
+            (
+                "127.0.0.1",
+                closed,
+                serde_json::json!({}),
+                Err("n3fjpRefused"),
+            ),
+            ("", port, serde_json::json!({}), Err("n3fjpNoHost")),
+            // The form's host and port, not yet saved, are the ones tried.
+            (
+                "127.0.0.1",
+                closed,
+                form("127.0.0.1", port),
+                Ok("N3FJP's Test Log v6.6"),
+            ),
+            (
+                "127.0.0.1",
+                port,
+                form("127.0.0.1", closed),
+                Err("n3fjpRefused"),
+            ),
+            ("127.0.0.1", port, form("  ", port), Err("n3fjpNoHost")),
         ] {
             let engine: SharedEngine = Arc::new(Mutex::new(Engine::with_settings(
                 tempo_app::settings::Settings {
@@ -76309,7 +76393,7 @@ mod remote_credential_reply_tests {
             let (answer, answered) = std::sync::mpsc::channel();
             runner(
                 "n3fjp_test_connection".to_string(),
-                serde_json::json!({}),
+                args,
                 Box::new(move |result| {
                     let _ = answer.send(result);
                 }),

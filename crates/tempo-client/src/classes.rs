@@ -530,6 +530,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("set_cw_keyer",                   RunsAtShack, "The shack's CW keyer setup; keys nothing."),
     ("set_cw_macros",                  RunsAtShack, "The shack's CW macros; sends nothing."),
     ("set_cw_peer_info",               RunsAtShack, "The shack's CW macro fields."),
+    ("set_cw_rst_sent",                RunsAtShack, "The shack's CW macro fields."),
     ("set_cw_speed_match",             RunsAtShack, "The shack's CW speed match switch; keys nothing."),
     ("set_cw_wpm",                     RunsAtShack, "The shack's CW speed."),
     ("set_data_folder",                RefusedHere, "Moves the shack's data folder at its next launch."),

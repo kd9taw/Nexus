@@ -72,7 +72,14 @@ vi.mock('../toast', () => {
     }),
   }
 })
-vi.mock('./LogEntry', () => ({ LogEntry: () => <div data-testid="log-stub" /> }))
+// The stub keeps the props it was last rendered with, so a test can speak as the log strip.
+const logStrip = vi.hoisted(() => ({ props: {} as { onMacroFields?: (f: { rstSent: string; name: string }) => void } }))
+vi.mock('./LogEntry', () => ({
+  LogEntry: (p: typeof logStrip.props) => {
+    logStrip.props = p
+    return <div data-testid="log-stub" />
+  },
+}))
 vi.mock('./CockpitHeader', () => ({ CockpitHeader: () => <header className="cockpit-header" /> }))
 vi.mock('./Waterfall', () => ({ Waterfall: () => <div className="waterfall-wrap" /> }))
 
@@ -208,6 +215,43 @@ describe('F-keys go through the same send() a click does', () => {
     expect(rttySend).not.toHaveBeenCalled()
   })
 
+  it('keys {RST} as the log strip’s RST Sent, {HISNAME} as its name and {NAME} as yours', async () => {
+    await renderCockpit({
+      opName: 'alex',
+      macros: macrosWith({
+        rttyProfiles: [{ name: 'everyday', macros: [{ key: 'F5', label: 'Rpt', text: 'UR {RST} {RST} TNX {HISNAME} OP {NAME}' }] }],
+      }),
+    })
+    // Nothing set in the strip yet: the RTTY report, and no name leaves no gap.
+    fireEvent.click(key('F5'))
+    await waitFor(() => expect(rttySend).toHaveBeenCalledTimes(1))
+    expect(rttySend.mock.calls[0][0]).toBe(frameForAir('UR 599 599 TNX OP ALEX'))
+    act(() => logStrip.props.onMacroFields?.({ rstSent: '549', name: 'Bob' }))
+    fireEvent.click(key('F5'))
+    await waitFor(() => expect(rttySend).toHaveBeenCalledTimes(2))
+    expect(rttySend.mock.calls[1][0]).toBe(frameForAir('UR 549 549 TNX BOB OP ALEX'))
+  })
+
+  it('the built-in Exchange keys the strip’s RST Sent; a key the operator saved keeps its own 599', async () => {
+    await renderCockpit()
+    fireEvent.change(document.querySelector('.rtty-hiscall')!, { target: { value: 'K1ABC' } })
+    act(() => logStrip.props.onMacroFields?.({ rstSent: '549', name: '' }))
+    press('F3')
+    await waitFor(() => expect(rttySend).toHaveBeenLastCalledWith(frameForAir('K1ABC DE W9XYZ UR 549 549 K')))
+    cleanup()
+    rttySend.mockClear()
+    // The operator's own F3, saved with a literal report: their text, never rewritten.
+    await renderCockpit({
+      macros: macrosWith({
+        rttyProfiles: [{ name: 'everyday', macros: [{ key: 'F3', label: 'Exch', text: '{CALL} DE {MYCALL} UR 599 599 K' }] }],
+      }),
+    })
+    fireEvent.change(document.querySelector('.rtty-hiscall')!, { target: { value: 'K1ABC' } })
+    act(() => logStrip.props.onMacroFields?.({ rstSent: '549', name: '' }))
+    press('F3')
+    await waitFor(() => expect(rttySend).toHaveBeenLastCalledWith(frameForAir('K1ABC DE W9XYZ UR 599 599 K')))
+  })
+
   it('refuses {EXCH} with nothing to fill it — a toast, and nothing on the air', async () => {
     await renderCockpit({ macros: macrosWith({ activeRttyProfile: 'contest' }) })
     fireEvent.change(document.querySelector('.rtty-hiscall')!, { target: { value: 'K1ABC' } })
@@ -333,8 +377,8 @@ describe('the macro editor', () => {
     await renderCockpit()
     fireEvent.click(key('F5'))
     const save = screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement
-    fireEvent.change(field(/^message$/i), { target: { value: 'TNX {NAME}' } })
-    expect(screen.getByRole('alert').textContent).toContain('{NAME}')
+    fireEvent.change(field(/^message$/i), { target: { value: 'TNX {QTH}' } })
+    expect(screen.getByRole('alert').textContent).toContain('{QTH}')
     expect(save.disabled).toBe(true)
     // POSITIVE CONTROL: a known token saves.
     fireEvent.change(field(/^message$/i), { target: { value: 'TNX {CALL}' } })
@@ -396,7 +440,7 @@ describe('right-click, Ctrl+Shift+F-key and Send once', () => {
     expect(fireEvent.contextMenu(key('F3')), 'the browser’s menu opened over a transmit key').toBe(false)
     expect(editor()?.getAttribute('aria-label')).toBe('Edit F3')
     expect(document.activeElement, 'the caret is in the message').toBe(field(/^message$/i))
-    expect(field(/^message$/i).value).toBe('{CALL} DE {MYCALL} UR 599 599 K')
+    expect(field(/^message$/i).value).toBe('{CALL} DE {MYCALL} UR {RST} {RST} K')
     // …and an empty key's own editor, from the same gesture.
     fireEvent.contextMenu(key('F6'))
     expect(editor()?.getAttribute('aria-label')).toBe('Edit F6')
@@ -540,7 +584,7 @@ describe('right-click, Ctrl+Shift+F-key and Send once', () => {
   it('will not send a token it cannot fill — the button is off while one is flagged', async () => {
     await renderCockpit()
     fireEvent.contextMenu(key('F1'))
-    fireEvent.change(field(/^message$/i), { target: { value: 'CQ {NAME}' } })
+    fireEvent.change(field(/^message$/i), { target: { value: 'CQ {QTH}' } })
     expect(sendOnce().disabled).toBe(true)
     fireEvent.click(sendOnce())
     await act(async () => {})

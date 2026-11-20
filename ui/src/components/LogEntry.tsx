@@ -370,6 +370,12 @@ interface Props {
    * the moment this strip goes, since a strip that is not on screen has no call in it.
    */
   onEntryCall?: (call: string) => void
+  /**
+   * What a transmit macro's `{RST}` and `{HISNAME}` read from this strip: the report this contact
+   * will log as SENT (the contest strip's, in a contest) and the Name box as it stands. Called on
+   * mount and on every change, so the report keyed is the report logged.
+   */
+  onMacroFields?: (fields: { rstSent: string; name: string }) => void
   /** Called when the entry is cleared for the next contact: after one is logged, or by ✕. */
   onReset?: () => void
   /**
@@ -551,6 +557,7 @@ export function LogEntry({
   startedAt,
   onCallChange,
   onEntryCall,
+  onMacroFields,
   onReset,
   logRequest,
   onLogRequest,
@@ -1792,6 +1799,13 @@ export function LogEntry({
     return () => clearTimeout(id)
   }, [logCall])
   useEffect(() => () => onEntryCallRef.current?.(''), [])
+  // What a macro's {RST} and {HISNAME} key (`onMacroFields`): the report this contact logs as sent.
+  const macroRstSent = fdActive ? sentRstValue : rstSentShown.trim()
+  const onMacroFieldsRef = useRef(onMacroFields)
+  onMacroFieldsRef.current = onMacroFields
+  useEffect(() => {
+    onMacroFieldsRef.current?.({ rstSent: macroRstSent, name: logName.trim() })
+  }, [macroRstSent, logName])
 
   // `mode` is this cockpit's LOG mode; the scope flag mirrors the engine's worked-band sets
   // so the Dupe badge and the B4 chips can never disagree about what a dupe is. Until the

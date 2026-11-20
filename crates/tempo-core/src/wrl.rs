@@ -159,6 +159,9 @@ pub fn classify_response(status: u16, body: &str) -> UploadOutcome {
         })
         .unwrap_or_default();
     match code.as_str() {
+        // 409: the QSO is already in the operator's WRL log and nothing was created — the
+        // spec's own words are "treat it as already logged". Never re-sent.
+        "DUPLICATE_CONTACT" => UploadOutcome::Duplicate,
         // Credential problems: fix the key, then re-send.
         "MISSING_CREDENTIALS"
         | "INVALID_KEY"
@@ -361,5 +364,17 @@ mod tests {
             classify_response(502, "<html>bad gateway</html>"),
             UploadOutcome::Pending
         );
+    }
+
+    /// The spec's own 409 example (v1.1.0, `POST /v1/contacts`): the QSO is already in the
+    /// operator's WRL log and nothing was created — "treat it as already logged". It was
+    /// Pending, so the contact read "WRL ✗ busy" and was re-sent forever. A 409 CONFLICT (a
+    /// locked logbook) is still a bounce.
+    #[test]
+    fn a_contact_wrl_already_has_is_a_duplicate_not_pending() {
+        let body = r#"{"data": null, "meta": null, "error": {"code": "DUPLICATE_CONTACT", "message": "This QSO is already in the operator's log.", "existingContactId": "3f2b8c1e-5d4a-4f6b-9a7c-2e1d0b9a8c7f", "hint": "A contact with the same call, station callsign, band and mode within 15 minutes is already stored, so nothing was created. Treat it as already logged; to change it, PATCH /v1/contacts/3f2b8c1e-5d4a-4f6b-9a7c-2e1d0b9a8c7f."}}"#;
+        assert_eq!(classify_response(409, body), UploadOutcome::Duplicate);
+        let locked = r#"{"data":null,"meta":null,"error":{"code":"CONFLICT","message":"x"}}"#;
+        assert_eq!(classify_response(409, locked), UploadOutcome::Rejected);
     }
 }

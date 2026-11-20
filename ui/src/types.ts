@@ -5716,6 +5716,9 @@ export interface Settings {
   /** APRS in this radio's DATA-FM mode instead of plain FM (#393). Per radio, off by default;
    * obeyed only on a radio that has one (`APRS_DATA_FM_MODELS`). */
   aprsDataFm: boolean
+  /** Log Station power instead of the radio's measured power: an amplifier Nexus can't read is
+   * inline (#534). Per radio, off by default; logging only. */
+  logStationPowerWithAmp: boolean
   /** Phone's PTT feeds THIS computer's microphone to the radio (its transmit audio route), instead
    * of keying the radio's own microphone. Per radio (flat mirror of the active radio), off by
    * default; Phone only. */
@@ -6368,6 +6371,9 @@ export interface Settings {
   soundDecodeTick?: boolean
   /** A short rising chirp when the CW turn cue says it is your turn. Off by default. */
   soundCwTurn?: boolean
+  /** A short falling two-tone when the log prompt comes up, or Auto-log writes a contact with no
+   *  prompt to show it (`useLogPromptSound`). Off by default. */
+  soundLogPrompt?: boolean
   // --- Auto-CQ caller selection (W1.4) ---
   /** When several stations answer your CQ, which to work first:
    *  'first' (stock), 'strongest', 'farthest', or 'cq_first'. */
@@ -6665,6 +6671,9 @@ export interface RadioProfile {
   /** APRS in this radio's DATA-FM mode instead of plain FM (#393). Per radio, off by default;
    * obeyed only on a radio that has one (`APRS_DATA_FM_MODELS`). */
   aprsDataFm: boolean
+  /** Log Station power instead of the radio's measured power: an amplifier Nexus can't read is
+   * inline (#534). Per radio, off by default; logging only. */
+  logStationPowerWithAmp: boolean
   /** Phone's PTT feeds this computer's microphone to this radio. Off by default. */
   pcMic: boolean
   pcMicDevice: string
@@ -6828,6 +6837,10 @@ export interface AppSnapshot {
   /** Bumped every time a QSO is logged, by any path (backend auto-log included).
    * App fires the "clear DX call after logging" wipe on change. */
   loggedTick?: number
+  /** Bumped when Auto-log writes a completed contact with no confirm popup to show it; a contact
+   *  the operator logs, or one held for the popup, leaves it alone. The log prompt's sound plays
+   *  on change (`useLogPromptSound`). */
+  autoLoggedTick?: number
   /** Bumped on every band change, by any route (a move within one band never bumps it). The
    * cockpits clear their call boxes on change: the FT8/FT4 DX call and grid, the JS8 To box,
    * the JTTY Call box and the log strip's un-logged call. */
