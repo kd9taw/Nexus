@@ -6,7 +6,7 @@
 // and the way it slides in follow the corner's side. Placement is COMPUTED from the real sheets'
 // cascade (cssCascade.testkit) on the rendered column, never matched by regex.
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
-import { render, cleanup, act, waitFor } from '@testing-library/react'
+import { render, cleanup, act, waitFor, fireEvent } from '@testing-library/react'
 import { Toasts } from './Toasts'
 import { dismissToast, pushToast, subscribeToasts, type Toast } from '../toast'
 import { popupCornerOf, setPopupCorner, type PopupCorner } from '../features/popupCorner'
@@ -265,6 +265,231 @@ describe('the column takes its measured room, clear of the TX surfaces (#445)', 
       hidden.remove()
     } finally {
       spy.mockRestore()
+      Object.defineProperty(window, 'innerWidth', { value: was[0], configurable: true })
+      Object.defineProperty(window, 'innerHeight', { value: was[1], configurable: true })
+    }
+  })
+
+  // WHAT THE OPERATOR IS USING comes second only to the transmit surfaces (features/toastRoom.ts `toastPlace`). A toast's
+  // buttons covered an item of the open ⊞ Panels menu (CW at 1366×768, 150 % and 175 %), and Tab left focus behind a
+  // toast on a folded dock's macro key (PSK, CW and JTTY at 175 %), all measured in the shell probe (check 13).
+  describe('keeps off what the operator is using, and steps aside where it cannot', () => {
+    let rects: Map<string, Box>
+    let spies: { mockRestore(): void }[]
+    const was = [window.innerWidth, window.innerHeight] as const
+    beforeEach(() => {
+      rects = new Map<string, Box>([
+        ['cockpit-txdock-keep', { left: 300, top: 520, right: 900, bottom: 600 }],
+        ['ui-toast-viewport', { left: 544, top: 380, right: 884, bottom: 488 }],
+      ])
+      spies = [
+        vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+          const k = [...rects.keys()].find((c) => this.classList.contains(c))
+          const r = k ? rects.get(k)! : { left: 0, top: 0, right: 0, bottom: 0 }
+          return { ...r, x: r.left, y: r.top, width: r.right - r.left, height: r.bottom - r.top, toJSON: () => r } as DOMRect
+        }),
+        // One toast's content: 108 px.
+        vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+          return this.classList.contains('ui-toast-viewport') ? 108 : 0
+        }),
+      ]
+      Object.defineProperty(window, 'innerWidth', { value: 900, configurable: true })
+      Object.defineProperty(window, 'innerHeight', { value: 600, configurable: true })
+    })
+    afterEach(() => {
+      for (const s of spies) s.mockRestore()
+      Object.defineProperty(window, 'innerWidth', { value: was[0], configurable: true })
+      Object.defineProperty(window, 'innerHeight', { value: was[1], configurable: true })
+    })
+    const folded = () => {
+      const keep = document.createElement('div')
+      keep.className = 'cockpit-txdock-keep'
+      keep.dataset.fold = 'on'
+      return keep
+    }
+
+    it('an open menu over the whole stretch: the column keeps its room clear of the keep row and steps aside', async () => {
+      const { viewport } = mount('bottom-right')
+      const app = viewport.closest('.app')!
+      const keep = folded()
+      const menu = document.createElement('div')
+      menu.className = 'panels-menu-pop'
+      rects.set('panels-menu-pop', { left: 400, top: 10, right: 890, bottom: 510 })
+      act(() => {
+        app.append(keep, menu)
+      })
+      await waitFor(() => expect(viewport.hasAttribute('data-step-aside'), 'the column stands over the open menu').toBe(true))
+      // Still clear of the keep row: the transmit rule is never traded away.
+      expect(viewport.style.getPropertyValue('--toast-inset')).toBe(`${600 - (520 - 16)}px`)
+      // Hidden while it steps aside, by the real sheet.
+      expect(css(viewport, 'visibility')).toBe('hidden')
+      act(() => {
+        menu.remove()
+      })
+      await waitFor(() => expect(viewport.hasAttribute('data-step-aside'), 'the column never came back').toBe(false))
+      keep.remove()
+    })
+
+    it('a menu that leaves room: the column stands clear of it, drawn', async () => {
+      const { viewport } = mount('bottom-right')
+      const app = viewport.closest('.app')!
+      const keep = folded()
+      const menu = document.createElement('div')
+      menu.className = 'panels-menu-pop'
+      rects.set('panels-menu-pop', { left: 400, top: 10, right: 890, bottom: 300 })
+      act(() => {
+        app.append(keep, menu)
+      })
+      await waitFor(() => expect(viewport.style.getPropertyValue('--toast-max-h')).toBe(`${520 - 16 - (300 + 16)}px`))
+      expect(viewport.hasAttribute('data-step-aside')).toBe(false)
+      menu.remove()
+      keep.remove()
+    })
+
+    it('JTTY\'s refusal, parked above the keep row\'s own box, is kept clear like the row', async () => {
+      const { viewport } = mount('bottom-right')
+      const app = viewport.closest('.app')!
+      const keep = folded()
+      const reason = document.createElement('div')
+      reason.setAttribute('role', 'status')
+      reason.className = 'jtty-dock-reason'
+      keep.appendChild(reason)
+      rects.set('jtty-dock-reason', { left: 420, top: 470, right: 890, bottom: 520 })
+      act(() => {
+        app.append(keep)
+      })
+      await waitFor(() => expect(viewport.style.getPropertyValue('--toast-inset'), 'the column stands over the refusal').toBe(`${600 - (470 - 16)}px`))
+      keep.remove()
+    })
+
+    it('the focused control: Tab onto a macro key under the column moves the column off it', async () => {
+      const { viewport } = mount('bottom-right')
+      const app = viewport.closest('.app')!
+      const keep = folded()
+      const key = document.createElement('button')
+      key.className = 'cw-macro'
+      rects.set('cw-macro', { left: 700, top: 440, right: 820, bottom: 480 })
+      act(() => {
+        app.append(keep, key)
+      })
+      await waitFor(() => expect(viewport.style.getPropertyValue('--toast-inset')).toBe(`${600 - (520 - 16)}px`))
+      act(() => {
+        fireEvent.keyDown(document.body, { key: 'Tab' })
+        key.focus()
+      })
+      // Above the key now: the stretch between the window's top edge and the key.
+      await waitFor(() => expect(viewport.style.getPropertyValue('--toast-inset'), 'the column stands over the focused key').toBe(`${600 - (440 - 16)}px`))
+      act(() => {
+        key.blur()
+      })
+      await waitFor(() => expect(viewport.style.getPropertyValue('--toast-inset'), 'the column did not come back down').toBe(`${600 - (520 - 16)}px`))
+      key.remove()
+      keep.remove()
+    })
+
+    // A mouse click focuses the button it clicks. On a small window the column stands at the top, over the mode bar, and
+    // stepping aside for a clicked mode button hid a notice until it expired (CW at 1366×768, 175 %, measured in the shell
+    // probe, check 15). Only keyboard focus counts.
+    it('a control focused by a mouse click is not kept off: the column stays where it stood', async () => {
+      const { viewport } = mount('bottom-right')
+      const app = viewport.closest('.app')!
+      const keep = folded()
+      const key = document.createElement('button')
+      key.className = 'cw-macro'
+      rects.set('cw-macro', { left: 700, top: 440, right: 820, bottom: 480 })
+      act(() => {
+        app.append(keep, key)
+      })
+      await waitFor(() => expect(viewport.style.getPropertyValue('--toast-inset')).toBe(`${600 - (520 - 16)}px`))
+      await act(async () => {
+        fireEvent.mouseDown(key)
+        key.focus()
+        fireEvent.mouseUp(key)
+        fireEvent.click(key)
+        // The focus is measured on the next frame.
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+      })
+      expect(document.activeElement).toBe(key)
+      expect(viewport.style.getPropertyValue('--toast-inset'), 'the column moved off a mouse-clicked key').toBe(`${600 - (520 - 16)}px`)
+      expect(viewport.hasAttribute('data-step-aside')).toBe(false)
+      key.remove()
+      keep.remove()
+    })
+
+    it('while the column steps aside no notice expires: it is shown when the menu closes, with the time it had left', async () => {
+      const { viewport } = mount('bottom-right')
+      const app = viewport.closest('.app')!
+      const keep = folded()
+      const menu = document.createElement('div')
+      menu.className = 'panels-menu-pop'
+      rects.set('panels-menu-pop', { left: 400, top: 10, right: 890, bottom: 510 })
+      act(() => {
+        app.append(keep, menu)
+      })
+      await waitFor(() => expect(viewport.hasAttribute('data-step-aside')).toBe(true))
+      let id = 0
+      act(() => {
+        id = pushToast('TX was turned back on', 'info', 200)
+      })
+      const up = () => toasts.some((t) => t.id === id)
+      await new Promise((r) => setTimeout(r, 500))
+      expect(up(), 'the notice expired while out of sight').toBe(true)
+      act(() => {
+        menu.remove()
+      })
+      await waitFor(() => expect(viewport.hasAttribute('data-step-aside')).toBe(false))
+      expect(up(), 'the notice was gone as soon as it was shown').toBe(true)
+      await waitFor(() => expect(up(), 'the notice never expired once shown').toBe(false), { timeout: 2000 })
+      keep.remove()
+    })
+  })
+
+  // The browser scrolls first and tells the page after: a column placed against where Stop TX stands stood over it for a
+  // frame while the shell scrolled (CW, Phone and JS8 at 700×800, 175 %, shell probe check 14). A stop in a scrolling shell
+  // is kept clear of everywhere the shell can bring it.
+  it('a stop in a scrolling shell is kept clear of every position the shell can scroll it to', () => {
+    const rects = new Map<string, Box>([
+      ['cockpit-shell', { left: 0, top: 100, right: 900, bottom: 600 }],
+      // Stop TX now at 300–340, the shell scrolled 50 of 250: it can come down to 350–390 and go up to 100.
+      ['op-btn', { left: 600, top: 300, right: 760, bottom: 340 }],
+      ['ui-toast-viewport', { left: 544, top: 430, right: 884, bottom: 584 }],
+    ])
+    const spies = [
+      vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+        const k = [...rects.keys()].find((c) => this.classList.contains(c))
+        const r = k ? rects.get(k)! : { left: 0, top: 0, right: 0, bottom: 0 }
+        return { ...r, x: r.left, y: r.top, width: r.right - r.left, height: r.bottom - r.top, toJSON: () => r } as DOMRect
+      }),
+      vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+        return this.classList.contains('cockpit-shell') ? 750 : 0
+      }),
+      vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) {
+        return this.classList.contains('cockpit-shell') ? 500 : 0
+      }),
+      // jsdom does not lay out, so it keeps no scroll position: the shell is read as scrolled 50.
+      vi.spyOn(Element.prototype, 'scrollTop', 'get').mockImplementation(function (this: Element) {
+        return this.classList.contains('cockpit-shell') ? 50 : 0
+      }),
+    ]
+    const was = [window.innerWidth, window.innerHeight]
+    Object.defineProperty(window, 'innerWidth', { value: 900, configurable: true })
+    Object.defineProperty(window, 'innerHeight', { value: 600, configurable: true })
+    try {
+      const shell = document.createElement('main')
+      shell.className = 'cockpit-shell'
+      shell.style.overflowY = 'auto'
+      const stop = document.createElement('button')
+      stop.className = 'op-btn stop'
+      stop.setAttribute('data-stop-control', 'stop-tx')
+      shell.appendChild(stop)
+      document.body.appendChild(shell)
+      const { viewport } = mount('bottom-right')
+      // Below everywhere Stop TX can be: 340 + 50 = 390, plus the gap. Placed against where it stands (340), the column
+      // started at 356, under a Stop TX the next frame of a scroll back up brings down to 390.
+      expect(viewport.style.getPropertyValue('--toast-max-h'), 'the column stands where a scroll brings Stop TX').toBe(`${600 - 16 - (390 + 16)}px`)
+      shell.remove()
+    } finally {
+      for (const sp of spies) sp.mockRestore()
       Object.defineProperty(window, 'innerWidth', { value: was[0], configurable: true })
       Object.defineProperty(window, 'innerHeight', { value: was[1], configurable: true })
     }

@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   pushToast,
   dismissToast,
+  holdToastExpiry,
   subscribeToasts,
   subscribePopups,
   setPopupNotifications,
@@ -176,6 +177,46 @@ describe('pop-up dwell (#321)', () => {
     setPopupMinSeconds(Number.NaN)
     const id = pushToast('Logged W9XYZ', 'success', 4000)
     vi.advanceTimersByTime(4001)
+    expect(visible(id)).toBe(false)
+  })
+})
+
+// While the pop-up column steps out of sight (Toasts.tsx), no notice may expire unseen: a notice raised after a mouse click
+// on a mode button was hidden its whole life and never seen (CW at 1366×768, 175 %, measured).
+describe('holdToastExpiry — no notice expires while out of sight', () => {
+  afterEach(() => holdToastExpiry(false))
+
+  it('a timed toast\'s clock stops while held and runs on with the time it had left', () => {
+    const id = pushToast('TX was turned back on', 'info', 4000)
+    vi.advanceTimersByTime(1000)
+    holdToastExpiry(true)
+    vi.advanceTimersByTime(60_000)
+    expect(visible(id), 'it expired while held').toBe(true)
+    holdToastExpiry(false)
+    vi.advanceTimersByTime(2900)
+    expect(visible(id), 'it lost more than the time it had left').toBe(true)
+    vi.advanceTimersByTime(200)
+    expect(visible(id), 'it never expired once released').toBe(false)
+  })
+
+  it('a toast raised while held starts held, with its whole time', () => {
+    holdToastExpiry(true)
+    const id = pushToast('TX was turned back on', 'info', 4000)
+    vi.advanceTimersByTime(60_000)
+    expect(visible(id)).toBe(true)
+    holdToastExpiry(false)
+    vi.advanceTimersByTime(3900)
+    expect(visible(id)).toBe(true)
+    vi.advanceTimersByTime(200)
+    expect(visible(id)).toBe(false)
+  })
+
+  it('a dismissed toast leaves nothing behind to run later', () => {
+    const id = pushToast('Logged W1AW', 'success', 4000)
+    dismissToast(id)
+    holdToastExpiry(true)
+    holdToastExpiry(false)
+    vi.advanceTimersByTime(10_000)
     expect(visible(id)).toBe(false)
   })
 })

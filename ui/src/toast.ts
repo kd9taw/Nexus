@@ -62,6 +62,33 @@ let toasts: Toast[] = []
 const listeners = new Set<Listener>()
 /** The toasts whose expiry is called off (`keepToast`): they leave only when dismissed. */
 const kept = new Set<number>()
+/** Each timed toast's clock: running (its timer and when it is due), or held (the time it has left). */
+const clocks = new Map<number, { timer: number; due: number } | { left: number }>()
+/** Whether the clocks are held (`holdToastExpiry`). */
+let expiryHeld = false
+
+function startClock(id: number, ms: number): void {
+  const timer = window.setTimeout(() => {
+    clocks.delete(id)
+    if (!kept.has(id)) dismissToast(id)
+  }, ms)
+  clocks.set(id, { timer, due: Date.now() + ms })
+}
+
+/** NO NOTICE EXPIRES UNSEEN. While the pop-up column steps out of sight (Toasts.tsx: it would stand over an open menu,
+ *  or a control in keyboard use, and there is no room clear of both), every timed toast's clock stops, and it runs on
+ *  with the time it had left once the column is drawn again. A toast raised while they are held starts held. Sticky
+ *  toasts have no clock and are unaffected. */
+export function holdToastExpiry(hold: boolean): void {
+  if (hold === expiryHeld) return
+  expiryHeld = hold
+  for (const [id, c] of clocks) {
+    if (hold && 'timer' in c) {
+      window.clearTimeout(c.timer)
+      clocks.set(id, { left: Math.max(0, c.due - Date.now()) })
+    } else if (!hold && 'left' in c) startClock(id, c.left)
+  }
+}
 
 /**
  * #391: WHAT STILL POPS UP WITH POP-UPS OFF. InsaneSplash, 2026-09-29: "how do I turn off the popup
@@ -152,15 +179,17 @@ export function pushToast(
   emit()
   if (ttlMs > 0) {
     const ttl = Math.max(kind === 'error' ? Math.max(ttlMs, ERROR_MIN_TTL_MS) : ttlMs, popupMinMs)
-    window.setTimeout(() => {
-      if (!kept.has(id)) dismissToast(id)
-    }, ttl)
+    if (expiryHeld) clocks.set(id, { left: ttl })
+    else startClock(id, ttl)
   }
   return id
 }
 
 export function dismissToast(id: number): void {
   kept.delete(id)
+  const c = clocks.get(id)
+  if (c && 'timer' in c) window.clearTimeout(c.timer)
+  clocks.delete(id)
   const next = toasts.filter((t) => t.id !== id)
   if (next.length !== toasts.length) {
     toasts = next

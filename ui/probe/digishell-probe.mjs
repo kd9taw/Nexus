@@ -56,6 +56,23 @@
 //      re-centred the field put the second click of a double click on F1: a send call on JTTY and PSK, measured).
 //   12. A WINDOW REGAIN MOVES NOTHING: focusin fires again on the window's way back, with a Tab-focused key since scrolled
 //      behind the keep row (a click just after it sent a different key, measured).
+//   13. A POP-UP UP CHANGES NONE OF IT: the pages where one did (below, TOASTED) run checks 4, 8, 9 and 10 again with a large
+//      sticky notice up in the pop-up column's own corner, and its body counts as a cover (it lets clicks through, but it
+//      hides what is under it from the eye). A toast's buttons covered an item of an open ⊞ Panels menu (CW at 1366×768,
+//      150 % and 175 %; PSK's and JTTY's Reset layout at 900×600), Tab left focus behind it on a macro key (PSK, CW and
+//      JTTY on a folded dock), and it stood over JTTY's refusal (700×800), all measured. With nothing open and nothing
+//      focused the notice must be on screen: a column that hid itself for good would pass the rest.
+//   14. NO SCROLL, IN THE FRAME IT LANDS, PUTS A STOP CONTROL UNDER THE NOTICE: on the same pages (and Phone's and JS8's at 700×800,
+//      175 %), with the column settled at each of seven scroll positions, the shell is jumped to each of the others and the
+//      notice's boxes and every stop control's visible box are read AT ONCE, before any scroll event or frame. The browser
+//      scrolls first and tells the page after, so a column placed after the fact stood over Stop TX for a frame (CW, Phone and
+//      JS8 at 700×800, 175 %, measured); a wheel or a dragged scrollbar can jump that far in one frame.
+//   15. A NOTICE RAISED AFTER A MOUSE CLICK IS SEEN BEFORE IT EXPIRES: on the same pages (and CW's at 1366×768, 175 %), the
+//      sticky notice gone, a REAL mouse click on the screen's own mode button (it keeps the focus a click gives, which is not
+//      keyboard focus), then a timed notice ("TX was turned back on", info, its own expiry): read every 100 ms until it is
+//      gone, it must be drawn at least once, by the column's and its own computed visibility, its opacity and a hit test on
+//      it. The column once stepped aside for ANY focused control under it, a clicked mode button among them, and the notice
+//      expired unseen (CW at 1366×768, 175 %, bottom right, measured).
 //   And JTTY's longest real refusal, on check 9 and in check 10: a real click on the words stays on the words (they once
 //   passed it to the hidden key behind them), the whole text is in its tooltip, and Tab stops behind it nowhere.
 // THE CONTROLS, run every time: the header forced to stick on top (z 9) at 900×600 / 175 % must make check 1 fail;
@@ -65,7 +82,8 @@
 // downward) at 1366×768 / 150 % on CW must make check 4b fail; a menu planted over the stop button at the floor (1366×768
 // at 175 %) on Phone, and a menu held to 20 px at 1280×720 / 175 % on CW, must make check 8 fail; and a keep row planted over the
 // whole shell at 900×600 / 175 % on RTTY must make check 9 fail; and a press and a regain planted to scroll the shell
-// at 900×600 / 175 % on JTTY must make checks 11 and 12 fail.
+// at 900×600 / 175 % on JTTY must make checks 11 and 12 fail; and a notice column stretched over the window's whole right
+// side with its menu open at the floor on CW must make check 13 fail.
 //
 // exit: 0 every check held · 1 a red, or a control that could not fail · 2 the page never drew a screen
 import { createServer } from 'vite'
@@ -107,6 +125,94 @@ const OVER_STOP = '.panels-menu-pop { position: fixed !important; top: 5% !impor
 const TINY_MENU = '.panels-menu-pop { max-height: 20px !important }'
 const KEEP_OVER_ALL = ".cockpit-txdock-keep[data-fold='on']::before { content: ''; position: absolute; left: 0; right: 0; top: -900px; bottom: 0 }"
 const NO_FIT = ".panels-menu-pop { max-height: calc(0.7 * var(--vh-eff, 100vh)) !important; top: 100% !important; bottom: auto !important }"
+/** Check 13: a large notice (toastcorner-probe's sentence, with a short action), raised sticky through the real toast bus.
+ *  Its body is click-through in the app; here it is made to answer hit tests, so whatever it hides from the eye reads as
+ *  covered. */
+const TOAST_MESSAGE =
+  'The radio stopped answering CAT on COM7 at 9600 baud. Nexus tried the other speeds and the second port and got no reply, so the dial and the band shown here may be stale until it answers again.'
+const TOAST_LABEL = 'Test CAT'
+const TOAST_SEEN = '.ui-toast { pointer-events: auto !important }'
+/** Check 13's pages: where a pop-up up broke check 4, 9 or 10 (measured); the last, CW at 1366×768, 175 %, is where a notice
+ *  raised after a mouse click expired unseen (check 15). */
+const TOASTED = [['CW', 'cw', 'main.cw-cockpit', [FLOOR, '100']], ['CW', 'cw', 'main.cw-cockpit', [LAPTOP, '150']],
+  ['Phone', 'phone', 'main.phone-cockpit', [offMatrix(700, 800), '175']], ['JS8', 'js8', 'main.js8-cockpit', [offMatrix(700, 800), '175']],
+  ['CW', 'cw', 'main.cw-cockpit', [offMatrix(700, 800), '175']], ['PSK', 'psk', 'main.psk-cockpit', [offMatrix(900, 600), '175']],
+  ['PSK', 'psk', 'main.psk-cockpit', [offMatrix(1280, 720), '175']], ['JTTY', 'jtty', 'main.jtty-cockpit', [offMatrix(900, 600), '175']],
+  ['JTTY', 'jtty', 'main.jtty-cockpit', [offMatrix(700, 800), '175']], ['JTTY', 'jtty', 'main.jtty-cockpit', [offMatrix(1280, 720), '175']],
+  ['CW', 'cw', 'main.cw-cockpit', [LAPTOP, '175']]]
+/** Check 15: the clicked mode button's centre, the shell at the top and every notice gone (null where none can be clicked). */
+const clickTarget = (sel) => `(async () => {
+  const T = await import('/src/toast.ts')
+  let up = []
+  T.subscribeToasts((l) => { up = l })()
+  for (const t of up) T.dismissToast(t.id)
+  const s = document.querySelector(${JSON.stringify(sel)})
+  s.scrollTop = 0
+  document.activeElement?.blur?.()
+  await new Promise((r) => setTimeout(r, 300))
+  const hit = (b) => { const q = b.getBoundingClientRect(); if (q.width < 1 || q.height < 1) return null; const x = q.left + q.width / 2, y = q.top + q.height / 2
+    const h = document.elementFromPoint(x, y); return h != null && b.contains(h) ? { x, y } : null }
+  const own = [...document.querySelectorAll('button.mode-btn.active')].map(hit).find(Boolean)
+  return own ?? [...document.querySelectorAll('button.mode-btn')].map(hit).find(Boolean) ?? null
+})()`
+/** Check 15, after the click: the focus it left, then a timed notice read every 100 ms until it expires. */
+const NOTICE = 'TX was turned back on'
+const noticeSeen = `(async () => {
+  const a = document.activeElement
+  const focused = a && a.matches('button.mode-btn') ? (a.matches(':focus-visible') ? 'keyboard' : 'mouse') : 'none'
+  const T = await import('/src/toast.ts')
+  T.pushToast(${JSON.stringify(NOTICE)}, 'info')
+  const cut = (a, b) => { const q = { left: Math.max(a.left, b.left), top: Math.max(a.top, b.top), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) }; return q.right > q.left && q.bottom > q.top ? q : null }
+  const read = () => {
+    const vp = document.querySelector('.ui-toast-viewport')
+    const t = vp && [...vp.querySelectorAll('.ui-toast')].find((e) => e.textContent.includes(${JSON.stringify(NOTICE)}))
+    if (!t) return 'gone'
+    if (getComputedStyle(vp).visibility !== 'visible' || getComputedStyle(t).visibility !== 'visible') return 'hidden'
+    if (Number(getComputedStyle(t).opacity) < 0.5) return 'faint'
+    const q = cut(cut(t.getBoundingClientRect(), vp.getBoundingClientRect()) ?? { left: 0, top: 0, right: 0, bottom: 0 }, { left: 0, top: 0, right: innerWidth, bottom: innerHeight })
+    if (!q) return 'off'
+    const h = document.elementFromPoint((q.left + q.right) / 2, (q.top + q.bottom) / 2)
+    return h != null && t.contains(h) ? 'shown' : 'under'
+  }
+  const out = []
+  for (let i = 0; i < 300; i++) { await new Promise((r) => setTimeout(r, 100)); const v = read(); out.push(v); if (v === 'gone') break }
+  const n = {}
+  for (const v of out) n[v] = (n[v] ?? 0) + 1
+  return { focused, n, seen: out.includes('shown') }
+})()`
+/** Check 14: from each of seven settled scroll positions, a jump to each other one, read in the frame it lands. */
+const jumpCheck = (sel) => `(async () => {
+  const s = document.querySelector(${JSON.stringify(sel)})
+  const max = Math.max(0, s.scrollHeight - s.clientHeight)
+  const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 0))))
+  const cut = (a, b) => { const q = { left: Math.max(a.left, b.left), top: Math.max(a.top, b.top), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) }; return q.right > q.left && q.bottom > q.top ? q : null }
+  const win = { left: 0, top: 0, right: innerWidth, bottom: innerHeight }
+  // What the operator can see of each stop control: inside the window, and inside the shell if it scrolls with it.
+  const stops = () => [...document.querySelectorAll('[data-stop-control], .op-btn.stop')].filter((b) => b.closest('[hidden]') == null)
+    .map((b) => [b, cut(b.getBoundingClientRect(), s.contains(b) ? cut(win, s.getBoundingClientRect()) ?? win : win)]).filter(([, q]) => q)
+  // Each drawn toast, cut to the column (which scrolls inside); nothing while the column is not drawn.
+  const toasts = () => { const vp = document.querySelector('.ui-toast-viewport'); if (!vp || getComputedStyle(vp).visibility !== 'visible') return []
+    const c = vp.getBoundingClientRect(); return [...vp.querySelectorAll('.ui-toast')].map((t) => cut(t.getBoundingClientRect(), c)).filter(Boolean) }
+  const steps = [...new Set([0, 1, 2, 3, 4, 5, 6].map((k) => Math.round((max * k) / 6)))]
+  const hits = []
+  let n = 0
+  for (const a of steps) {
+    s.scrollTop = a
+    await frame()
+    for (const b of steps) {
+      if (b === a) continue
+      s.scrollTop = b
+      n++
+      for (const t of toasts()) for (const [st, q] of stops()) if (cut(t, q)) hits.push(a + '→' + b + ' ' + ((st.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 12)))
+      s.scrollTop = a
+    }
+  }
+  s.scrollTop = 0
+  await frame()
+  return { n, hits }
+})()`
+/** Check 13's control: the column stretched over the whole right side of the window, whatever it keeps off. */
+const TOAST_EVERYWHERE = ".ui-toast-viewport { top: 0 !important; bottom: 0 !important; max-height: none !important; visibility: visible !important } .ui-toast { flex: 1 1 auto !important }"
 /** The dock's send control: Send on the keyboard docks, PTT on Phone's. */
 const SEND = '.cw-send-btn, .ph-ptt'
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -602,7 +708,7 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-async function measureAt(route, sel, [size, scale], css = null, menus = true, cover = false, coverOnly = false, plant = null) {
+async function measureAt(route, sel, [size, scale], css = null, menus = true, cover = false, coverOnly = false, plant = null, toast = false) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -625,6 +731,11 @@ async function measureAt(route, sel, [size, scale], css = null, menus = true, co
     }
     if (!m) return null
     if (css) await evaluate(`(() => { const s = document.createElement('style'); s.textContent = ${JSON.stringify(css)}; document.head.appendChild(s); return 1 })()`)
+    if (toast) {
+      await evaluate(`(async () => { const T = await import('/src/toast.ts'); T.pushToast(${JSON.stringify(TOAST_MESSAGE)}, 'error', 0, { action: () => {}, actionLabel: ${JSON.stringify(TOAST_LABEL)} })
+        const s = document.createElement('style'); s.textContent = ${JSON.stringify(TOAST_SEEN)}; document.head.appendChild(s); return 1 })()`)
+      await sleep(600)
+    }
     if (coverOnly) {
       await sleep(800)
       return { cover: await coverRun(evaluate, call, sel) }
@@ -636,6 +747,11 @@ async function measureAt(route, sel, [size, scale], css = null, menus = true, co
       if (last && JSON.stringify(m) === JSON.stringify(last)) break
       last = m
     }
+    // Check 13: with nothing open and nothing focused, the notice is on screen (some of it the topmost thing there).
+    if (toast) m.toastShown = await evaluate(`(() => { document.activeElement?.blur?.(); const t = document.querySelector('.ui-toast'); if (!t) return false; const q = t.getBoundingClientRect()
+      if (q.width < 1 || q.height < 1 || getComputedStyle(t).visibility !== 'visible') return false
+      const x = Math.min(Math.max(q.left + q.width / 2, 0), innerWidth - 1), y = Math.min(Math.max(q.top + q.height / 2, 0), innerHeight - 1); const h = document.elementFromPoint(x, y); return h != null && t.contains(h) })()`)
+    if (toast) m.jump = await evaluate(jumpCheck(sel))
     if (menus) {
       m.menuTop = await evaluate(menuCheck(sel, 'top'))
       m.menuEnd = await evaluate(menuCheck(sel, 'end'))
@@ -653,6 +769,20 @@ async function measureAt(route, sel, [size, scale], css = null, menus = true, co
       m.regain = await regainRun(evaluate, call, browser, targetId, sel)
       if (route === 'js8') m.hb = await hbRun(evaluate, call, sel)
       if (route === 'jtty') m.refusal = await refusalRun(evaluate, sel, async (x, y) => { await mouse('mouseMoved', x, y); await mouse('mousePressed', x, y, 1); await mouse('mouseReleased', x, y, 1) }, () => focusRun(evaluate, call, sel))
+    }
+    // Check 15: a real mouse click on a mode button, the pointer moved off it, then a timed notice.
+    if (toast) {
+      const at = await evaluate(clickTarget(sel))
+      if (!at) m.click = { focused: 'no mode button to click', n: {}, seen: false }
+      else {
+        const mouse = (type, x, y, clickCount) => call('Input.dispatchMouseEvent', { type, x, y, ...(clickCount ? { button: 'left', clickCount } : {}) })
+        await mouse('mouseMoved', at.x, at.y)
+        await mouse('mousePressed', at.x, at.y, 1)
+        await mouse('mouseReleased', at.x, at.y, 1)
+        await mouse('mouseMoved', 2, Math.round(size.h ?? 600) - 2)
+        await sleep(1500)
+        m.click = await evaluate(noticeSeen)
+      }
     }
     return m
   } finally {
@@ -734,6 +864,23 @@ try {
       for (const r of coverReds(name, m.cover)) red(r)
     }
   }
+  // Check 13: the pages again with a pop-up up.
+  for (const [view, route, sel, size] of TOASTED) {
+    const name = `${view} at ${tagOf(size)} with a pop-up up`
+    const m = await measureAt(route, sel, size, null, true, true, false, null, true)
+    if (!m) {
+      console.error(`digishell-probe: ${name} never drew`)
+      process.exitCode = 2
+      throw new Error('no screen')
+    }
+    const menu = (mc) => (mc?.opened ? `${mc.ok}/${mc.n}${mc.covered.length ? `, ${mc.covered.length} covered` : ''}${mc.unreached?.length ? `, ${mc.unreached.length} unreached` : ''}` : 'not opened')
+    console.log(`digishell-probe: ${name} check 13: notice ${m.toastShown ? 'on screen' : 'NOT on screen'} · ⊞ Panels at top ${menu(m.menuTop)}, at end ${menu(m.menuEnd)} · check 8: ${coverLine(m.cover)}${m.focus ? ` · check 9: ${m.focus.n} focused, ${m.focus.hidden.length} hidden` : ''}${m.refusal ? ` · check 10: ${JSON.stringify(m.refusal)}` : ''} · check 14: ${m.jump.n} jumps, ${m.jump.hits.length} over a stop · check 15: ${m.click.focused} focus, ${JSON.stringify(m.click.n)}`)
+    if (!m.toastShown) red(`${name}: with nothing open and nothing focused, the notice is not on screen`)
+    if (m.click.focused !== 'mouse') red(`${name}: the mouse click did not leave mouse focus on a mode button (${m.click.focused}), so check 15 tests nothing`)
+    else if (!m.click.seen) red(`${name}: a notice raised after a mouse click on a mode button expired without ever being drawn (${JSON.stringify(m.click.n)})`)
+    if (m.jump.hits.length) red(`${name}: in the frame a scroll lands, the notice stands over a stop control on ${m.jump.hits.length} of ${m.jump.n} jumps (${m.jump.hits.slice(0, 6).join(', ')})`)
+    for (const r of [...reds(name, m), ...coverReds(name, m.cover), ...focusReds(name, m), ...pinReds(name, m)]) red(r)
+  }
   // THE CONTROL.
   const size = [offMatrix(900, 600), '175']
   const m = await measureAt('sstv', 'main.sstv-view', size, PLANT, false)
@@ -783,7 +930,12 @@ try {
     if (!c) red(`CONTROL FAILED — a planted scroll passed: "${what}" cannot fail`)
     else console.log(`digishell-probe: CONTROL — ${c.slice(0, 110)} (caught)`)
   }
-  if (code === 0) console.log('digishell-probe: PASS — no header covers a transmit control, every stop control and Send/PTT is on screen and topmost at every scroll position of every screen at every size, ⊞ Panels can be clicked, a pinned header stays on screen, every on-screen item of an open ⊞ Panels menu is reachable and inside the window, the menu never stands over the stop button whether opened by pointer or keyboard or walked with it open, a focused control on a folded dock is never hidden, the JTTY refusal stays on screen, the JS8 heartbeat menu opens in sight, no press or window regain moves the shell, no second click reaches a sender, a click on the JTTY refusal stays on it, and all ten controls were caught')
+  const size10 = [FLOOR, '100']
+  const m10 = await measureAt('cw', 'main.cw-cockpit', size10, TOAST_EVERYWHERE, true, false, false, null, true)
+  const caught10 = m10 ? reds(`CW at ${tagOf(size10)} (a notice column over the whole right side)`, m10).filter((r) => r.includes('items covered') || r.includes('not reachable by the menu')) : []
+  if (caught10.length === 0) red('CONTROL FAILED — a notice over the whole right side of the window covered no item of an open menu; check 13 cannot fail')
+  else console.log(`digishell-probe: CONTROL — ${caught10[0].slice(0, 110)} (caught)`)
+  if (code === 0) console.log('digishell-probe: PASS — no header covers a transmit control, every stop control and Send/PTT is on screen and topmost at every scroll position of every screen at every size, ⊞ Panels can be clicked, a pinned header stays on screen, every on-screen item of an open ⊞ Panels menu is reachable and inside the window, the menu never stands over the stop button whether opened by pointer or keyboard or walked with it open, a focused control on a folded dock is never hidden, the JTTY refusal stays on screen, the JS8 heartbeat menu opens in sight, no press or window regain moves the shell, no second click reaches a sender, a click on the JTTY refusal stays on it, all of it holds with a pop-up up, and all eleven controls were caught')
   process.exitCode = process.exitCode || code
 } catch (e) {
   if (!process.exitCode) {
