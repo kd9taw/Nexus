@@ -132,8 +132,12 @@ const TOAST_EVERYWHERE = ".ui-toast-viewport { top: 0 !important; bottom: 0 !imp
 const SEND = '.cw-send-btn, .ph-ptt'
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-const measure = (sel) => `(() => {
+/** `scrolled`: after each scroll it sets, the shell's scroll event is dispatched at once. The browser dispatches it before the
+ *  frame is painted, so whatever follows the scroll (the pop-up column re-measuring its room, check 13) has run by the time
+ *  the operator sees the position; read synchronously without it, the column would still stand where the last position put it. */
+const measure = (sel, scrolled = false) => `(() => {
   const shell = document.querySelector(${JSON.stringify(sel)})
+  const go = (y) => { shell.scrollTop = y${scrolled ? "; shell.dispatchEvent(new Event('scroll'))" : ''} }
   if (!shell || shell.getBoundingClientRect().height < 1 || !document.documentElement.getAttribute('data-viewport')) return null
   const head = shell.querySelector(':scope > .cockpit-header')
   const strip = shell.querySelector(':scope > .cockpit-txstrip')
@@ -167,23 +171,23 @@ const measure = (sel) => `(() => {
     }
   }
   const max = Math.max(0, shell.scrollHeight - shell.clientHeight)
-  const sweep = [1, 2, 3, 4, 5].map((k) => { shell.scrollTop = Math.round((max * k) / 6); return { at: Math.round((k * 100) / 6) + ' %', ...pos() } })
-  shell.scrollTop = 0
+  const sweep = [1, 2, 3, 4, 5].map((k) => { go(Math.round((max * k) / 6)); return { at: Math.round((k * 100) / 6) + ' %', ...pos() } })
+  go(0)
   const top = pos()
-  shell.scrollTop = shell.scrollHeight
+  go(shell.scrollHeight)
   const end = pos()
   // Check 6: the first scroll position (every 6 px) where ⊞ Panels is on screen and topmost; -1 if none.
   // Check 7, in the same pass: every control of the strip and the dock that is never on screen and topmost.
   let reach = btn && vis(btn) ? -1 : null
   const never = new Set(ctls)
   for (let s = 0; s <= max + 5; s += 6) {
-    shell.scrollTop = Math.min(s, max)
+    go(Math.min(s, max))
     if (reach === -1) { const a = at(btn); if (a.on && a.top) reach = shell.scrollTop }
     for (const b of [...never]) { const a = at(b); if (a.on && a.top) never.delete(b) }
     if (reach !== -1 && never.size === 0) break
   }
   const neverReached = [...never].map(label)
-  shell.scrollTop = 0
+  go(0)
   const se = document.scrollingElement
   return {
     vp: document.documentElement.getAttribute('data-viewport'),
@@ -642,7 +646,7 @@ async function measureAt(route, sel, [size, scale], css = null, menus = true, co
     let m = null
     for (let i = 0; i < 240 && !m; i++) {
       await sleep(250)
-      m = await evaluate(coverOnly ? `(() => { const s = document.querySelector(${JSON.stringify(sel)}); return s && s.getBoundingClientRect().height > 1 && document.documentElement.getAttribute('data-viewport') ? {} : null })()` : measure(sel)).catch(() => null)
+      m = await evaluate(coverOnly ? `(() => { const s = document.querySelector(${JSON.stringify(sel)}); return s && s.getBoundingClientRect().height > 1 && document.documentElement.getAttribute('data-viewport') ? {} : null })()` : measure(sel, toast)).catch(() => null)
     }
     if (!m) return null
     if (css) await evaluate(`(() => { const s = document.createElement('style'); s.textContent = ${JSON.stringify(css)}; document.head.appendChild(s); return 1 })()`)
@@ -658,7 +662,7 @@ async function measureAt(route, sel, [size, scale], css = null, menus = true, co
     let last = null
     for (let i = 0; i < 40; i++) {
       await sleep(250)
-      m = await evaluate(measure(sel))
+      m = await evaluate(measure(sel, toast))
       if (last && JSON.stringify(m) === JSON.stringify(last)) break
       last = m
     }
@@ -672,7 +676,7 @@ async function measureAt(route, sel, [size, scale], css = null, menus = true, co
       // Where the header scrolls, the operator opens the menu from where the ⊞ button can be clicked.
       if (m.reach > 0) m.menuReach = await evaluate(menuCheck(sel, 'reach', m.reach))
       // CLOSED AGAIN: the header must be back under the strip and the dock.
-      m.after = await evaluate(measure(sel))
+      m.after = await evaluate(measure(sel, toast))
     }
     if (cover) m.cover = await coverRun(evaluate, call, sel)
     if (cover) {
