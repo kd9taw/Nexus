@@ -291,9 +291,10 @@ html {
   z-index: 80;
 }
 /* STEPPING ASIDE (Toasts.tsx, features/toastRoom.ts `toastPlace`): where no room clear of both the transmit surfaces and
-   what the operator is using (an open menu, the notice parked on a folded dock, the focused control) is tall enough,
-   the column keeps its room clear of the transmit surfaces and is not drawn while it would stand over that. Hidden,
-   its buttons take no clicks either. It is drawn again as soon as the menu closes or the focus moves on. */
+   what the operator is using (an open menu, the notice parked on a folded dock, the control with keyboard focus) is tall
+   enough, the column keeps its room clear of the transmit surfaces and is not drawn while it would stand over that. Hidden,
+   its buttons take no clicks either, and no notice's time runs out. It is drawn again as soon as the menu closes or the
+   focus moves on. */
 .ui-toast-viewport[data-step-aside] {
   visibility: hidden;
 }

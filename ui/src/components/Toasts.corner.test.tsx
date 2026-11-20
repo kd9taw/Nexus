@@ -6,7 +6,7 @@
 // and the way it slides in follow the corner's side. Placement is COMPUTED from the real sheets'
 // cascade (cssCascade.testkit) on the rendered column, never matched by regex.
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
-import { render, cleanup, act, waitFor } from '@testing-library/react'
+import { render, cleanup, act, waitFor, fireEvent } from '@testing-library/react'
 import { Toasts } from './Toasts'
 import { dismissToast, pushToast, subscribeToasts, type Toast } from '../toast'
 import { popupCornerOf, setPopupCorner, type PopupCorner } from '../features/popupCorner'
@@ -374,6 +374,7 @@ describe('the column takes its measured room, clear of the TX surfaces (#445)', 
       })
       await waitFor(() => expect(viewport.style.getPropertyValue('--toast-inset')).toBe(`${600 - (520 - 16)}px`))
       act(() => {
+        fireEvent.keyDown(document.body, { key: 'Tab' })
         key.focus()
       })
       // Above the key now: the stretch between the window's top edge and the key.
@@ -383,6 +384,62 @@ describe('the column takes its measured room, clear of the TX surfaces (#445)', 
       })
       await waitFor(() => expect(viewport.style.getPropertyValue('--toast-inset'), 'the column did not come back down').toBe(`${600 - (520 - 16)}px`))
       key.remove()
+      keep.remove()
+    })
+
+    // A mouse click focuses the button it clicks. On a small window the column stands at the top, over the mode bar, and
+    // stepping aside for a clicked mode button hid a notice until it expired (CW at 1366×768, 175 %, measured in the shell
+    // probe, check 15). Only keyboard focus counts.
+    it('a control focused by a mouse click is not kept off: the column stays where it stood', async () => {
+      const { viewport } = mount('bottom-right')
+      const app = viewport.closest('.app')!
+      const keep = folded()
+      const key = document.createElement('button')
+      key.className = 'cw-macro'
+      rects.set('cw-macro', { left: 700, top: 440, right: 820, bottom: 480 })
+      act(() => {
+        app.append(keep, key)
+      })
+      await waitFor(() => expect(viewport.style.getPropertyValue('--toast-inset')).toBe(`${600 - (520 - 16)}px`))
+      await act(async () => {
+        fireEvent.mouseDown(key)
+        key.focus()
+        fireEvent.mouseUp(key)
+        fireEvent.click(key)
+        // The focus is measured on the next frame.
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+      })
+      expect(document.activeElement).toBe(key)
+      expect(viewport.style.getPropertyValue('--toast-inset'), 'the column moved off a mouse-clicked key').toBe(`${600 - (520 - 16)}px`)
+      expect(viewport.hasAttribute('data-step-aside')).toBe(false)
+      key.remove()
+      keep.remove()
+    })
+
+    it('while the column steps aside no notice expires: it is shown when the menu closes, with the time it had left', async () => {
+      const { viewport } = mount('bottom-right')
+      const app = viewport.closest('.app')!
+      const keep = folded()
+      const menu = document.createElement('div')
+      menu.className = 'panels-menu-pop'
+      rects.set('panels-menu-pop', { left: 400, top: 10, right: 890, bottom: 510 })
+      act(() => {
+        app.append(keep, menu)
+      })
+      await waitFor(() => expect(viewport.hasAttribute('data-step-aside')).toBe(true))
+      let id = 0
+      act(() => {
+        id = pushToast('TX was turned back on', 'info', 200)
+      })
+      const up = () => toasts.some((t) => t.id === id)
+      await new Promise((r) => setTimeout(r, 500))
+      expect(up(), 'the notice expired while out of sight').toBe(true)
+      act(() => {
+        menu.remove()
+      })
+      await waitFor(() => expect(viewport.hasAttribute('data-step-aside')).toBe(false))
+      expect(up(), 'the notice was gone as soon as it was shown').toBe(true)
+      await waitFor(() => expect(up(), 'the notice never expired once shown').toBe(false), { timeout: 2000 })
       keep.remove()
     })
   })

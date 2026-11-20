@@ -8,7 +8,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore, type RefObject } from 'react'
 import * as RToast from '@radix-ui/react-toast'
 import { t } from '../i18n'
-import { dismissToast, keepToast, subscribePopups, type Toast, type ToastKind } from '../toast'
+import { dismissToast, holdToastExpiry, keepToast, subscribePopups, type Toast, type ToastKind } from '../toast'
 import { getPopupCorner, subscribePopupCorner, type PopupCorner } from '../features/popupCorner'
 import { TOAST_MIN_ROOM, scrollReach, toastPlace, type Box, type Scroller } from '../features/toastRoom'
 import { TX_AVOID } from '../features/txSurfaces'
@@ -29,7 +29,9 @@ const TOAST_AVOID = `${TX_AVOID}, .update-banner`
 /** What the operator is using right now, which the column keeps off too where there is room and steps aside for where
  *  there is not (features/toastRoom.ts `toastPlace`): an open ⊞ Panels menu or any open menu, and the notice parked on
  *  a folded dock's keep row (JTTY's refusal, which stands above the row's own box). The focused control is the third,
- *  read off `document.activeElement` (`FOCUSED`). */
+ *  read off `document.activeElement` (`FOCUSED`), and only while it has KEYBOARD focus (`:focus-visible`): a mouse click
+ *  focuses the button it clicks, and on a small window the column stands at the top, over the mode bar, so a notice
+ *  raised after a click on a mode button stepped aside for the button and was never seen (CW at 1366×768, 175 %). */
 const IN_USE = '.panels-menu-pop, [role="menu"], .cockpit-txdock-keep > [role="status"]'
 /** A focused element the column keeps off: a control, never a pane or a scroller that took focus as a whole. */
 const FOCUSED = 'button, input, select, textarea, a[href], [role="button"], [role="menuitem"]'
@@ -69,7 +71,7 @@ function scrollersOf(el: Element): Scroller[] {
  *  (features/toastRoom.ts `scrollReach`), not where it stands: the scroll event that re-places the column comes after the
  *  frame the browser scrolled, so a column placed against where Stop TX stood stood over it for that frame. What the operator is using (`IN_USE`, the focused control) comes
  *  second: kept off where there is room, and where there is not the column steps aside (`data-step-aside`, styles.css)
- *  while it would stand over it.
+ *  while it would stand over it, with every notice's expiry held meanwhile (toast.ts `holdToastExpiry`).
  *
  *  Again whenever the surfaces may have changed, only while a toast is up:
  *  · a window resize, and a scroll anywhere (a sticky strip moves);
@@ -108,7 +110,8 @@ function useToastRoom(viewport: RefObject<HTMLOListElement | null>, corner: Popu
       const inUse: Box[] = []
       for (const el of document.querySelectorAll(IN_USE)) if (!vp.contains(el)) boxOf(el, inUse)
       const focused = document.activeElement
-      if (focused && focused !== document.body && !vp.contains(focused) && focused.matches(FOCUSED)) boxOf(focused, inUse)
+      if (focused && focused !== document.body && !vp.contains(focused) && focused.matches(FOCUSED) && focused.matches(':focus-visible'))
+        boxOf(focused, inUse)
       const at =
         r.width > 0
           ? toastPlace(corner, { w: window.innerWidth, h: window.innerHeight }, r.width, avoid, inUse, GAP_PX * zoom, vp.scrollHeight * zoom, TOAST_MIN_ROOM * zoom)
@@ -119,6 +122,8 @@ function useToastRoom(viewport: RefObject<HTMLOListElement | null>, corner: Popu
       if (at?.stepAside) {
         if (!vp.hasAttribute('data-step-aside')) vp.setAttribute('data-step-aside', '')
       } else if (vp.hasAttribute('data-step-aside')) vp.removeAttribute('data-step-aside')
+      // Out of sight, no notice's time runs out: it waits, and is shown when the operator moves on.
+      holdToastExpiry(at?.stepAside === true)
     }
     let frame = 0
     const later = () => {
@@ -156,6 +161,7 @@ function useToastRoom(viewport: RefObject<HTMLOListElement | null>, corner: Popu
       document.removeEventListener('focusin', later)
       document.removeEventListener('focusout', later)
       vp.removeAttribute('data-step-aside')
+      holdToastExpiry(false)
     }
   })
 }
