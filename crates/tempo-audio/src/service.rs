@@ -4630,6 +4630,12 @@ struct RadioLoop {
     /// unconditional `"VFOA"` fired `0F 00` at a rig that was never in an A/B
     /// split and left it in satellite mode forever.
     split_on_sub: bool,
+    /// The mode the operator's own split last put on VFO B, and the connection it went out on
+    /// ([`Rig::connection_drops`]); `None` once anything may have changed VFO B's mode since:
+    /// VFO A's mode changing (an FT session's `PKTUSB`, a sideband change), split going off, a
+    /// reconnection. A press that finds this standing sends no `X`
+    /// ([`Self::write_operator_split_mode`]).
+    operator_split_mode: Option<(String, u64)>,
     /// Consecutive failed `set_mode` attempts for the current target mode. Bounds the
     /// retune retry so a rig that flatly rejects a mode (e.g. no DATA/PKT submode)
     /// gets a budget of tries (covers a rig/rigctld still settling) then we give up
@@ -5628,6 +5634,7 @@ impl RadioLoop {
             last_mode: cfg.mode.clone(),
             last_split_mode: None,
             split_on_sub: false,
+            operator_split_mode: None,
             mode_fail_count: 0,
             mode_giveup: None,
             mode_saw_reject: false,
@@ -8617,6 +8624,55 @@ impl RadioLoop {
                     ),
                 );
             }
+        }
+    }
+
+    /// Put VFO B in VFO A's mode `md` after the operator's own split press (a cockpit's SPLIT
+    /// and +/-, a spot's "UP 5"), with the width left alone (`-1`).
+    ///
+    /// ⭐ THE PRESS SET VFO B'S FREQUENCY AND NEVER ITS MODE, so the radio transmitted in whatever
+    /// mode VFO B was left in: DATA-U after an FT8 session with Split Operation = Rig (whose
+    /// overs write `X PKTUSB`), USB after Phone. On an FTDX10 the CW screen's split then
+    /// "disabled break-in" (out of CW the key does nothing) and the Phone screen's split
+    /// transmitted DATA-U. WSJT-X sets the TX VFO's mode whenever it sets split; this is that,
+    /// for the screens that are not FT.
+    ///
+    /// Sent ONCE per mode per split: a +/- press that finds [`Self::operator_split_mode`]
+    /// standing sends nothing. Underneath, Hamlib's newcat Yaesus read `MD1;` and write only a
+    /// mode that differs, and the rigs Hamlib cannot target swap VFOs only when its cache says
+    /// the mode differs. Who takes it: every Hamlib model with `X`; Nexus's own Icom daemon
+    /// (`26 01`, no VFO swap); Nexus's own Flex client (the split slice's mode, unchanged =
+    /// nothing sent). OmniRig and TCI have no TX-VFO mode verb and answer `RPRT -11`: nothing is
+    /// written, as before.
+    ///
+    /// ⛔ NOT ON THE FT SCREENS (`Digital`): their split and its mode are the over's
+    /// ([`crate::slot`], Split Operation). ⛔ NOT WHILE A SATELLITE IS HELD: the uplink's mode is
+    /// the pass's own (`Engine::sat_tx_mode_for_split`), and `md` there is the DOWNLINK's (FM
+    /// on KOSEN-1's CW uplink). A blank `md` (obey the radio) sends nothing.
+    fn write_operator_split_mode(&mut self, engine: &Mutex<Engine>, rig: &mut Rig, md: &str) {
+        let wanted = {
+            let eng = engine_lock(engine);
+            eng.settings().operating_mode != tempo_app::settings::OperatingMode::Digital
+                && eng.sat_transponder_held().is_none()
+        };
+        let drops = rig.connection_drops();
+        if !wanted
+            || md.trim().is_empty()
+            || self
+                .operator_split_mode
+                .as_ref()
+                .is_some_and(|(m, d)| m == md && *d == drops)
+        {
+            return;
+        }
+        match rig.set_split_mode_where_available(md, -1) {
+            Ok(true) => self.operator_split_mode = Some((md.to_string(), drops)),
+            // No `X` on this link (OmniRig, TCI): nothing to remember, nothing to say.
+            Ok(false) => {}
+            Err(e) => crate::civ::diag::note(&format!(
+                "split: the radio did not take {md} for VFO B ({e}); it transmits in the mode \
+                 VFO B was in"
+            )),
         }
     }
 
@@ -13175,6 +13231,14 @@ impl RadioLoop {
             // Apply a pending SPLIT request (after the dial/mode retune so the TX
             // VFO programs against the fresh dial). Pile-up spots ("UP 2") set it;
             // any plain QSY clears it back to simplex.
+            // VFO A's mode moved on (an FT session, a sideband change): VFO B's may have too.
+            if self
+                .operator_split_mode
+                .as_ref()
+                .is_some_and(|(m, _)| *m != md)
+            {
+                self.operator_split_mode = None;
+            }
             if can_retune {
                 if let Some(req) = split_req {
                     match req {
@@ -13330,30 +13394,17 @@ impl RadioLoop {
                                                      write after the split frequency",
                                                 );
                                             }
-                                            // …and on the CW screen VFO B's MODE, the RX VFO's
-                                            // own (`md`, blank = obey the radio, sends nothing).
-                                            // The press wrote VFO B's frequency only, so the
-                                            // radio transmitted in whatever mode VFO B was left
-                                            // in: DATA-U after an FT8 Rig split's `X PKTUSB`,
-                                            // USB after Phone, where the key and break-in do
-                                            // nothing (the FTDX10 report: "split disables
-                                            // break-in"). Hamlib's newcat `set_mode` reads VFO
-                                            // B's mode first and writes `MD1` only when it
-                                            // differs. A miss leaves the split as it was before.
-                                            // Never while a satellite is held: the uplink's mode
-                                            // is the pass's own (`sat_tx_mode_for_split` below),
-                                            // and `md` there is the DOWNLINK's (FM on KOSEN-1).
-                                            let terrestrial = section_cw
-                                                && engine_lock(engine)
-                                                    .sat_transponder_held()
-                                                    .is_none();
-                                            if terrestrial && rig.set_split_mode(&md, -1).is_err() {
-                                                crate::civ::diag::note(
-                                                    "split: rigctld did not take the CW mode \
-                                                     for VFO B",
-                                                );
-                                            }
                                         }
+                                    }
+                                    // The TX VFO's MODE: the one VFO A is in (`md`, what this
+                                    // section commands; blank = obey the radio, nothing sent).
+                                    // The press wrote VFO B's frequency only, so the radio
+                                    // transmitted in whatever mode VFO B was left in: DATA-U
+                                    // after an FT8 Rig split's `X PKTUSB` (the FTDX10 reports:
+                                    // CW "split disables break-in", Phone split stuck in DATA-U).
+                                    // [`Self::operator_split_mode`] says when, and who serves it.
+                                    if set.is_ok() && tx_vfo == "VFOB" && rig.has_control() {
+                                        self.write_operator_split_mode(engine, rig, &md);
                                     }
                                     let ok = set.is_ok();
                                     retune_note = Some(if ok {
@@ -13468,6 +13519,7 @@ impl RadioLoop {
                             }
                         }
                         None => {
+                            self.operator_split_mode = None;
                             // Back to simplex — TX returns to the main/RX VFO, which
                             // carries its own mode again. A split that rode the SUB
                             // BAND is released the same way it was engaged: the
@@ -47300,71 +47352,139 @@ mod tests {
         }
     }
 
-    /// The split writes a CW press makes, through Hamlib: split on at the dial + 1 kHz from the
-    /// CW screen, then one + press. `model` is the Hamlib model the radio is set to.
-    fn cw_split_presses_on_the_wire(model: u32) -> Vec<String> {
+    /// The mode words of every `M` (VFO A) and `X` (VFO B) line the loop sent, in order.
+    fn mode_writes(seen: &Arc<Mutex<Vec<String>>>) -> Vec<String> {
+        seen.lock()
+            .unwrap()
+            .iter()
+            .map(|l| l.trim().to_string())
+            .filter(|l| l.starts_with("M ") || l.starts_with("X "))
+            .collect()
+    }
+
+    /// The `X` lines alone, and the mode VFO A was last put in by an `M`.
+    fn split_mode_lines(seen: &Arc<Mutex<Vec<String>>>) -> (Vec<String>, Option<String>) {
+        let all = mode_writes(seen);
+        let vfo_a = all
+            .iter()
+            .rfind(|l| l.starts_with("M "))
+            .and_then(|l| l.split_whitespace().nth(1).map(str::to_string));
+        (
+            all.into_iter().filter(|l| l.starts_with("X ")).collect(),
+            vfo_a,
+        )
+    }
+
+    /// Split on at the dial + 1 kHz, then a + press, from `section`'s screen on Hamlib `model`.
+    fn split_presses_in(section: &'static str, model: u32) -> Arc<Mutex<Vec<String>>> {
         let (addr, seen) = recording_rigctld_stub();
         let engine = engine_on(model);
-        engine.lock().unwrap().set_operating_mode("cw", false);
+        {
+            let mut eng = engine.lock().unwrap();
+            let mut s = eng.settings().clone();
+            s.split_mode = tempo_app::settings::SplitMode::None;
+            eng.apply_settings(s);
+            eng.set_operating_mode(section, false);
+        }
+        fn press(e: &mut Engine, khz: f64) {
+            let dial = e.settings().dial_hz() as f64 / 1e6;
+            e.request_split(Some(dial + khz / 1000.0));
+        }
         split_ticks(
             &engine,
             Rig::rigctld(&addr),
             vec![
                 |_, _| {},
-                |e, _| e.request_operator_split(Some(14.031)).unwrap(),
-                |e, _| e.request_operator_split(Some(14.032)).unwrap(),
+                |e, _| press(e, 1.0),
+                |e, _| press(e, 2.0),
+                |_, _| {},
             ],
         );
-        let lines = seen.lock().unwrap().clone();
-        lines
-            .iter()
-            .map(|l| l.trim().to_string())
-            .filter(|l| {
-                l.starts_with("S ")
-                    || l.starts_with("I ")
-                    || l.starts_with("X ")
-                    || l.starts_with("W FB")
-            })
-            .collect()
+        seen
     }
 
-    /// ⭐ A CW SPLIT ON A HAMLIB NEWCAT YAESU PUTS VFO B IN CW TOO (the FTDX10 field report: SPLIT
-    /// on the CW screen "disabled break-in"). The press wrote VFO B's frequency and never its
-    /// mode, so the radio transmitted in whatever mode VFO B was left in: DATA-U after an FT8
-    /// session with Split Operation = Rig (whose overs write `X PKTUSB`), USB after Phone. Out
-    /// of CW the key and the radio's break-in do nothing. `X CW -1` is what the FT overs already
-    /// send for their own mode; Hamlib's newcat backend reads VFO B's mode first and writes `MD1`
-    /// only when it differs, so a VFO B already in CW is sent nothing.
+    /// ⭐ THE OPERATOR'S SPLIT PUTS VFO B IN VFO A'S MODE, ON EVERY SCREEN BUT FT, ON EVERY HAMLIB
+    /// RADIO (the FTDX10 reports: CW split "disabled break-in", Phone split stayed in DATA-U
+    /// after FT8). The press wrote VFO B's frequency and never its mode, so the radio
+    /// transmitted in whatever mode VFO B was left in. Once per split: the + press after it
+    /// finds VFO B already put in that mode and sends no `X`.
     #[test]
-    fn a_cw_split_press_on_a_hamlib_newcat_yaesu_puts_vfo_b_in_cw() {
-        for model in [1035u32, 1036, 1040, 1042, 1044, 1049] {
-            assert_eq!(
-                cw_split_presses_on_the_wire(model),
-                vec![
-                    "S 1 VFOB",
-                    "I 14031000",
-                    "W FB014031000; 0",
-                    "X CW -1",
-                    "S 1 VFOB",
-                    "I 14032000",
-                    "W FB014032000; 0",
-                    "X CW -1",
-                ],
-                "model {model}"
-            );
+    fn a_split_press_puts_vfo_b_in_vfo_as_mode_once_on_every_non_ft_screen() {
+        for model in [1042u32, 1035, 3073, 2014] {
+            for (section, want) in [
+                ("phone", Some("USB")),
+                ("cw", Some("CW")),
+                ("rtty", None),
+                ("keyboard", None),
+            ] {
+                let seen = split_presses_in(section, model);
+                let (x, vfo_a) = split_mode_lines(&seen);
+                let vfo_a = vfo_a.unwrap_or_else(|| {
+                    panic!("model {model} {section}: VFO A was put in a mode: {seen:?}")
+                });
+                if let Some(want) = want {
+                    assert_eq!(vfo_a, want, "model {model} {section}: VFO A's mode");
+                }
+                assert_eq!(
+                    x,
+                    vec![format!("X {vfo_a} -1")],
+                    "model {model} {section}: VFO B put in VFO A's mode, once: {:?}",
+                    mode_writes(&seen)
+                );
+            }
         }
     }
 
-    /// CONTROL: a CW split on any other Hamlib radio writes no TX VFO mode, as before.
+    /// CONTROL: on the FT screens the operator's split writes no `X`: the TX VFO's mode there is
+    /// the over's (Split Operation), unchanged.
     #[test]
-    fn a_cw_split_press_on_any_other_hamlib_radio_writes_no_tx_mode() {
-        for model in [3073u32, 2014, 1051] {
-            assert_eq!(
-                cw_split_presses_on_the_wire(model),
-                vec!["S 1 VFOB", "I 14031000", "S 1 VFOB", "I 14032000"],
-                "model {model}"
-            );
+    fn a_split_press_on_the_ft_screen_writes_no_tx_mode() {
+        for model in [1042u32, 3073, 2014] {
+            let seen = split_presses_in("digital", model);
+            let (x, _) = split_mode_lines(&seen);
+            assert!(x.is_empty(), "model {model}: {:?}", mode_writes(&seen));
         }
+    }
+
+    /// ⭐ PHONE AFTER AN FT SESSION: VFO B BACK IN USB. A Phone split, FT8 in between (VFO A to
+    /// DATA-U, where an FT over's split leaves VFO B), and Phone again: the second split puts VFO
+    /// B in USB again rather than trusting the first.
+    #[test]
+    fn a_phone_split_after_an_ft_session_puts_vfo_b_back_in_usb() {
+        let (addr, seen) = recording_rigctld_stub();
+        let engine = engine_on(1042);
+        {
+            let mut eng = engine.lock().unwrap();
+            let mut s = eng.settings().clone();
+            s.split_mode = tempo_app::settings::SplitMode::None;
+            eng.apply_settings(s);
+            eng.set_operating_mode("phone", false);
+        }
+        split_ticks(
+            &engine,
+            Rig::rigctld(&addr),
+            vec![
+                |_, _| {},
+                |e, _| {
+                    let dial = e.settings().dial_hz() as f64 / 1e6;
+                    e.request_split(Some(dial + 0.001));
+                },
+                |e, _| e.request_split(None),
+                |e, _| e.set_operating_mode("digital", false),
+                |e, _| e.set_operating_mode("phone", false),
+                |e, _| {
+                    let dial = e.settings().dial_hz() as f64 / 1e6;
+                    e.request_split(Some(dial + 0.001));
+                },
+            ],
+        );
+        let (x, _) = split_mode_lines(&seen);
+        assert_eq!(
+            x,
+            vec!["X USB -1", "X USB -1"],
+            "VFO B put in USB at each Phone split: {:?}",
+            mode_writes(&seen)
+        );
     }
 
     /// CONTROL: any other Hamlib radio gets exactly what it got before: `S` and `I` per press.
