@@ -6859,7 +6859,7 @@ export const JA: PartialCatalog = {
   "settings.n3fjp.forwardAll.label": "すべてのQSOを転送",
   "settings.n3fjp.forwardAll.hint": "コンテストの交信に限らず、記録した<b>すべての</b>QSOを上記ホストのN3FJP ACLogにも送ります — 普段の一般ロギング向けです。N3FJP側で重複排除されるため、コンテスト転送と併用しても安全です。",
   "settings.n3fjp.test.label": "接続テスト",
-  "settings.n3fjp.test.title": "設定を保存してからN3FJPへのTCP接続をテストします",
+  "settings.n3fjp.test.title": "上のホストとポートでN3FJPへのTCP接続をテストします。何も保存されません。",
   "settings.n3fjp.test.action": "N3FJPをテスト",
   "settings.n3fjp.test.hint": "イベント開始前にクラブの会場で実行し、APIリンクが機能することを確認してください。",
   "settings.n3fjp.test.noHost": "N3FJPのホストが設定されていません。設定 ▸ サービス ▸ N3FJP連携 で、マスターのコンピューターのIPアドレスを入力してください。",

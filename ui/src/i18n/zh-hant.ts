@@ -9592,7 +9592,7 @@ export const ZH_HANT: PartialCatalog = {
   "settings.n3fjp.forwardAll.label": "轉發每筆 QSO",
   "settings.n3fjp.forwardAll.hint": "同時把<b>每個</b>已記錄的 QSO（不只是競賽聯絡）推送到上方主機的 N3FJP ACLog — 用於日常通用日誌。N3FJP 會去重，因此與競賽推送並行是安全的。",
   "settings.n3fjp.test.label": "連線測試",
-  "settings.n3fjp.test.title": "儲存設定，然後測試 N3FJP 的 TCP 連線",
+  "settings.n3fjp.test.title": "用上面的主機和連接埠測試 N3FJP 的 TCP 連線。不會儲存任何內容。",
   "settings.n3fjp.test.action": "測試 N3FJP",
   "settings.n3fjp.test.hint": "請在活動開始前到俱樂部現場執行一次，確認 API 鏈路可用。",
   "settings.n3fjp.test.noHost": "未設定 N3FJP 主機：請在 設定 ▸ 服務 ▸ N3FJP 整合 中輸入主控電腦的 IP 位址。",

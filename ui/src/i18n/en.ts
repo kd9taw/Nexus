@@ -10891,7 +10891,7 @@ export const EN = {
   'settings.n3fjp.forwardAll.hint':
     "Also push <b>every</b> logged QSO (not just contest contacts) to N3FJP ACLog on the host above — everyday general logging. N3FJP dedupes, so it's safe to run alongside the contest push.",
   'settings.n3fjp.test.label': 'Connection test',
-  'settings.n3fjp.test.title': 'Save settings, then test the N3FJP TCP connection',
+  'settings.n3fjp.test.title': 'Test the N3FJP TCP connection at the host and port above. Nothing is saved.',
   'settings.n3fjp.test.action': 'Test N3FJP',
   'settings.n3fjp.test.hint':
     'Run this at the club site before the event starts to confirm the API link works.',

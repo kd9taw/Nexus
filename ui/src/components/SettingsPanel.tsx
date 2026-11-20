@@ -1736,7 +1736,8 @@ export function SettingsPanel({
   const [n3fjpTest, setN3fjpTest] = useState<{ state: 'idle' | 'testing' | 'ok' | 'fail'; msg: string }>({ state: 'idle', msg: '' })
   const runN3fjpTest = () => {
     setN3fjpTest({ state: 'testing', msg: t('settings.connections.test.testing') })
-    n3fjpTestConnection()
+    // The host and port as the form shows them, saved or not: the Test saves nothing.
+    n3fjpTestConnection((form?.n3fjpHost ?? '').trim(), form?.n3fjpPort ?? 1100)
       .then((msg) => setN3fjpTest({ state: 'ok', msg }))
       .catch((e) => setN3fjpTest({ state: 'fail', msg: n3fjpTestFailure(String(e)) }))
   }

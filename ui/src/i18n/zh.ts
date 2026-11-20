@@ -9590,7 +9590,7 @@ export const ZH: PartialCatalog = {
   "settings.n3fjp.forwardAll.label": "转发每个 QSO",
   "settings.n3fjp.forwardAll.hint": "同时把<b>每个</b>已记录的 QSO（不只是竞赛联络）推送到上方主机的 N3FJP ACLog — 用于日常通用日志。N3FJP 会去重，因此与竞赛推送并行是安全的。",
   "settings.n3fjp.test.label": "连接测试",
-  "settings.n3fjp.test.title": "保存设置，然后测试 N3FJP 的 TCP 连接",
+  "settings.n3fjp.test.title": "用上面的主机和端口测试 N3FJP 的 TCP 连接。不会保存任何内容。",
   "settings.n3fjp.test.action": "测试 N3FJP",
   "settings.n3fjp.test.hint": "请在活动开始前到俱乐部现场运行一次，确认 API 链路可用。",
   "settings.n3fjp.test.noHost": "未设置 N3FJP 主机：请在 设置 ▸ 服务 ▸ N3FJP 集成 中输入主控电脑的 IP 地址。",

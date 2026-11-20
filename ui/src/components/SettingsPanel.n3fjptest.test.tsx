@@ -115,6 +115,26 @@ describe('the N3FJP connection Test', () => {
     expect(await failedTestSays()).toBe('✗ send failed: broken pipe')
   })
 
+  it('tests the host and port in the form, unsaved, and saves nothing', async () => {
+    api.get('n3fjpTestConnection').mockImplementation(() => Promise.resolve("N3FJP's Test Log v6.6"))
+    renderPanel()
+    const host = await waitFor(() => {
+      const el = document.querySelector<HTMLInputElement>('#settings-n3fjp input[value="192.168.1.20"]')
+      if (!el) throw new Error('no host box yet')
+      return el
+    })
+    const port = document.querySelector<HTMLInputElement>('#settings-n3fjp input[value="1100"]')!
+    fireEvent.change(host, { target: { value: ' 192.168.1.30 ' } })
+    fireEvent.change(port, { target: { value: '1234' } })
+    const button = [...document.querySelectorAll<HTMLButtonElement>('#settings-n3fjp button')].find(
+      (el) => el.textContent === EN['settings.n3fjp.test.action'],
+    )!
+    fireEvent.click(button)
+    await waitFor(() => expect(document.querySelector('#settings-n3fjp .cat-result.ok')).not.toBeNull())
+    expect(api.get('n3fjpTestConnection')).toHaveBeenCalledWith('192.168.1.30', 1234)
+    expect(api.get('setSettings')).not.toHaveBeenCalled()
+  })
+
   it('the English names the right place and the next step', () => {
     expect(EN['settings.n3fjp.test.noHost']).toContain('Settings ▸ Services')
     expect(EN['settings.n3fjp.test.refused']).toContain('Application Program Interface ▸ TCP API')
