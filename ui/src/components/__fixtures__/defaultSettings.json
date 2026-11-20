@@ -257,6 +257,7 @@
   "soundTxState": false,
   "soundDecodeTick": false,
   "soundCwTurn": false,
+  "soundLogPrompt": false,
   "bestCaller": "first",
   "bestCallerMinSnr": null,
   "wantedCalls": [],

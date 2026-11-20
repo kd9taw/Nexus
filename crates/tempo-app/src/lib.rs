@@ -1069,6 +1069,7 @@ impl AppState {
             udp_free_text: None,
             rx_freq_clear_tick: 0,
             logged_tick: 0,
+            auto_logged_tick: 0,
             band_change_tick: 0,
             hunt: None,
             activation: None,

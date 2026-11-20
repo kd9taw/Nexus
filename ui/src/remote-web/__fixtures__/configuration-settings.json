@@ -344,6 +344,7 @@
     "singleDecode": false,
     "soundDecodeTick": false,
     "soundCwTurn": false,
+    "soundLogPrompt": false,
     "soundTxState": false,
     "source": "native",
     "specialOp": "none",

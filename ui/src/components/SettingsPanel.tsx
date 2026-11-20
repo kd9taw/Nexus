@@ -12134,6 +12134,25 @@ export function SettingsPanel({
                   {t('settings.accessibility.cwTurnSound.hint')}
                 </span>
               </div>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">
+                    {t('settings.accessibility.logPromptSound.label')}
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.soundLogPrompt ?? false}
+                    className={`toggle${form.soundLogPrompt ? ' on' : ''}`}
+                    onClick={() => updateBool('soundLogPrompt', !form.soundLogPrompt)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">
+                  {t('settings.accessibility.logPromptSound.hint')}
+                </span>
+              </div>
             </div>
           </fieldset>
           </>

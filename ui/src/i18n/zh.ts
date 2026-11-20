@@ -3528,6 +3528,8 @@ export const ZH: PartialCatalog = {
   "settings.accessibility.decodeTick.hint": "每个周期有新信号解码时的轻柔滴答 — 频段的节奏，无需目视。",
   "settings.accessibility.cwTurnSound.label": "CW 轮次音",
   "settings.accessibility.cwTurnSound.hint": "当 CW 轮次提示说轮到你发送时的短暂上升啁啾。绝不在你发射时。",
+  "settings.accessibility.logPromptSound.label": "记录提示音",
+  "settings.accessibility.logPromptSound.hint": "已完成的通联请求记录时，或自动记录为你记录时，播放短暂的下降双音。",
   "settings.colours.legend": "颜色",
   "settings.colours.hint": "每种颜色提供几个选项，每个都在两种主题与暗色显示上检查过对比度。发射红、提醒橙与需要的颜色保持固定。",
   "settings.colours.reset": "重置",

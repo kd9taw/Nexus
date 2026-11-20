@@ -7262,6 +7262,8 @@ export const JA: PartialCatalog = {
   "settings.accessibility.decodeTick.hint": "新しい信号がデコードされたサイクルごとに小さなティック音を鳴らします — バンドのリズムを、目を使わずに感じられます。",
   "settings.accessibility.cwTurnSound.label": "CWの番の通知音",
   "settings.accessibility.cwTurnSound.hint": "CWの送信タイミング表示があなたの番を示したとき、短く上がるチャープ音を鳴らします。送信中は鳴りません。",
+  "settings.accessibility.logPromptSound.label": "ログ確認の通知音",
+  "settings.accessibility.logPromptSound.hint": "終わった交信のログ確認が出たとき、または自動ログが記録したときに、短く下がる2音を鳴らします。",
   "connect.intent.aria": "何をしますか？",
   "connect.intent.dx.label": "DXを追う",
   "connect.intent.dx.title": "地球儀、ニーズ別の色分け、ライブのオープン情報",

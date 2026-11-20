@@ -3530,6 +3530,8 @@ export const ZH_HANT: PartialCatalog = {
   "settings.accessibility.decodeTick.hint": "每個週期有新訊號解碼時的輕柔滴答 — 頻段的節奏，無需目視。",
   "settings.accessibility.cwTurnSound.label": "CW 輪次音",
   "settings.accessibility.cwTurnSound.hint": "當 CW 輪次提示說輪到你傳送時的短暫上升啁啾。絕不在你發射時。",
+  "settings.accessibility.logPromptSound.label": "記錄提示音",
+  "settings.accessibility.logPromptSound.hint": "已完成的通聯請求記錄時，或自動記錄為你記錄時，播放短暫的下降雙音。",
   "settings.colours.legend": "顏色",
   "settings.colours.hint": "每種顏色提供幾個選項，每個都在兩種主題與暗色顯示上檢查過對比度。發射紅、提醒橙與需要的顏色保持固定。",
   "settings.colours.reset": "重設",

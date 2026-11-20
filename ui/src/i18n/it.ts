@@ -3614,6 +3614,8 @@ export const IT: PartialCatalog = {
   "settings.accessibility.decodeTick.hint": "Un leggero tic a ogni ciclo in cui vengono decodificati nuovi segnali: il ritmo della banda, senza guardare.",
   "settings.accessibility.cwTurnSound.label": "Suono del turno CW",
   "settings.accessibility.cwTurnSound.hint": "Un breve cinguettio ascendente quando l'indicazione di turno CW dice che tocca a te trasmettere. Mai mentre trasmetti.",
+  "settings.accessibility.logPromptSound.label": "Suono della richiesta di log",
+  "settings.accessibility.logPromptSound.hint": "Un breve doppio tono discendente quando un collegamento concluso chiede di essere registrato, o quando il log automatico lo registra per te.",
   "settings.colours.legend": "Colori",
   "settings.colours.hint": "Alcune scelte per ogni colore, ognuna verificata per il contrasto in entrambi i temi e sui display scuri. Il rosso di trasmissione, l'arancione degli avvisi e i colori di Mancanti restano fissi.",
   "settings.colours.reset": "Ripristina",

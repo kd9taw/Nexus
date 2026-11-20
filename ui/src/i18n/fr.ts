@@ -7159,6 +7159,8 @@ export const FR: PartialCatalog = {
   "settings.accessibility.decodeTick.hint": "Un tic discret à chaque cycle où de nouveaux signaux sont décodés — le rythme de la bande, sans regarder.",
   "settings.accessibility.cwTurnSound.label": "Son de tour en CW",
   "settings.accessibility.cwTurnSound.hint": "Un court gazouillis montant quand l'indicateur de tour CW dit que c'est à vous d'émettre. Jamais pendant que vous émettez.",
+  "settings.accessibility.logPromptSound.label": "Son de l'invite de journal",
+  "settings.accessibility.logPromptSound.hint": "Un bref double ton descendant quand un contact terminé demande à être consigné, ou quand le journal automatique le consigne pour vous.",
   "settings.accessibility.decodeTick.label": "Tic de lot de décodages",
   "settings.accessibility.legend": "Accessibilité et usage sans écran",
   "settings.accessibility.note": "Voix et repères sonores pour trafiquer à l'oreille (utilisateurs de lecteur d'écran, ou quiconque veut un retour audible). Les libellés clavier et lecteur d'écran de Nexus sont toujours actifs — ces réglages ne pilotent que ce qui sort des haut-parleurs.",

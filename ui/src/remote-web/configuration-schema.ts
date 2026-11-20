@@ -274,6 +274,7 @@ export const SETTINGS_KEYS = [
   'soundTxState',
   'soundDecodeTick',
   'soundCwTurn',
+  'soundLogPrompt',
   'bestCaller',
   'bestCallerMinSnr',
   'blockedCalls',
@@ -390,6 +391,8 @@ export const NEWER_SETTINGS = {
   tciServerSpots: false,
   // A station that predates the CW turn cue's sound plays none: that setting's default.
   soundCwTurn: false,
+  // …and one that predates the log prompt's sound plays none.
+  soundLogPrompt: false,
   // A station that predates the Needed board's WPX and WAE chips shows neither: both settings off.
   showWpxNeeds: false,
   showWaeNeeds: false,
@@ -716,6 +719,7 @@ export const SETTINGS_SHAPES = {
   "soundTxState": "boolean",
   "soundDecodeTick": "boolean",
   "soundCwTurn": "boolean",
+  "soundLogPrompt": "boolean",
   "bestCaller": "string",
   "bestCallerMinSnr": "nullable-number",
   "blockedCalls": "array",
