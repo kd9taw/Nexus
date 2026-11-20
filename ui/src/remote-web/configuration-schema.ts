@@ -96,6 +96,7 @@ export const SETTINGS_KEYS = [
   'dataModesPlainSsb',
   'sstvHoldDataSubmode',
   'aprsDataFm',
+  'logStationPowerWithAmp',
   'setRigMode',
   'operatingMode',
   'licenseClass',
@@ -396,6 +397,9 @@ export const NEWER_SETTINGS = {
   js8ResetActivity: false,
   // …and one that predates JS8Call's colours and fonts draws every JS8 pane in the theme's.
   js8PaneStyle: { light: {}, dark: {}, fonts: {} },
+  // A station that predates the "an amplifier Nexus can't read is inline" switch logs the radio's
+  // measured power: that setting off.
+  logStationPowerWithAmp: false,
 } as const
 /** The per-radio withheld list, mirroring Rust RADIO_WITHHELD_KEYS. Empty today by design: it
  *  exists so the first per-radio credential has somewhere to go that is not the wire, and so the
@@ -534,6 +538,7 @@ export const SETTINGS_SHAPES = {
   "dataModesPlainSsb": "boolean",
   "sstvHoldDataSubmode": "boolean",
   "aprsDataFm": "boolean",
+  "logStationPowerWithAmp": "boolean",
   "setRigMode": "boolean",
   "operatingMode": "string",
   "licenseClass": "string",

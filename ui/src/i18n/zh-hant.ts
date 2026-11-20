@@ -9135,6 +9135,8 @@ export const ZH_HANT: PartialCatalog = {
   "settings.digital.harq.hint": "開啟（預設）= 失敗的弱幀透過聯合合併其重傳（RV0+RV1+RV2）來恢復，未被確認的 QSO 發射會提高冗餘度。關閉 = 僅 RV0（每幀獨立解碼）。",
   "settings.digital.clockCheck.label": "時鐘校準（NTP）",
   "settings.digital.clockCheck.hint": "用公共 NTP 伺服器測量本機時鐘並據此校正：TempoFast/TempoDeep 按 UTC 劃分時隙，Nexus 會按測得的偏移量平移自己的發射與解碼視窗，即使時鐘不準也能落在真實 UTC 柵格上。頂欄會顯示目前應用的校正。完全離線執行時請關閉（不發起任何網路請求）— 最後一次測量會繼續引導，直到過期。",
+  "settings.digital.stationPowerWithAmp.label": "接有 Nexus 無法讀取的功放：記錄我的電台功率",
+  "settings.digital.stationPowerWithAmp.hint": "針對這部電台。Nexus 記錄電台測得的功率，而在它無法讀取的功放（例如 Icom IC-PW2）之後，那只是激勵功率。開啟後，通聯改為記錄上面的電台功率。僅影響日誌：功率和鍵控不變。",
   "settings.digital.stationPower.label": "台站功率（W）",
   "settings.digital.stationPower.hint": "你的發射功率（瓦）— 會作為功率記錄到每次聯絡（ADIF TX_PWR），並解鎖「旅程」中的每瓦英里數與 QRP 成就。不知道可留空。",
   "settings.digital.units.label": "單位",

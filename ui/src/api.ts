@@ -4045,6 +4045,9 @@ export interface RadioProfilePatch {
    * obeyed only on a radio that has one (`APRS_DATA_FM_MODELS`). Rides the patch like its
    * neighbours — a per-radio field missing here is blanked on Save. */
   aprsDataFm: boolean
+  /** Log Settings ▸ Station power instead of the radio's measured power: an amplifier Nexus can't
+   * read is inline (#534). Per radio, off by default; logging only. */
+  logStationPowerWithAmp: boolean
   /** Phone's PTT feeds this computer's microphone to the radio, from `pcMicDevice` at `pcMicGainDb`.
    * Per radio, so it rides the patch like its neighbours. */
   pcMic: boolean

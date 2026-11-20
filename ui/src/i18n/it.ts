@@ -9555,6 +9555,8 @@ export const IT: PartialCatalog = {
   "settings.digital.harq.hint": "On (predefinito) = un frame debole che fallisce viene recuperato combinando le sue ritrasmissioni (RV0+RV1+RV2), e le trasmissioni di QSO non confermate aumentano la ridondanza. Off = solo RV0 (ogni frame decodificato da solo).",
   "settings.digital.clockCheck.label": "Controllo orologio (NTP)",
   "settings.digital.clockCheck.hint": "Misura l'orologio del PC rispetto ai server NTP pubblici e lo CORREGGE: TempoFast/TempoDeep sono temporizzati a slot sull'UTC, e Nexus sposta le proprie finestre di trasmissione e decodifica dell'offset misurato così che cadano sulla vera griglia UTC anche quando l'orologio è sbagliato. La barra superiore mostra cosa viene applicato. Disattivalo per un funzionamento del tutto offline (nessuna chiamata di rete): l'ultima misura continua allora a correggere finché non scade.",
+  "settings.digital.stationPowerWithAmp.label": "C'è un amplificatore che Nexus non può leggere: registra la mia potenza di stazione",
+  "settings.digital.stationPowerWithAmp.hint": "Per questa radio. Nexus registra la potenza misurata dalla radio, e dietro un amplificatore che non può leggere (un Icom IC-PW2, ad esempio) è solo il pilotaggio. Attivalo e i collegamenti registrano invece la potenza di stazione qui sopra. Solo per il log: potenza e manipolazione non cambiano.",
   "settings.digital.stationPower.label": "Potenza della stazione (W)",
   "settings.digital.stationPower.hint": "La tua potenza di trasmissione in watt: registrata su ogni collegamento come sua potenza (ADIF TX_PWR), e sblocca i traguardi Viaggio di miglia per watt e QRP. Lascia vuoto se non la conosci.",
   "settings.digital.units.label": "Unità",

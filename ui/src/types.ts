@@ -5716,6 +5716,9 @@ export interface Settings {
   /** APRS in this radio's DATA-FM mode instead of plain FM (#393). Per radio, off by default;
    * obeyed only on a radio that has one (`APRS_DATA_FM_MODELS`). */
   aprsDataFm: boolean
+  /** Log Station power instead of the radio's measured power: an amplifier Nexus can't read is
+   * inline (#534). Per radio, off by default; logging only. */
+  logStationPowerWithAmp: boolean
   /** Phone's PTT feeds THIS computer's microphone to the radio (its transmit audio route), instead
    * of keying the radio's own microphone. Per radio (flat mirror of the active radio), off by
    * default; Phone only. */
@@ -6665,6 +6668,9 @@ export interface RadioProfile {
   /** APRS in this radio's DATA-FM mode instead of plain FM (#393). Per radio, off by default;
    * obeyed only on a radio that has one (`APRS_DATA_FM_MODELS`). */
   aprsDataFm: boolean
+  /** Log Station power instead of the radio's measured power: an amplifier Nexus can't read is
+   * inline (#534). Per radio, off by default; logging only. */
+  logStationPowerWithAmp: boolean
   /** Phone's PTT feeds this computer's microphone to this radio. Off by default. */
   pcMic: boolean
   pcMicDevice: string
