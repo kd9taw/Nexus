@@ -38488,6 +38488,11 @@ fn hrdlog_health_of(
     }
 }
 
+/// Whether the auto-push sends a WRL result again: only "pending" (rate limit, busy server).
+fn wrl_retries(result: &str) -> bool {
+    result == "pending"
+}
+
 /// WRL's twin of [`hrdlog_health_of`], with the same missing-`Err` history.
 fn wrl_health_of(res: &Result<tempo_app::dto::WrlPushResultDto, String>) -> (bool, ConnDetail) {
     match res {
@@ -46757,7 +46762,7 @@ fn auto_push_one(
                     "pending" => "WRL ✗ busy".to_string(),
                     _ => "WRL ✗ rejected".to_string(),
                 };
-                (part, ok, detail, r.result.as_str() == "pending")
+                (part, ok, detail, wrl_retries(&r.result))
             }
             Err(e) => {
                 conn_log(
@@ -56475,6 +56480,29 @@ fn winlink_disconnect() -> Result<(), String> {
         conn_log("Winlink", "info", "disconnecting");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod wrl_duplicate_tests {
+    /// WRL's answer for a QSO it already has (its spec's 409 `DUPLICATE_CONTACT`, "treat it as
+    /// already logged") counts as uploaded: the auto-push stamps it healthy and does not leave
+    /// it owed, so it is not sent again. It read "WRL ✗ busy" and was re-sent forever.
+    #[test]
+    fn a_contact_wrl_already_has_is_logged_and_not_sent_again() {
+        let body = r#"{"data":null,"meta":null,"error":{"code":"DUPLICATE_CONTACT","message":"This QSO is already in the operator's log.","existingContactId":"3f2b8c1e-5d4a-4f6b-9a7c-2e1d0b9a8c7f"}}"#;
+        let r: tempo_app::dto::WrlPushResultDto =
+            tempo_core::wrl::classify_response(409, body).into();
+        assert_eq!(r.result, "duplicate");
+        assert!(super::wrl_stamp(&r.result).0, "stamped as uploaded");
+        assert!(!super::wrl_retries(&r.result), "never owed again");
+        // CONTROL: a busy server is still retried.
+        let busy: tempo_app::dto::WrlPushResultDto = tempo_core::wrl::classify_response(
+            429,
+            r#"{"data":null,"meta":null,"error":{"code":"RATE_LIMITED","message":"x"}}"#,
+        )
+        .into();
+        assert!(super::wrl_retries(&busy.result));
+    }
 }
 
 #[cfg(test)]
