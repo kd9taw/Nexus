@@ -1024,6 +1024,7 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     // the patch blanks on the profile it touches.
     sstvHoldDataSubmode: s.sstvHoldDataSubmode ?? false,
     aprsDataFm: s.aprsDataFm ?? false,
+    logStationPowerWithAmp: s.logStationPowerWithAmp ?? false,
     pcMic: s.pcMic ?? false,
     pcMicDevice: s.pcMicDevice ?? '',
     pcMicGainDb: s.pcMicGainDb ?? 0,
@@ -10028,6 +10029,21 @@ export function SettingsPanel({
                   />
                   <span className="settings-hint">{t('settings.digital.stationPower.hint')}</span>
                 </div>
+                {/* #534. Beside Station power because it logs that figure. Per radio (it rides the
+                    radio patch); LOGGING ONLY — nothing here touches RF power or keying. */}
+                <label className="settings-field">
+                  <span className="settings-label">{t('settings.digital.stationPowerWithAmp.label')}</span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.logStationPowerWithAmp ?? false}
+                    className={`toggle${form.logStationPowerWithAmp ? ' on' : ''}`}
+                    onClick={() => updateBool('logStationPowerWithAmp', !form.logStationPowerWithAmp)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                  <span className="settings-hint">{t('settings.digital.stationPowerWithAmp.hint')}</span>
+                </label>
                 {/* Units moved to Station ▸ Operator & Radio (#248) — it is app-wide. */}
               </div>
             </div>

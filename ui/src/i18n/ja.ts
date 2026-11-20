@@ -6237,6 +6237,8 @@ export const JA: PartialCatalog = {
   "settings.digital.harq.hint": "オン（デフォルト）= デコードに失敗した弱いフレームを再送分と合成して復元し（RV0+RV1+RV2）、応答のないQSOオーバーでは冗長度を段階的に上げます。オフ = RV0のみ（各フレームを単独でデコード）。",
   "settings.digital.clockCheck.label": "時刻チェック (NTP)",
   "settings.digital.clockCheck.hint": "PCの時計を公開NTPサーバーと照合し、そのずれを補正します。TempoFast/TempoDeepはUTCのスロットに同期して動くため、Nexusは測定したずれの分だけ自身の送信・デコードウィンドウをずらし、時計が狂っていても本来のUTCグリッド上に乗るようにします。適用中の値はトップバーに表示されます。完全オフラインで運用する場合はオフにしてください（ネットワークアクセスなし）。その場合は最後の測定値が期限切れになるまで補正を続けます。",
+  "settings.digital.stationPowerWithAmp.label": "Nexusが読めないアンプを接続中：局の出力をログに記録",
+  "settings.digital.stationPowerWithAmp.hint": "この無線機の設定です。Nexusは無線機が測定した出力を記録しますが、読めないアンプ（Icom IC-PW2など）の後ろではそれはドライブ出力にすぎません。オンにすると、交信には上の局の出力が記録されます。ログのみの設定で、出力やキーイングは変わりません。",
   "settings.digital.stationPower.label": "局の出力 (W)",
   "settings.digital.stationPower.hint": "ワット単位の送信出力です。各交信の送信出力（ADIF TX_PWR）として記録され、Journeyのmiles-per-watt実績とQRP実績の解除にも使われます。不明な場合は空欄のままにしてください。",
   "settings.digital.units.label": "単位",

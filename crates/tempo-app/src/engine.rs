@@ -19040,7 +19040,19 @@ impl Engine {
     /// Otherwise the watts the operator gave Settings ▸ Station power, and nothing when none is
     /// set: a radio that reports no forward power, or no over Nexus saw. Never derived from the
     /// rig's power slider: that is a fraction of a rated output nobody may have entered.
+    ///
+    /// ⭐ AN AMPLIFIER NEXUS CANNOT READ (an IC-PW2 behind an IC-7300, #534) leaves the radio
+    /// measuring only its drive, so with the radio's switch for it on
+    /// ([`crate::settings::RadioProfile::log_station_power_with_amp`]) Station power is logged
+    /// ahead of the measured figure. Logging only: nothing on the transmit path reads this.
     fn log_power_now(&self, start_unix: Option<u64>) -> Option<f64> {
+        let station = self
+            .settings
+            .station_power_w
+            .filter(|w| w.is_finite() && *w > 0.0);
+        if self.settings.log_station_power_with_amp && station.is_some() {
+            return station;
+        }
         let measured = self
             .measured_over
             .as_ref()
@@ -19050,11 +19062,7 @@ impl Engine {
                 })
             })
             .map(|over| watts_for_log(over.peak_w));
-        measured.or_else(|| {
-            self.settings
-                .station_power_w
-                .filter(|w| w.is_finite() && *w > 0.0)
-        })
+        measured.or(station)
     }
 
     /// The power a contest row records (`LoggedQso::tx_power`): [`Self::log_power_now`] as the
@@ -55861,6 +55869,43 @@ mod tests {
         assert_eq!(power("K9AAA"), Some(5.0), "the record's own power wins");
     }
 
+    /// ⭐ An amplifier Nexus cannot read (an IC-PW2 behind an IC-7300) leaves the radio measuring
+    /// its own ~8 W of drive, and that is what was logged. With the radio's "an amplifier I can't
+    /// read is inline" switch on, a contact logs Settings ▸ Station power instead — in a contest
+    /// row too — and the switch is off by default, so the radio's figure still wins without it.
+    #[test]
+    fn an_unread_amplifier_inline_logs_station_power_not_the_exciters() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.station_power_w = Some(500.0);
+        assert!(!e.settings.log_station_power_with_amp, "off by default");
+        let barefoot = e.qso_record("W9XYZ".into(), None, None);
+        an_over(&mut e, &[8.1, 8.0]);
+        e.log_qso(barefoot);
+        e.settings.log_station_power_with_amp = true;
+        let amped = e.qso_record("K9AMP".into(), None, None);
+        an_over(&mut e, &[8.1, 8.0]);
+        e.log_qso(amped);
+        assert_eq!(e.fd_row_power(), "500", "a contest row logs it too");
+        let mut own = e.qso_record("K9AAA".into(), None, None);
+        own.tx_power = Some(5.0);
+        e.log_qso(own);
+        // No Station power set: the switch has nothing to log, so the radio's figure stands.
+        e.settings.station_power_w = None;
+        let unset = e.qso_record("K9UNS".into(), None, None);
+        an_over(&mut e, &[8.1]);
+        e.log_qso(unset);
+        let log = e.stored_log();
+        let power = |call: &str| log.iter().find(|r| r.call == call).and_then(|r| r.tx_power);
+        assert_eq!(power("W9XYZ"), Some(8.1), "switch off: the radio's figure");
+        assert_eq!(power("K9AMP"), Some(500.0), "switch on: Station power");
+        assert_eq!(
+            power("K9AAA"),
+            Some(5.0),
+            "the record's own power still wins"
+        );
+        assert_eq!(power("K9UNS"), Some(8.1));
+    }
+
     /// Where the radio's figure is not this contact's power, the log falls back to Settings ▸
     /// Station power and never writes the reading: a tune carrier, an over that ended well before
     /// the contact started, an amplifier on the radio (the radio's power is its drive), and an
@@ -72904,6 +72949,7 @@ mod tests {
             data_modes_plain_ssb: p.data_modes_plain_ssb,
             sstv_hold_data_submode: p.sstv_hold_data_submode,
             aprs_data_fm: p.aprs_data_fm,
+            log_station_power_with_amp: Some(p.log_station_power_with_amp),
             pc_mic: None,
             pc_mic_device: None,
             pc_mic_gain_db: None,

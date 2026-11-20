@@ -9936,6 +9936,8 @@ export const EN = {
   'settings.digital.clockCheck.label': 'Clock check (NTP)',
   'settings.digital.clockCheck.hint':
     'Measure your PC clock against public NTP servers and CORRECT for it: TempoFast/TempoDeep are slot-timed to UTC, and Nexus shifts its own transmit and decode windows by the measured offset so they land on the true UTC grid even when the clock is off. The top bar shows what is being applied. Turn off for fully-offline operation (no network calls) — the last measurement then keeps steering until it ages out.',
+  'settings.digital.stationPowerWithAmp.label': "An amplifier Nexus can't read is inline: log my Station power",
+  'settings.digital.stationPowerWithAmp.hint': "For this radio. Nexus logs the power the radio measures, and behind an amplifier it can't read (an Icom IC-PW2, say) that is only the radio's drive. Turn this on and contacts log the Station power above instead. Logging only: your power and keying are unchanged.",
   'settings.digital.stationPower.label': 'Station power (W)',
   'settings.digital.stationPower.hint':
     'Your transmit power in watts — logged on every contact as its power (ADIF TX_PWR), and unlocks the Journey miles-per-watt & QRP feats. Leave blank if unknown.',

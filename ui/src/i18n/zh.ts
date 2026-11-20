@@ -9129,6 +9129,8 @@ export const ZH: PartialCatalog = {
   "settings.digital.harq.hint": "开启（默认）= 失败的弱帧通过联合合并其重传（RV0+RV1+RV2）来恢复，未被确认的 QSO 发射会提高冗余度。关闭 = 仅 RV0（每帧独立解码）。",
   "settings.digital.clockCheck.label": "时钟校准（NTP）",
   "settings.digital.clockCheck.hint": "用公共 NTP 服务器测量本机时钟并据此校正：TempoFast/TempoDeep 按 UTC 划分时隙，Nexus 会按测得的偏移量平移自己的发射与解码窗口，即使时钟不准也能落在真实 UTC 栅格上。顶栏会显示当前应用的校正。完全离线运行时请关闭（不发起任何网络请求）— 最后一次测量会继续引导，直到过期。",
+  "settings.digital.stationPowerWithAmp.label": "接有 Nexus 无法读取的功放：记录我的电台功率",
+  "settings.digital.stationPowerWithAmp.hint": "针对这部电台。Nexus 记录电台测得的功率，而在它无法读取的功放（例如 Icom IC-PW2）之后，那只是激励功率。开启后，通联改为记录上面的电台功率。仅影响日志：功率和键控不变。",
   "settings.digital.stationPower.label": "台站功率（W）",
   "settings.digital.stationPower.hint": "你的发射功率（瓦）— 会作为功率记录到每次联络（ADIF TX_PWR），并解锁“旅程”中的每瓦英里数与 QRP 成就。不知道可留空。",
   "settings.digital.units.label": "单位",

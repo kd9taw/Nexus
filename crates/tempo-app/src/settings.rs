@@ -2331,6 +2331,10 @@ pub struct Settings {
     /// so nobody's working APRS changes (#393). Per radio: it depends on how that rig is set.
     #[serde(default)]
     pub aprs_data_fm: bool,
+    /// Log Settings ▸ Station power instead of the radio's measured power, for the active radio
+    /// (flat mirror — see [`RadioProfile::log_station_power_with_amp`]). Default off.
+    #[serde(default)]
+    pub log_station_power_with_amp: bool,
     /// Feed THIS computer's microphone to the radio while the operator holds Phone's PTT: its audio
     /// goes out by the radio's transmit audio route (the sound card's output, or the TCI connection
     /// on a TCI radio) and the radio is keyed as for any audio Nexus plays. OFF by default, so a
@@ -5642,6 +5646,13 @@ pub struct RadioProfile {
     /// so nobody's working APRS changes (#393). Per radio: it depends on how that rig is set.
     #[serde(default)]
     pub aprs_data_fm: bool,
+    /// "An amplifier Nexus can't read is inline: log my Station power" — a contact logs
+    /// Settings ▸ Station power (`station_power_w`) as its power instead of the forward power
+    /// the radio measured, which behind an amplifier Nexus does not read is only the drive
+    /// (#534). Off by default. LOGGING ONLY: nothing on the transmit path reads it. Per
+    /// radio: the amplifier is behind THAT radio.
+    #[serde(default)]
+    pub log_station_power_with_amp: bool,
     /// Feed THIS computer's microphone to the radio while the operator holds Phone's PTT: its audio
     /// goes out by the radio's transmit audio route (the sound card's output, or the TCI connection
     /// on a TCI radio) and the radio is keyed as for any audio Nexus plays. OFF by default, so a
@@ -5856,6 +5867,10 @@ pub struct RadioProfilePatch {
     /// so nobody's working APRS changes (#393). Per radio: it depends on how that rig is set.
     #[serde(default)]
     pub aprs_data_fm: bool,
+    /// See `RadioProfile::log_station_power_with_amp`. An `Option`, like the microphone's: `None` (a form from
+    /// before it) leaves the radio's stored value alone.
+    #[serde(default)]
+    pub log_station_power_with_amp: Option<bool>,
     /// See `RadioProfile::pc_mic` and the two fields after it. `Option`s, like the TCI fields:
     /// `None` leaves the radio's stored value alone, so a form from before them neither fails its
     /// Save nor turns the computer's microphone off.
@@ -6024,6 +6039,9 @@ impl RadioProfilePatch {
         p.data_modes_plain_ssb = self.data_modes_plain_ssb || plain_ssb_by_model;
         p.sstv_hold_data_submode = self.sstv_hold_data_submode;
         p.aprs_data_fm = self.aprs_data_fm;
+        if let Some(v) = self.log_station_power_with_amp {
+            p.log_station_power_with_amp = v;
+        }
         if let Some(v) = self.pc_mic {
             p.pc_mic = v;
         }
@@ -6181,6 +6199,7 @@ impl Default for RadioProfile {
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
             aprs_data_fm: false,
+            log_station_power_with_amp: false,
             pc_mic: false,
             pc_mic_device: String::new(),
             pc_mic_gain_db: 0.0,
@@ -7194,6 +7213,7 @@ impl Default for Settings {
             link_refusals: crate::rig_modes::LinkRefusals::default(),
             sstv_hold_data_submode: false,
             aprs_data_fm: false,
+            log_station_power_with_amp: false,
             pc_mic: false,
             pc_mic_device: String::new(),
             pc_mic_gain_db: 0.0,
@@ -7710,6 +7730,7 @@ impl Settings {
             data_modes_plain_ssb: self.data_modes_plain_ssb,
             sstv_hold_data_submode: self.sstv_hold_data_submode,
             aprs_data_fm: self.aprs_data_fm,
+            log_station_power_with_amp: self.log_station_power_with_amp,
             pc_mic: self.pc_mic,
             pc_mic_device: self.pc_mic_device.clone(),
             pc_mic_gain_db: self.pc_mic_gain_db,
@@ -8224,6 +8245,7 @@ impl Settings {
         self.data_modes_plain_ssb = p.data_modes_plain_ssb;
         self.sstv_hold_data_submode = p.sstv_hold_data_submode;
         self.aprs_data_fm = p.aprs_data_fm;
+        self.log_station_power_with_amp = p.log_station_power_with_amp;
         self.pc_mic = p.pc_mic;
         self.pc_mic_device = p.pc_mic_device;
         self.pc_mic_gain_db = p.pc_mic_gain_db;
@@ -8286,6 +8308,7 @@ impl Settings {
             data_modes_plain_ssb,
             sstv_hold_data_submode,
             aprs_data_fm,
+            log_station_power_with_amp,
             pc_mic,
             pc_mic_device,
             pc_mic_gain_db,
@@ -8336,6 +8359,7 @@ impl Settings {
             self.data_modes_plain_ssb,
             self.sstv_hold_data_submode,
             self.aprs_data_fm,
+            self.log_station_power_with_amp,
             self.pc_mic,
             self.pc_mic_device.clone(),
             self.pc_mic_gain_db,
@@ -8387,6 +8411,7 @@ impl Settings {
             p.data_modes_plain_ssb = data_modes_plain_ssb;
             p.sstv_hold_data_submode = sstv_hold_data_submode;
             p.aprs_data_fm = aprs_data_fm;
+            p.log_station_power_with_amp = log_station_power_with_amp;
             p.pc_mic = pc_mic;
             p.pc_mic_device = pc_mic_device;
             p.pc_mic_gain_db = pc_mic_gain_db;
@@ -10057,6 +10082,7 @@ mod tests {
             data_modes_plain_ssb: true,
             sstv_hold_data_submode: true,
             aprs_data_fm: true,
+            log_station_power_with_amp: Some(true),
             pc_mic: Some(true),
             pc_mic_device: Some("Desk Mic".into()),
             pc_mic_gain_db: Some(6.0),
@@ -10480,6 +10506,7 @@ mod tests {
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
             aprs_data_fm: false,
+            log_station_power_with_amp: None,
             pc_mic: None,
             pc_mic_device: None,
             pc_mic_gain_db: None,
@@ -10648,6 +10675,7 @@ mod tests {
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
             aprs_data_fm: false,
+            log_station_power_with_amp: None,
             pc_mic: None,
             pc_mic_device: None,
             pc_mic_gain_db: None,
@@ -11003,6 +11031,7 @@ mod tests {
             data_modes_plain_ssb: p.data_modes_plain_ssb,
             sstv_hold_data_submode: p.sstv_hold_data_submode,
             aprs_data_fm: p.aprs_data_fm,
+            log_station_power_with_amp: Some(p.log_station_power_with_amp),
             pc_mic: Some(p.pc_mic),
             pc_mic_device: Some(p.pc_mic_device.clone()),
             pc_mic_gain_db: Some(p.pc_mic_gain_db),
