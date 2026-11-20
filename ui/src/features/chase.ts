@@ -13,6 +13,8 @@ export interface ChaseTarget {
   entity: string
   band: string
   mode: string
+  /** The mode it was heard in ('FT8'), or null when its source named only the class. */
+  exactMode: string | null
   freqMhz: number | null
   tags: NeedTag[]
   headline: string
@@ -26,6 +28,14 @@ export interface ChaseTarget {
   /** Seconds since the most recent admitting evidence, or null. */
   ageSecs: number | null
   evidence: string | null
+}
+
+/** Where a chase row's station is: the spot's frequency and mode ("14.074 FT8") when the spot
+ *  carried a frequency, else just its band ("20m") — a DXpedition card or a band-level need. A
+ *  no-break space holds the two together: the row's line wraps in a narrow box, never between them. */
+export function chaseWhere(band: string, freqMhz: number | null, mode: string | null): string {
+  if (freqMhz == null) return band
+  return mode ? `${freqMhz.toFixed(3)}\u00a0${mode}` : freqMhz.toFixed(3)
 }
 
 const WORKABILITY_RANK: Record<string, number> = {
@@ -62,6 +72,7 @@ export function buildChaseTargets(
       entity: n.entity,
       band: n.band,
       mode: n.mode,
+      exactMode: n.exactMode ?? null,
       freqMhz: n.freqMhz,
       tags: n.tags,
       headline: n.headline,

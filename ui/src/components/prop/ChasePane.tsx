@@ -14,7 +14,7 @@ import { useRef } from 'react'
 import type { PaneContext } from '../connect/paneContext'
 import { NEED_CHIP } from '../connect/paneFormat'
 import { useChaseSplit } from './chaseSplit'
-import { buildChaseTargets, type ChaseTarget } from '../../features/chase'
+import { buildChaseTargets, chaseWhere, type ChaseTarget } from '../../features/chase'
 import { useCallBearings, type CallAim } from '../../features/callBearing'
 import { azimuthLabel, azimuthTitle } from '../../grid'
 import { t } from '../../i18n'
@@ -28,26 +28,28 @@ function ageLabel(secs: number | null): string {
 }
 
 /** openness → a short plain phrase + a css state class for the row's accent. The
- * workability word and the window are the backend's own, interpolated verbatim. */
+ * workability word and the window are the backend's own, interpolated verbatim. The row names the
+ * spot's frequency and mode where it has one (`chaseWhere`), its band where not. */
 function openPhrase(target: ChaseTarget): { text: string; cls: string } {
+  const band = chaseWhere(target.band, target.freqMhz, target.exactMode ?? target.mode)
   if (target.openNow)
     return {
-      text: t('chase.open.now', { band: target.band, workability: target.workability }),
+      text: t('chase.open.now', { band, workability: target.workability }),
       cls: 'open',
     }
   if (target.workability === 'Marginal')
     return {
-      text: `${t('chase.open.marginal', { band: target.band })}${
+      text: `${t('chase.open.marginal', { band })}${
         target.window ? t('chase.open.best', { window: target.window }) : ''
       }`,
       cls: 'marginal',
     }
   if (target.window)
     return {
-      text: t('chase.open.closed', { band: target.band, window: target.window }),
+      text: t('chase.open.closed', { band, window: target.window }),
       cls: 'closed',
     }
-  return { text: target.band, cls: 'unknown' }
+  return { text: band, cls: 'unknown' }
 }
 
 /** A row's heading, drawn as every board draws one (`azimuthLabel`/`azimuthTitle`: `~` and a
