@@ -2,7 +2,7 @@
 // string comes from the catalog; a hardcoded one fails CI. What does NOT: the band and mode names
 // in the sub-heading and the `—` placeholders, which are data and a glyph, not prose.
 
-import { useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from 'react'
+import { useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type RefObject } from 'react'
 import type { LoggedQso } from '../types'
 import { t } from '../i18n'
 import { FtStopControl } from './FtStopControl'
@@ -10,6 +10,7 @@ import { STOP_CONTROL } from './StopLayer'
 import { upperTyped } from '../typedInput'
 import { IotaPrefillField, iotaInvalid, iotaToLog, useIotaIslandPick, useIotaPrefill, type IotaOfferData } from './Iota'
 import { withIotaIsland } from '../features/iotaGroups'
+import { surfaceGet, surfaceSet } from '../features/windowScope'
 
 /** WSJT-X's Log QSO dialog's propagation modes (`widgets/logqso.cpp`, `prop_modes`): the ADIF
  *  `PROP_MODE` enumeration values, in its order. SAT is not here: it is offered only on a contact
@@ -66,7 +67,28 @@ function propModeName(code: string): string {
 }
 
 /** The room the card keeps from a stop control, and from the window's edge (CSS px). */
-const CLEAR = 8
+export const CLEAR = 8
+
+/** The card's stock width, and the narrowest the operator may make it (CSS px, #551). */
+export const LOG_PROMPT_STOCK_W = 420
+/** Where the width the operator dragged it to is kept, per window. */
+const WIDTH_KEY = 'nexus.logPrompt.width'
+
+/** A width (the one saved, or one being dragged to) fitted into a window `winW` CSS px wide: no
+ *  narrower than the stock width, no wider than the window less its edge room. A window narrower
+ *  than the stock card gets the window (the CSS cap narrows it further, as it always did). Not a
+ *  number: the stock width. */
+export function fitLogPromptWidth(px: number | null, winW: number): number {
+  const want = px != null && Number.isFinite(px) ? Math.max(LOG_PROMPT_STOCK_W, Math.round(px)) : LOG_PROMPT_STOCK_W
+  return winW > 0 ? Math.max(Math.min(want, winW - 2 * CLEAR), Math.min(LOG_PROMPT_STOCK_W, winW - 2 * CLEAR)) : want
+}
+
+/** The width saved, as a number, or null. */
+function savedWidth(): number | null {
+  const v = surfaceGet(WIDTH_KEY)
+  const n = v == null || v.trim() === '' ? NaN : Number(v)
+  return Number.isFinite(n) ? n : null
+}
 
 /** A box in the window's own (visual) pixels. */
 interface Rect {
@@ -91,7 +113,7 @@ interface Placement {
  * So while the card is open it measures every stop control on screen (`STOP_CONTROL`, never the card's own and never a
  * mirror) and keeps to the largest room of the window that holds none of them: above the highest stop, below the
  * lowest, left of the leftmost, right of the rightmost, or between two of them side by side. The room chosen gives the
- * card the most area: its width up to its own 420 px, the room's whole height. Not its content's height: a card that
+ * card the most area: its width up to its own (420 px stock, or what the operator widened it to), the room's whole height. Not its content's height: a card that
  * grows (the IOTA box's island picker) never hops to another room. The room is the backdrop's padding, so the backdrop's
  * own centring stands the card in it whatever its content does; the card is no wider than the room and no taller (it
  * scrolls inside, as it did under its window-height cap). With no stop on screen (the Logbook, Settings, a test with
@@ -103,7 +125,7 @@ interface Placement {
  * the prompt's own move, so a measure cannot set off another. The card is the same element throughout, so the box the
  * operator is typing in keeps the focus and the card its scroll.
  */
-function useClearOfStops(backdrop: RefObject<HTMLDivElement | null>, card: RefObject<HTMLDivElement | null>): Placement | undefined {
+function useClearOfStops(backdrop: RefObject<HTMLDivElement | null>, card: RefObject<HTMLDivElement | null>, cardW: number): Placement | undefined {
   const [place, setPlace] = useState<Placement | undefined>(undefined)
   useLayoutEffect(() => {
     const b = backdrop.current
@@ -139,7 +161,7 @@ function useClearOfStops(backdrop: RefObject<HTMLDivElement | null>, card: RefOb
         if (r.left - g > reach + g) rooms.push({ left: reach + g, top: T, right: r.left - g, bottom: B })
         reach = Math.max(reach, r.right)
       }
-      const wantW = 420 * z
+      const wantW = cardW * z
       const area = (r: Rect) => Math.max(0, Math.min(r.right - r.left, wantW)) * Math.max(0, r.bottom - r.top)
       const best = rooms.reduce((a, d) => (area(d) > area(a) ? d : a))
       const px = (v: number) => Math.max(0, Math.floor(v / z))
@@ -206,7 +228,7 @@ function useClearOfStops(backdrop: RefObject<HTMLDivElement | null>, card: RefOb
       mo.disconnect()
       window.removeEventListener('resize', later)
     }
-  }, [backdrop, card])
+  }, [backdrop, card, cardW])
   return place
 }
 
@@ -288,7 +310,42 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogg
 
   const backdropRef = useRef<HTMLDivElement>(null)
   const cardRef = useRef<HTMLDivElement>(null)
-  const place = useClearOfStops(backdropRef, cardRef)
+  // THE WIDTH THE OPERATOR GAVE IT (#551): the stock 420 px until they drag the edge handle. The width
+  // saved is fitted into this window when the prompt opens (the layout contract: a size kept from a
+  // bigger screen is clamped on load, not only while dragging), before the first paint.
+  const [cardW, setCardW] = useState(LOG_PROMPT_STOCK_W)
+  useLayoutEffect(() => {
+    setCardW(fitLogPromptWidth(savedWidth(), backdropRef.current?.offsetWidth ?? 0))
+  }, [])
+  const place = useClearOfStops(backdropRef, cardRef, cardW)
+  // The edge handle. The card stands centred, so its edge moves half of what its width does: a drag
+  // of d widens it by 2d, and the edge stays under the pointer. In the app's zoom (`z`, the window's
+  // pixels per CSS px). The pointer is captured, and the press never takes the focus (preventDefault),
+  // so the box being typed in keeps it; the handle is no Tab stop.
+  const drag = useRef<{ x: number; w: number; z: number; win: number } | null>(null)
+  const widenStart = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    const b = backdropRef.current
+    const win = b?.offsetWidth ?? 0
+    const r = b?.getBoundingClientRect()
+    const z = r && r.width > 0 && win > 0 ? r.width / win : 1
+    drag.current = { x: e.clientX, w: cardW, z, win }
+    e.currentTarget.setPointerCapture?.(e.pointerId)
+  }
+  const widenMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const d = drag.current
+    if (!d) return
+    setCardW(fitLogPromptWidth(d.w + (2 * (e.clientX - d.x)) / d.z, d.win))
+  }
+  const widenEnd = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const d = drag.current
+    if (!d) return
+    drag.current = null
+    const w = fitLogPromptWidth(d.w + (2 * (e.clientX - d.x)) / d.z, d.win)
+    setCardW(w)
+    surfaceSet(WIDTH_KEY, String(w))
+  }
 
   // Watts, as the log writes TX_PWR; anything that is not a positive number sends nothing.
   const parsePower = (v: string): number | null => {
@@ -315,134 +372,155 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogg
 
   return (
     <div ref={backdropRef} className="logconfirm-backdrop" role="dialog" aria-modal="true" aria-label={t('logPrompt.aria')} style={place?.backdrop}>
-      <div ref={cardRef} className="logconfirm log-prompt" style={place?.card}>
-        <div className="logconfirm-head">
-          <h2>{t('logPrompt.title')}</h2>
-          <span className="logconfirm-sub">
-            {record.band} · {record.mode}
-          </span>
+      {/* The frame holds the card and its edge handle: the card scrolls, the frame does not, so the
+          handle stays on the card's edge however far the card is scrolled. */}
+      <div className="logconfirm-frame">
+        <div
+          ref={cardRef}
+          className="logconfirm log-prompt"
+          style={{ '--log-prompt-w': `${cardW}px`, ...place?.card } as CSSProperties}
+        >
+          <div className="logconfirm-head">
+            <h2>{t('logPrompt.title')}</h2>
+            <span className="logconfirm-sub">
+              {record.band} · {record.mode}
+            </span>
+          </div>
+
+          {/* The queue behind this contact. An operator who logs one and sees another appear
+              should have been told it was coming. */}
+          {waiting > 0 && (
+            <p className="logconfirm-waiting" role="status">
+              {t('logPrompt.waiting', { count: waiting })}
+            </p>
+          )}
+
+          {/* A contact the queue logged at its cap, unreviewed. It is in the log, the connectors
+              will upload it and LoTW will carry it under the operator's certificate, so this is a
+              WARNING, not a note — and it belongs here rather than only in the Connections log,
+              because this popup is where the operator comes back to. */}
+          {autoLogged > 0 && (
+            <p className="logconfirm-autologged" role="alert">
+              {t('logPrompt.autoLogged', { count: autoLogged })}
+            </p>
+          )}
+
+          <div className="logconfirm-grid">
+            <label>
+              <span>{t('logPrompt.call.label')}</span>
+              <input
+                className="mono"
+                value={call}
+                autoFocus
+                onChange={(e) => setCall(upperTyped(e.target))}
+              />
+            </label>
+            <label>
+              <span>{t('logPrompt.grid.label')}</span>
+              <input
+                className="mono"
+                value={grid}
+                maxLength={6}
+                placeholder="—"
+                onChange={(e) => setGrid(upperTyped(e.target))}
+              />
+            </label>
+            <label>
+              <span>{t('logPrompt.rstSent.label')}</span>
+              <input
+                className="mono"
+                value={rstSent}
+                placeholder="—"
+                onChange={(e) => setRstSent(e.target.value)}
+              />
+            </label>
+            <label>
+              <span>{t('logPrompt.rstRcvd.label')}</span>
+              <input
+                className="mono"
+                value={rstRcvd}
+                placeholder="—"
+                onChange={(e) => setRstRcvd(e.target.value)}
+              />
+            </label>
+            <label>
+              <span>{t('logPrompt.power.label')}</span>
+              <input
+                className="mono"
+                value={power}
+                inputMode="decimal"
+                placeholder="—"
+                onChange={(e) => setPower(e.target.value)}
+              />
+            </label>
+            <label>
+              <span>{t('logPrompt.operator.label')}</span>
+              <input
+                className="mono"
+                value={operator}
+                placeholder="—"
+                onChange={(e) => setOperator(upperTyped(e.target))}
+              />
+            </label>
+            <label>
+              <span>{t('logPrompt.myGrid.label')}</span>
+              <input
+                className="mono"
+                value={myGrid}
+                maxLength={10}
+                placeholder="—"
+                onChange={(e) => setMyGrid(upperTyped(e.target))}
+              />
+            </label>
+            <label className="logconfirm-propmode" title={t('logPrompt.propMode.hint')}>
+              <span>{t('logPrompt.propMode.label')}</span>
+              <select value={propMode} onChange={(e) => setPropMode(e.target.value)}>
+                <option value="">—</option>
+                {record.propMode === 'SAT' && (
+                  <option value="SAT">{propModeName('SAT')}</option>
+                )}
+                {PROP_MODES.map((code) => (
+                  <option key={code} value={code}>
+                    {propModeName(code)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="logconfirm-comment">
+              <span>{t('logPrompt.comment.label')}</span>
+              <input
+                value={comment}
+                placeholder="—"
+                onChange={(e) => setComment(e.target.value)}
+              />
+            </label>
+          </div>
+
+          <IotaPrefillField state={iotaPrefill} value={iota} island={{ value: island, onChange: setIsland }} />
+
+          <div className="logconfirm-actions" ref={actionsRef}>
+            {onStop && <FtStopControl onHaltTx={onStop} />}
+            <button type="button" className="logconfirm-discard" onClick={onDiscard}>
+              {t('logPrompt.discard')}
+            </button>
+            <button type="button" className="logconfirm-log" onClick={confirm} disabled={!call.trim() || iotaBad}>
+              {t('logPrompt.log')}
+            </button>
+          </div>
         </div>
-
-        {/* The queue behind this contact. An operator who logs one and sees another appear
-            should have been told it was coming. */}
-        {waiting > 0 && (
-          <p className="logconfirm-waiting" role="status">
-            {t('logPrompt.waiting', { count: waiting })}
-          </p>
-        )}
-
-        {/* A contact the queue logged at its cap, unreviewed. It is in the log, the connectors
-            will upload it and LoTW will carry it under the operator's certificate, so this is a
-            WARNING, not a note — and it belongs here rather than only in the Connections log,
-            because this popup is where the operator comes back to. */}
-        {autoLogged > 0 && (
-          <p className="logconfirm-autologged" role="alert">
-            {t('logPrompt.autoLogged', { count: autoLogged })}
-          </p>
-        )}
-
-        <div className="logconfirm-grid">
-          <label>
-            <span>{t('logPrompt.call.label')}</span>
-            <input
-              className="mono"
-              value={call}
-              autoFocus
-              onChange={(e) => setCall(upperTyped(e.target))}
-            />
-          </label>
-          <label>
-            <span>{t('logPrompt.grid.label')}</span>
-            <input
-              className="mono"
-              value={grid}
-              maxLength={6}
-              placeholder="—"
-              onChange={(e) => setGrid(upperTyped(e.target))}
-            />
-          </label>
-          <label>
-            <span>{t('logPrompt.rstSent.label')}</span>
-            <input
-              className="mono"
-              value={rstSent}
-              placeholder="—"
-              onChange={(e) => setRstSent(e.target.value)}
-            />
-          </label>
-          <label>
-            <span>{t('logPrompt.rstRcvd.label')}</span>
-            <input
-              className="mono"
-              value={rstRcvd}
-              placeholder="—"
-              onChange={(e) => setRstRcvd(e.target.value)}
-            />
-          </label>
-          <label>
-            <span>{t('logPrompt.power.label')}</span>
-            <input
-              className="mono"
-              value={power}
-              inputMode="decimal"
-              placeholder="—"
-              onChange={(e) => setPower(e.target.value)}
-            />
-          </label>
-          <label>
-            <span>{t('logPrompt.operator.label')}</span>
-            <input
-              className="mono"
-              value={operator}
-              placeholder="—"
-              onChange={(e) => setOperator(upperTyped(e.target))}
-            />
-          </label>
-          <label>
-            <span>{t('logPrompt.myGrid.label')}</span>
-            <input
-              className="mono"
-              value={myGrid}
-              maxLength={10}
-              placeholder="—"
-              onChange={(e) => setMyGrid(upperTyped(e.target))}
-            />
-          </label>
-          <label className="logconfirm-propmode" title={t('logPrompt.propMode.hint')}>
-            <span>{t('logPrompt.propMode.label')}</span>
-            <select value={propMode} onChange={(e) => setPropMode(e.target.value)}>
-              <option value="">—</option>
-              {record.propMode === 'SAT' && (
-                <option value="SAT">{propModeName('SAT')}</option>
-              )}
-              {PROP_MODES.map((code) => (
-                <option key={code} value={code}>
-                  {propModeName(code)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="logconfirm-comment">
-            <span>{t('logPrompt.comment.label')}</span>
-            <input
-              value={comment}
-              placeholder="—"
-              onChange={(e) => setComment(e.target.value)}
-            />
-          </label>
-        </div>
-
-        <IotaPrefillField state={iotaPrefill} value={iota} island={{ value: island, onChange: setIsland }} />
-
-        <div className="logconfirm-actions" ref={actionsRef}>
-          {onStop && <FtStopControl onHaltTx={onStop} />}
-          <button type="button" className="logconfirm-discard" onClick={onDiscard}>
-            {t('logPrompt.discard')}
-          </button>
-          <button type="button" className="logconfirm-log" onClick={confirm} disabled={!call.trim() || iotaBad}>
-            {t('logPrompt.log')}
-          </button>
-        </div>
+        <div
+          className="logconfirm-widen"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t('logPrompt.widen.aria')}
+          title={t('logPrompt.widen.title')}
+          tabIndex={-1}
+          onPointerDown={widenStart}
+          onMouseDown={(e) => e.preventDefault()}
+          onPointerMove={widenMove}
+          onPointerUp={widenEnd}
+          onPointerCancel={widenEnd}
+        />
       </div>
     </div>
   )

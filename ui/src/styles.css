@@ -9645,8 +9645,15 @@ select optgroup {
   background: color-mix(in srgb, #000 55%, transparent);
   backdrop-filter: blur(2px);
 }
+/* The card and its edge handle (#551). The card scrolls; the frame round it does not, so the handle
+   stays on the card's edge however far it is scrolled. */
+.logconfirm-frame {
+  position: relative;
+}
+/* The width the operator dragged it to (`--log-prompt-w`, set by LogConfirm: 420 px stock, the saved
+   width fitted into the window on open), still never past the window. */
 .logconfirm {
-  width: min(420px, calc(0.92 * var(--vw-eff, 100vw)));
+  width: min(var(--log-prompt-w, 420px), calc(0.92 * var(--vw-eff, 100vw)));
   /* Zoom-corrected cap + internal scroll: uncapped under the centering backdrop, a short
      window pushed the head/actions symmetrically past both edges with nothing scrollable
      (same class as `.mv-packs`; --vh-eff because raw vh is zoom-blind). */
@@ -9661,6 +9668,32 @@ select optgroup {
   border: 1px solid var(--border);
   background: var(--bg-elev);
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+}
+.logconfirm-widen {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  /* Outside the card but for its 1 px border, so it never sits over the card's scrollbar; and no further
+     out than the 8 px the card keeps from a stop control (LogConfirm's CLEAR), so a card widened to fill
+     its room never puts the handle over a stop's edge. */
+  right: -8px;
+  width: 9px;
+  cursor: ew-resize;
+  touch-action: none;
+}
+.logconfirm-widen::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 3px;
+  height: 36px;
+  transform: translateY(-50%);
+  border-radius: 2px;
+  background: var(--border);
+}
+.logconfirm-widen:hover::after {
+  background: var(--accent);
 }
 .logconfirm-head {
   display: flex;

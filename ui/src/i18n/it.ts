@@ -292,6 +292,8 @@ export const IT: PartialCatalog = {
   "logPrompt.waiting": { "one": "{{count}} altro collegamento è in attesa dopo questo", "other": "{{count}} altri collegamenti sono in attesa dopo questo" },
   "logPrompt.autoLogged": { "one": "{{count}} collegamento è stato registrato senza la tua conferma: la coda era piena. È nel tuo log e i tuoi connettori lo caricheranno; il log Connessioni lo indica.", "other": "{{count}} collegamenti sono stati registrati senza la tua conferma: la coda era piena. Sono nel tuo log e i tuoi connettori li caricheranno; il log Connessioni li indica." },
   "logPrompt.discard": "Scarta",
+  "logPrompt.widen.aria": "Allarga la richiesta di log",
+  "logPrompt.widen.title": "Trascina per allargare la richiesta di log",
   "logPrompt.log": "Registra QSO",
   "status.newEntity.label": "Nuova entità (ATNO)",
   "status.newBand.label": "Nuova banda",

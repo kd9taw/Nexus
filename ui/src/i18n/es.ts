@@ -3384,6 +3384,8 @@ export const ES: PartialCatalog = {
     "other": "{{count}} contactos se anotaron sin tu confirmación: la cola estaba llena. Están en tu log y tus conexiones los subirán; el registro de conexiones los nombra."
   },
   "logPrompt.discard": "Descartar",
+  "logPrompt.widen.aria": "Ensanchar el aviso de registro",
+  "logPrompt.widen.title": "Arrastra para ensanchar el aviso de registro",
   "logPrompt.grid.label": "Locator",
   "logPrompt.log": "Anotar QSO",
   "logPrompt.rstRcvd.label": "RST rec.",

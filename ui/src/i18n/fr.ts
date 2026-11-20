@@ -3384,6 +3384,8 @@ export const FR: PartialCatalog = {
     "other": "{{count}} contacts ont été enregistrés sans votre confirmation : la file était pleine. Ils sont dans votre journal et vos connexions les enverront ; le journal des connexions les nomme."
   },
   "logPrompt.discard": "Abandonner",
+  "logPrompt.widen.aria": "Élargir l'invite de journal",
+  "logPrompt.widen.title": "Faites glisser pour élargir l'invite de journal",
   "logPrompt.grid.label": "Locator",
   "logPrompt.log": "Enregistrer QSO",
   "logPrompt.rstRcvd.label": "RST reçu",

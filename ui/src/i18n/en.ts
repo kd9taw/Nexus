@@ -3020,6 +3020,8 @@ export const EN = {
     other: '{{count}} contacts were logged without your confirmation — the queue was full. They are in your log and your connectors will upload them; the Connections log names them.',
   },
   'logPrompt.discard': 'Discard',
+  'logPrompt.widen.aria': 'Widen the log prompt',
+  'logPrompt.widen.title': 'Drag to widen the log prompt',
   'logPrompt.log': 'Log QSO',
 
   // ── Station roster (the Stations list and its cards) ────────────────────────────────
