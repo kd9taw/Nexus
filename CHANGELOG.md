@@ -9,8 +9,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **A sound when a contact is ready to log (#541).** Turn on **Log prompt sound** in Settings ▸ Appearance ▸ Accessibility & eyes-free and Nexus plays a short falling two-tone when the log prompt comes up after a contact, so you notice it without watching the screen. With the prompt off and Auto-log on, it plays when Auto-log logs the contact instead. It plays once per prompt, not again for the next contact waiting behind it, and never for a contact you log yourself. Off as it comes.
-
-### Added
 - **The log prompt can be made wider (#551).** Drag the small bar on the right edge of the log prompt to widen it, so long fields such as the comment have room. Nexus remembers the width; when the prompt next opens it is fitted into the window, so a width chosen on a large screen never runs off a smaller one. It never gets narrower than its usual size, and dragging the bar does not move the keyboard out of the box you were typing in.
 
 ### Changed
