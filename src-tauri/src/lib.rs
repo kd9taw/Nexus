@@ -38488,14 +38488,12 @@ fn hrdlog_health_of(
     }
 }
 
-/// WRL's twin of [`hrdlog_health_of`], with the same missing-`Err` history.
-/// Whether the auto-push leaves a WRL result owed, to be sent again: only "pending" (a rate
-/// limit or a busy server). A duplicate is WRL saying it already has the QSO — logged, so never
-/// re-sent.
+/// Whether the auto-push sends a WRL result again: only "pending" (rate limit, busy server).
 fn wrl_retries(result: &str) -> bool {
     result == "pending"
 }
 
+/// WRL's twin of [`hrdlog_health_of`], with the same missing-`Err` history.
 fn wrl_health_of(res: &Result<tempo_app::dto::WrlPushResultDto, String>) -> (bool, ConnDetail) {
     match res {
         Ok(r) => wrl_stamp(&r.result),
