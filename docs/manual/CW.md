@@ -200,13 +200,13 @@ had: Nexus never changes a profile of your own.
 | `{MYCALL}` | Your callsign (from Settings) |
 | `{NAME}` | Your name (`op_name` in Settings; empty by default until set) |
 | `{MYGRID}` | Your Maidenhead grid square |
-| `{RST}` | `5NN` (hardcoded 599 with cut numbers: 9→N, 0→T) |
+| `{RST}` | The report in the log strip's **Sent** box, in cut numbers (9→N, 0→T): `549` goes out as `54N`. `5NN` (599) when the box is empty |
 | `{EXCH}` | Your contest exchange without the report: class and section in Field Day, the running contest's own exchange otherwise, with the serial number where the contest has one. Empty outside a contest. |
 | `!` | The worked callsign: the call in His Call, which is also the log strip's call (typed in either, a decoded call you clicked, a Needed-board click, or until one of those the decoder's best guess) |
 
 If `{NAME}` or `!` is empty, the token collapses and surrounding whitespace is normalized — no double-space appears mid-message.
 
-**RST note:** the RST token always sends `5NN`; there is no per-QSO RST input.
+**RST note:** the RST token sends the log strip's **Sent** report for this contact, so the report keyed is the report logged; with the box empty it sends `5NN`.
 
 ### Custom macro profiles
 
@@ -234,7 +234,7 @@ once `send_cw` has answered; when the call fails (it never reached the station),
 will not take it), so the editor closes on those as before. One Send once is in flight at a
 time, and while it is, Esc is the full stop (`stop_cw` and `halt_tx`), not a cancel.
 
-**RST stays `5NN` regardless.** There is no per-QSO RST input, and a profile does not change that.
+**`{RST}` follows the log strip's Sent box in every profile** (`5NN` when it is empty). A key whose text spells out `5NN` sends `5NN`, whatever the box says.
 
 ---
 
