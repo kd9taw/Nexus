@@ -67,6 +67,12 @@
 //      notice's boxes and every stop control's visible box are read AT ONCE, before any scroll event or frame. The browser
 //      scrolls first and tells the page after, so a column placed after the fact stood over Stop TX for a frame (CW, Phone and
 //      JS8 at 700×800, 175 %, measured); a wheel or a dragged scrollbar can jump that far in one frame.
+//   15. A NOTICE RAISED AFTER A MOUSE CLICK IS SEEN BEFORE IT EXPIRES: on the same pages (and CW's at 1366×768, 175 %), the
+//      sticky notice gone, a REAL mouse click on the screen's own mode button (it keeps the focus a click gives, which is not
+//      keyboard focus), then a timed notice ("TX was turned back on", info, its own expiry): read every 100 ms until it is
+//      gone, it must be drawn at least once, by the column's and its own computed visibility, its opacity and a hit test on
+//      it. The column once stepped aside for ANY focused control under it, a clicked mode button among them, and the notice
+//      expired unseen (CW at 1366×768, 175 %, bottom right, measured).
 //   And JTTY's longest real refusal, on check 9 and in check 10: a real click on the words stays on the words (they once
 //   passed it to the hidden key behind them), the whole text is in its tooltip, and Tab stops behind it nowhere.
 // THE CONTROLS, run every time: the header forced to stick on top (z 9) at 900×600 / 175 % must make check 1 fail;
@@ -126,12 +132,54 @@ const TOAST_MESSAGE =
   'The radio stopped answering CAT on COM7 at 9600 baud. Nexus tried the other speeds and the second port and got no reply, so the dial and the band shown here may be stale until it answers again.'
 const TOAST_LABEL = 'Test CAT'
 const TOAST_SEEN = '.ui-toast { pointer-events: auto !important }'
-/** Check 13's pages: where a pop-up up broke check 4, 9 or 10 (measured). */
+/** Check 13's pages: where a pop-up up broke check 4, 9 or 10 (measured); the last, CW at 1366×768, 175 %, is where a notice
+ *  raised after a mouse click expired unseen (check 15). */
 const TOASTED = [['CW', 'cw', 'main.cw-cockpit', [FLOOR, '100']], ['CW', 'cw', 'main.cw-cockpit', [LAPTOP, '150']],
   ['Phone', 'phone', 'main.phone-cockpit', [offMatrix(700, 800), '175']], ['JS8', 'js8', 'main.js8-cockpit', [offMatrix(700, 800), '175']],
   ['CW', 'cw', 'main.cw-cockpit', [offMatrix(700, 800), '175']], ['PSK', 'psk', 'main.psk-cockpit', [offMatrix(900, 600), '175']],
   ['PSK', 'psk', 'main.psk-cockpit', [offMatrix(1280, 720), '175']], ['JTTY', 'jtty', 'main.jtty-cockpit', [offMatrix(900, 600), '175']],
-  ['JTTY', 'jtty', 'main.jtty-cockpit', [offMatrix(700, 800), '175']], ['JTTY', 'jtty', 'main.jtty-cockpit', [offMatrix(1280, 720), '175']]]
+  ['JTTY', 'jtty', 'main.jtty-cockpit', [offMatrix(700, 800), '175']], ['JTTY', 'jtty', 'main.jtty-cockpit', [offMatrix(1280, 720), '175']],
+  ['CW', 'cw', 'main.cw-cockpit', [LAPTOP, '175']]]
+/** Check 15: the clicked mode button's centre, the shell at the top and every notice gone (null where none can be clicked). */
+const clickTarget = (sel) => `(async () => {
+  const T = await import('/src/toast.ts')
+  let up = []
+  T.subscribeToasts((l) => { up = l })()
+  for (const t of up) T.dismissToast(t.id)
+  const s = document.querySelector(${JSON.stringify(sel)})
+  s.scrollTop = 0
+  document.activeElement?.blur?.()
+  await new Promise((r) => setTimeout(r, 300))
+  const hit = (b) => { const q = b.getBoundingClientRect(); if (q.width < 1 || q.height < 1) return null; const x = q.left + q.width / 2, y = q.top + q.height / 2
+    const h = document.elementFromPoint(x, y); return h != null && b.contains(h) ? { x, y } : null }
+  const own = [...document.querySelectorAll('button.mode-btn.active')].map(hit).find(Boolean)
+  return own ?? [...document.querySelectorAll('button.mode-btn')].map(hit).find(Boolean) ?? null
+})()`
+/** Check 15, after the click: the focus it left, then a timed notice read every 100 ms until it expires. */
+const NOTICE = 'TX was turned back on'
+const noticeSeen = `(async () => {
+  const a = document.activeElement
+  const focused = a && a.matches('button.mode-btn') ? (a.matches(':focus-visible') ? 'keyboard' : 'mouse') : 'none'
+  const T = await import('/src/toast.ts')
+  T.pushToast(${JSON.stringify(NOTICE)}, 'info')
+  const cut = (a, b) => { const q = { left: Math.max(a.left, b.left), top: Math.max(a.top, b.top), right: Math.min(a.right, b.right), bottom: Math.min(a.bottom, b.bottom) }; return q.right > q.left && q.bottom > q.top ? q : null }
+  const read = () => {
+    const vp = document.querySelector('.ui-toast-viewport')
+    const t = vp && [...vp.querySelectorAll('.ui-toast')].find((e) => e.textContent.includes(${JSON.stringify(NOTICE)}))
+    if (!t) return 'gone'
+    if (getComputedStyle(vp).visibility !== 'visible' || getComputedStyle(t).visibility !== 'visible') return 'hidden'
+    if (Number(getComputedStyle(t).opacity) < 0.5) return 'faint'
+    const q = cut(cut(t.getBoundingClientRect(), vp.getBoundingClientRect()) ?? { left: 0, top: 0, right: 0, bottom: 0 }, { left: 0, top: 0, right: innerWidth, bottom: innerHeight })
+    if (!q) return 'off'
+    const h = document.elementFromPoint((q.left + q.right) / 2, (q.top + q.bottom) / 2)
+    return h != null && t.contains(h) ? 'shown' : 'under'
+  }
+  const out = []
+  for (let i = 0; i < 300; i++) { await new Promise((r) => setTimeout(r, 100)); const v = read(); out.push(v); if (v === 'gone') break }
+  const n = {}
+  for (const v of out) n[v] = (n[v] ?? 0) + 1
+  return { focused, n, seen: out.includes('shown') }
+})()`
 /** Check 14: from each of seven settled scroll positions, a jump to each other one, read in the frame it lands. */
 const jumpCheck = (sel) => `(async () => {
   const s = document.querySelector(${JSON.stringify(sel)})
@@ -722,6 +770,20 @@ async function measureAt(route, sel, [size, scale], css = null, menus = true, co
       if (route === 'js8') m.hb = await hbRun(evaluate, call, sel)
       if (route === 'jtty') m.refusal = await refusalRun(evaluate, sel, async (x, y) => { await mouse('mouseMoved', x, y); await mouse('mousePressed', x, y, 1); await mouse('mouseReleased', x, y, 1) }, () => focusRun(evaluate, call, sel))
     }
+    // Check 15: a real mouse click on a mode button, the pointer moved off it, then a timed notice.
+    if (toast) {
+      const at = await evaluate(clickTarget(sel))
+      if (!at) m.click = { focused: 'no mode button to click', n: {}, seen: false }
+      else {
+        const mouse = (type, x, y, clickCount) => call('Input.dispatchMouseEvent', { type, x, y, ...(clickCount ? { button: 'left', clickCount } : {}) })
+        await mouse('mouseMoved', at.x, at.y)
+        await mouse('mousePressed', at.x, at.y, 1)
+        await mouse('mouseReleased', at.x, at.y, 1)
+        await mouse('mouseMoved', 2, Math.round(size.h ?? 600) - 2)
+        await sleep(1500)
+        m.click = await evaluate(noticeSeen)
+      }
+    }
     return m
   } finally {
     await browser.call('Target.closeTarget', { targetId })
@@ -812,8 +874,10 @@ try {
       throw new Error('no screen')
     }
     const menu = (mc) => (mc?.opened ? `${mc.ok}/${mc.n}${mc.covered.length ? `, ${mc.covered.length} covered` : ''}${mc.unreached?.length ? `, ${mc.unreached.length} unreached` : ''}` : 'not opened')
-    console.log(`digishell-probe: ${name} check 13: notice ${m.toastShown ? 'on screen' : 'NOT on screen'} · ⊞ Panels at top ${menu(m.menuTop)}, at end ${menu(m.menuEnd)} · check 8: ${coverLine(m.cover)}${m.focus ? ` · check 9: ${m.focus.n} focused, ${m.focus.hidden.length} hidden` : ''}${m.refusal ? ` · check 10: ${JSON.stringify(m.refusal)}` : ''} · check 14: ${m.jump.n} jumps, ${m.jump.hits.length} over a stop`)
+    console.log(`digishell-probe: ${name} check 13: notice ${m.toastShown ? 'on screen' : 'NOT on screen'} · ⊞ Panels at top ${menu(m.menuTop)}, at end ${menu(m.menuEnd)} · check 8: ${coverLine(m.cover)}${m.focus ? ` · check 9: ${m.focus.n} focused, ${m.focus.hidden.length} hidden` : ''}${m.refusal ? ` · check 10: ${JSON.stringify(m.refusal)}` : ''} · check 14: ${m.jump.n} jumps, ${m.jump.hits.length} over a stop · check 15: ${m.click.focused} focus, ${JSON.stringify(m.click.n)}`)
     if (!m.toastShown) red(`${name}: with nothing open and nothing focused, the notice is not on screen`)
+    if (m.click.focused !== 'mouse') red(`${name}: the mouse click did not leave mouse focus on a mode button (${m.click.focused}), so check 15 tests nothing`)
+    else if (!m.click.seen) red(`${name}: a notice raised after a mouse click on a mode button expired without ever being drawn (${JSON.stringify(m.click.n)})`)
     if (m.jump.hits.length) red(`${name}: in the frame a scroll lands, the notice stands over a stop control on ${m.jump.hits.length} of ${m.jump.n} jumps (${m.jump.hits.slice(0, 6).join(', ')})`)
     for (const r of [...reds(name, m), ...coverReds(name, m.cover), ...focusReds(name, m), ...pinReds(name, m)]) red(r)
   }
