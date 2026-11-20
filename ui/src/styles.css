@@ -9673,9 +9673,11 @@ select optgroup {
   position: absolute;
   top: 0;
   bottom: 0;
-  /* Outside the card but for its 1 px border, so it never sits over the card's scrollbar. */
-  right: -9px;
-  width: 10px;
+  /* Outside the card but for its 1 px border, so it never sits over the card's scrollbar; and no further
+     out than the 8 px the card keeps from a stop control (LogConfirm's CLEAR), so a card widened to fill
+     its room never puts the handle over a stop's edge. */
+  right: -8px;
+  width: 9px;
   cursor: ew-resize;
   touch-action: none;
 }
@@ -9683,7 +9685,7 @@ select optgroup {
   content: '';
   position: absolute;
   top: 50%;
-  left: 4px;
+  left: 3px;
   width: 3px;
   height: 36px;
   transform: translateY(-50%);

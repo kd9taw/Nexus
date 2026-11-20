@@ -10,7 +10,10 @@
 // in the app's zoom) measures `WIN` CSS px. The pixels in real Chrome are the stopabove probe's.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { LogConfirm } from './LogConfirm'
+import { CLEAR, LogConfirm } from './LogConfirm'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { chainOf, parseRules, winnerAt } from '../cssCascade'
 import { t } from '../i18n'
 import type { LoggedQso } from '../types'
 
@@ -93,5 +96,30 @@ describe('the log prompt can be widened', () => {
     fireEvent.pointerMove(handle, { clientX: 0, pointerId: 1 })
     expect(width()).toBe('420px')
     fireEvent.pointerUp(handle, { clientX: 0, pointerId: 1 })
+  })
+})
+
+// The card keeps CLEAR px from every stop control (useClearOfStops), and a card widened to fill its
+// room stands exactly CLEAR px from one. The handle sits on the card's right edge, partly outside it:
+// the part outside must fit in that clearance, or it stands over the stop's edge. Read off the
+// cascade winners for the rendered handle, not the sheet's text.
+describe('the edge handle stays inside the room the card keeps from a stop', () => {
+  it('reaches no further past the card than the clearance, and still overlaps the card', () => {
+    const sheet = readFileSync(resolve(process.cwd(), 'src', 'styles.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+    const rules = parseRules(sheet)
+    open()
+    const handle = document.querySelector('.logconfirm-widen')!
+    const px = (prop: string) => {
+      const v = winnerAt(rules, 'dark', chainOf(handle), prop)?.value.trim() ?? ''
+      expect(v, `${prop} is a px length`).toMatch(/^-?\d+(\.\d+)?px$/)
+      return parseFloat(v)
+    }
+    const right = px('right')
+    const width = px('width')
+    // The handle's box against the card's right edge at 0: from (-right - width) to -right.
+    const outside = -right
+    const inside = width - outside
+    expect(outside, 'px past the card\'s edge').toBeLessThanOrEqual(CLEAR)
+    expect(inside, 'px over the card (its border), so the handle meets the edge').toBeGreaterThan(0)
   })
 })

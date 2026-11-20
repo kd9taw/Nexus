@@ -67,7 +67,7 @@ function propModeName(code: string): string {
 }
 
 /** The room the card keeps from a stop control, and from the window's edge (CSS px). */
-const CLEAR = 8
+export const CLEAR = 8
 
 /** The card's stock width, and the narrowest the operator may make it (CSS px, #551). */
 export const LOG_PROMPT_STOCK_W = 420
