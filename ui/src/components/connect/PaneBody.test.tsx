@@ -124,6 +124,32 @@ describe('PaneBody — the body of every shared box', () => {
     }
   })
 
+  it('never draws an empty body while propagation is live and has nothing in it', async () => {
+    // The live half of the sweep above. With no snapshot every prop-fed box returns no panel, so a box
+    // whose panel is a component that draws nothing for an empty list was never read there: the frame
+    // gets an element and cannot fall back. A live snapshot with every list empty reads it.
+    const live = {
+      advisory: { headline: '', bands: [], banners: [] },
+      openings: [],
+      dxpeditions: { workableNow: [], active: [], upcoming: [] },
+      spaceWx: { sfi: 120, kp: 2, aIndex: 8, xrayClass: 'A0', flare: false },
+      source: 'live',
+      asOf: 1_760_000_000,
+      spots: [],
+      insights: [],
+      bestToRegion: [],
+      regionBand: [],
+    } as unknown as PaneContext['prop']
+    const blank: string[] = []
+    for (const e of SHARED_PANES) if ((await drawn(<PaneBody pane={e.pane} ctx={ctx({ prop: live })} />)) === '') blank.push(e.id)
+    expect(blank, 'these boxes drew an empty body with live propagation').toEqual([])
+    // Openings says its one line — the same words, from the same key, as with no snapshot at all.
+    const c = ctx({ prop: live })
+    expect(await drawn(<PaneBody pane="openings" ctx={c} />)).toBe(
+      await drawn(<p className="pane-basic">{paneById('openings')!.basic(c)}</p>),
+    )
+  })
+
   it('draws the boards themselves when the host lends their wiring', async () => {
     const lent = ctx({
       spotsFeed: { rows: [SPOT], board: { bandPlan: [], selectedCall: null, myGrid: 'EN52', onSelect: () => {}, onWork: () => {} } },
