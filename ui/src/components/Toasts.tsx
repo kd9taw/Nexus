@@ -10,7 +10,7 @@ import * as RToast from '@radix-ui/react-toast'
 import { t } from '../i18n'
 import { dismissToast, keepToast, subscribePopups, type Toast, type ToastKind } from '../toast'
 import { getPopupCorner, subscribePopupCorner, type PopupCorner } from '../features/popupCorner'
-import { TOAST_MIN_ROOM, toastRoom, type Box } from '../features/toastRoom'
+import { TOAST_MIN_ROOM, toastPlace, type Box } from '../features/toastRoom'
 import { TX_AVOID } from '../features/txSurfaces'
 
 /** #445: a toast swipes away toward the side of the window its corner is on. (The body is
@@ -26,6 +26,13 @@ const SWIPE: Record<PopupCorner, 'left' | 'right'> = {
 /** What the column keeps off (features/toastRoom.ts): every transmit surface the call card keeps
  *  off, and the update banner, which stands in the bottom-right corner above everything. */
 const TOAST_AVOID = `${TX_AVOID}, .update-banner`
+/** What the operator is using right now, which the column keeps off too where there is room and steps aside for where
+ *  there is not (features/toastRoom.ts `toastPlace`): an open ⊞ Panels menu or any open menu, and the notice parked on
+ *  a folded dock's keep row (JTTY's refusal, which stands above the row's own box). The focused control is the third,
+ *  read off `document.activeElement` (`FOCUSED`). */
+const IN_USE = '.panels-menu-pop, [role="menu"], .cockpit-txdock-keep > [role="status"]'
+/** A focused element the column keeps off: a control, never a pane or a scroller that took focus as a whole. */
+const FOCUSED = 'button, input, select, textarea, a[href], [role="button"], [role="menuitem"]'
 /** The column's distance from its corner's side edge, and from each surface: `--space-4`. */
 const GAP_PX = 16
 
@@ -33,7 +40,9 @@ const GAP_PX = 16
  *  touches none of them, as `--toast-inset` and `--toast-max-h` on the column (styles.css reads
  *  both, in every corner). In the column's own CSS px: `.app` is zoomed, and a fixed box's insets
  *  are scaled by that zoom, so window px are divided by it (read off the column itself), and the
- *  least room a toast needs is scaled up by it.
+ *  least room a toast needs is scaled up by it. What the operator is using (`IN_USE`, the focused control) comes
+ *  second: kept off where there is room, and where there is not the column steps aside (`data-step-aside`, styles.css)
+ *  while it would stand over it.
  *
  *  Again whenever the surfaces may have changed, only while a toast is up:
  *  · a window resize, and a scroll anywhere (a sticky strip moves);
@@ -42,7 +51,8 @@ const GAP_PX = 16
  *  · any change in the app's tree (a screen's first visit mounting its TX strip after the toasts, a
  *    notice that moves a strip without resizing it, a late update banner): a MutationObserver on
  *    `.app`, coalesced to one measure per frame. The column's own subtree is ignored, and a measure
- *    writes only what changed, so measuring never sets itself off again. */
+ *    writes only what changed, so measuring never sets itself off again;
+ *  · the focus moving (focusin and focusout on the document), coalesced the same way. */
 function useToastRoom(viewport: RefObject<HTMLOListElement | null>, corner: PopupCorner, shown: boolean) {
   useLayoutEffect(() => {
     const vp = viewport.current
@@ -53,6 +63,10 @@ function useToastRoom(viewport: RefObject<HTMLOListElement | null>, corner: Popu
         if (vp.style.getPropertyValue(name) !== '') vp.style.removeProperty(name)
       } else if (vp.style.getPropertyValue(name) !== value) vp.style.setProperty(name, value)
     }
+    const boxOf = (el: Element, into: Box[]) => {
+      const b = el.getBoundingClientRect()
+      if (b.width > 0 && b.height > 0) into.push({ left: b.left, top: b.top, right: b.right, bottom: b.bottom })
+    }
     const place = () => {
       const r = vp.getBoundingClientRect()
       const zoom = vp.offsetWidth > 0 && r.width > 0 ? r.width / vp.offsetWidth : 1
@@ -60,15 +74,22 @@ function useToastRoom(viewport: RefObject<HTMLOListElement | null>, corner: Popu
       for (const el of document.querySelectorAll(TOAST_AVOID)) {
         if (vp.contains(el)) continue
         ro?.observe(el)
-        const b = el.getBoundingClientRect()
-        if (b.width > 0 && b.height > 0) avoid.push({ left: b.left, top: b.top, right: b.right, bottom: b.bottom })
+        boxOf(el, avoid)
       }
-      const room =
+      const inUse: Box[] = []
+      for (const el of document.querySelectorAll(IN_USE)) if (!vp.contains(el)) boxOf(el, inUse)
+      const focused = document.activeElement
+      if (focused && focused !== document.body && !vp.contains(focused) && focused.matches(FOCUSED)) boxOf(focused, inUse)
+      const at =
         r.width > 0
-          ? toastRoom(corner, { w: window.innerWidth, h: window.innerHeight }, r.width, avoid, GAP_PX * zoom, TOAST_MIN_ROOM * zoom)
+          ? toastPlace(corner, { w: window.innerWidth, h: window.innerHeight }, r.width, avoid, inUse, GAP_PX * zoom, vp.scrollHeight * zoom, TOAST_MIN_ROOM * zoom)
           : null
+      const room = at?.room ?? null
       write('--toast-inset', room ? `${room.inset / zoom}px` : null)
       write('--toast-max-h', room ? `${room.maxHeight / zoom}px` : null)
+      if (at?.stepAside) {
+        if (!vp.hasAttribute('data-step-aside')) vp.setAttribute('data-step-aside', '')
+      } else if (vp.hasAttribute('data-step-aside')) vp.removeAttribute('data-step-aside')
     }
     let frame = 0
     const later = () => {
@@ -94,12 +115,18 @@ function useToastRoom(viewport: RefObject<HTMLOListElement | null>, corner: Popu
     })
     window.addEventListener('resize', place)
     window.addEventListener('scroll', place, true)
+    // The focus moving changes nothing in the tree the observer sees.
+    document.addEventListener('focusin', later)
+    document.addEventListener('focusout', later)
     return () => {
       ro?.disconnect()
       mo?.disconnect()
       if (frame) window.cancelAnimationFrame(frame)
       window.removeEventListener('resize', place)
       window.removeEventListener('scroll', place, true)
+      document.removeEventListener('focusin', later)
+      document.removeEventListener('focusout', later)
+      vp.removeAttribute('data-step-aside')
     }
   })
 }

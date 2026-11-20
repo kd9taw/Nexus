@@ -270,6 +270,123 @@ describe('the column takes its measured room, clear of the TX surfaces (#445)', 
     }
   })
 
+  // WHAT THE OPERATOR IS USING comes second only to the transmit surfaces (features/toastRoom.ts `toastPlace`). A toast's
+  // buttons covered an item of the open ⊞ Panels menu (CW at 1366×768, 150 % and 175 %), and Tab left focus behind a
+  // toast on a folded dock's macro key (PSK, CW and JTTY at 175 %), all measured in the shell probe (check 13).
+  describe('keeps off what the operator is using, and steps aside where it cannot', () => {
+    let rects: Map<string, Box>
+    let spies: { mockRestore(): void }[]
+    const was = [window.innerWidth, window.innerHeight] as const
+    beforeEach(() => {
+      rects = new Map<string, Box>([
+        ['cockpit-txdock-keep', { left: 300, top: 520, right: 900, bottom: 600 }],
+        ['ui-toast-viewport', { left: 544, top: 380, right: 884, bottom: 488 }],
+      ])
+      spies = [
+        vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+          const k = [...rects.keys()].find((c) => this.classList.contains(c))
+          const r = k ? rects.get(k)! : { left: 0, top: 0, right: 0, bottom: 0 }
+          return { ...r, x: r.left, y: r.top, width: r.right - r.left, height: r.bottom - r.top, toJSON: () => r } as DOMRect
+        }),
+        // One toast's content: 108 px.
+        vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+          return this.classList.contains('ui-toast-viewport') ? 108 : 0
+        }),
+      ]
+      Object.defineProperty(window, 'innerWidth', { value: 900, configurable: true })
+      Object.defineProperty(window, 'innerHeight', { value: 600, configurable: true })
+    })
+    afterEach(() => {
+      for (const s of spies) s.mockRestore()
+      Object.defineProperty(window, 'innerWidth', { value: was[0], configurable: true })
+      Object.defineProperty(window, 'innerHeight', { value: was[1], configurable: true })
+    })
+    const folded = () => {
+      const keep = document.createElement('div')
+      keep.className = 'cockpit-txdock-keep'
+      keep.dataset.fold = 'on'
+      return keep
+    }
+
+    it('an open menu over the whole stretch: the column keeps its room clear of the keep row and steps aside', async () => {
+      const { viewport } = mount('bottom-right')
+      const app = viewport.closest('.app')!
+      const keep = folded()
+      const menu = document.createElement('div')
+      menu.className = 'panels-menu-pop'
+      rects.set('panels-menu-pop', { left: 400, top: 10, right: 890, bottom: 510 })
+      act(() => {
+        app.append(keep, menu)
+      })
+      await waitFor(() => expect(viewport.hasAttribute('data-step-aside'), 'the column stands over the open menu').toBe(true))
+      // Still clear of the keep row: the transmit rule is never traded away.
+      expect(viewport.style.getPropertyValue('--toast-inset')).toBe(`${600 - (520 - 16)}px`)
+      // Hidden while it steps aside, by the real sheet.
+      expect(css(viewport, 'visibility')).toBe('hidden')
+      act(() => {
+        menu.remove()
+      })
+      await waitFor(() => expect(viewport.hasAttribute('data-step-aside'), 'the column never came back').toBe(false))
+      keep.remove()
+    })
+
+    it('a menu that leaves room: the column stands clear of it, drawn', async () => {
+      const { viewport } = mount('bottom-right')
+      const app = viewport.closest('.app')!
+      const keep = folded()
+      const menu = document.createElement('div')
+      menu.className = 'panels-menu-pop'
+      rects.set('panels-menu-pop', { left: 400, top: 10, right: 890, bottom: 300 })
+      act(() => {
+        app.append(keep, menu)
+      })
+      await waitFor(() => expect(viewport.style.getPropertyValue('--toast-max-h')).toBe(`${520 - 16 - (300 + 16)}px`))
+      expect(viewport.hasAttribute('data-step-aside')).toBe(false)
+      menu.remove()
+      keep.remove()
+    })
+
+    it('JTTY\'s refusal, parked above the keep row\'s own box, is kept clear like the row', async () => {
+      const { viewport } = mount('bottom-right')
+      const app = viewport.closest('.app')!
+      const keep = folded()
+      const reason = document.createElement('div')
+      reason.setAttribute('role', 'status')
+      reason.className = 'jtty-dock-reason'
+      keep.appendChild(reason)
+      rects.set('jtty-dock-reason', { left: 420, top: 470, right: 890, bottom: 520 })
+      act(() => {
+        app.append(keep)
+      })
+      await waitFor(() => expect(viewport.style.getPropertyValue('--toast-inset'), 'the column stands over the refusal').toBe(`${600 - (470 - 16)}px`))
+      keep.remove()
+    })
+
+    it('the focused control: Tab onto a macro key under the column moves the column off it', async () => {
+      const { viewport } = mount('bottom-right')
+      const app = viewport.closest('.app')!
+      const keep = folded()
+      const key = document.createElement('button')
+      key.className = 'cw-macro'
+      rects.set('cw-macro', { left: 700, top: 440, right: 820, bottom: 480 })
+      act(() => {
+        app.append(keep, key)
+      })
+      await waitFor(() => expect(viewport.style.getPropertyValue('--toast-inset')).toBe(`${600 - (520 - 16)}px`))
+      act(() => {
+        key.focus()
+      })
+      // Above the key now: the stretch between the window's top edge and the key.
+      await waitFor(() => expect(viewport.style.getPropertyValue('--toast-inset'), 'the column stands over the focused key').toBe(`${600 - (440 - 16)}px`))
+      act(() => {
+        key.blur()
+      })
+      await waitFor(() => expect(viewport.style.getPropertyValue('--toast-inset'), 'the column did not come back down').toBe(`${600 - (520 - 16)}px`))
+      key.remove()
+      keep.remove()
+    })
+  })
+
   // The surfaces change under a column that is already up: a screen's first visit mounts its TX strip
   // after the toasts (PSK, JTTY), a notice above a strip moves it without resizing it, a banner
   // arrives late. Each is a change in the app's tree, and the column re-measures on it (one frame

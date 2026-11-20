@@ -1,6 +1,6 @@
 // #445: the pop-up column's room in its corner, clear of every transmit surface (toastRoom.ts).
 import { describe, it, expect } from 'vitest'
-import { toastRoom, TOAST_MIN_ROOM, type Box } from './toastRoom'
+import { toastPlace, toastRoom, TOAST_MIN_ROOM, type Box } from './toastRoom'
 
 const VIEW = { w: 1024, h: 768 }
 const W = 340
@@ -93,5 +93,57 @@ describe('toastRoom at a zoom (#445)', () => {
     expect(scaled).toEqual({ inset: 1080 - 636, maxHeight: 636 - 28 })
     expect(scaled.maxHeight).toBeGreaterThanOrEqual(76)
     expect(toastRoom('bottom-left', view, 595, [strip, dock], gap, TOAST_MIN_ROOM * zoom)!.maxHeight).toBe(636 - 28)
+  })
+})
+
+// What the operator is using comes second only to the transmit surfaces: kept off where there is room, stepped aside for
+// where there is not, and never paid for with a transmit surface.
+describe('toastPlace: what the operator is using', () => {
+  const keep = box(0, 690, 1024, 768) // a folded dock's keep row (Send, Esc/Stop) at the foot
+  const strip = box(0, 40, 1024, 100) // the TX strip, Stop TX in it, near the top
+  /** The bottom-right column as tall as its toasts (`h`), at the foot of its room. */
+  const col = (room: { inset: number; maxHeight: number }, h: number) => {
+    const left = VIEW.w - GAP - W
+    return box(left, VIEW.h - room.inset - h, left + W, VIEW.h - room.inset)
+  }
+
+  it('with nothing in use, exactly toastRoom', () => {
+    expect(toastPlace('bottom-right', VIEW, W, [keep, strip], [], GAP, 120)).toEqual({ room: toastRoom('bottom-right', VIEW, W, [keep, strip], GAP), stepAside: false })
+  })
+
+  it('keeps off an open menu where a stretch clear of both is tall enough (CW: the menu hangs from the header)', () => {
+    const menu = box(500, 200, 1000, 520)
+    const at = toastPlace('bottom-right', VIEW, W, [keep, strip], [menu], GAP, 120)
+    expect(at.stepAside).toBe(false)
+    expect(at.room).toEqual({ inset: 768 - (690 - GAP), maxHeight: 690 - GAP - (520 + GAP) })
+    for (const b of [keep, strip, menu]) expect(overlaps(column('bottom-right', at.room!), b)).toBe(false)
+  })
+
+  it('keeps off the focused macro key, which Tab brought between the strip and the keep row', () => {
+    const key = box(700, 600, 820, 640)
+    const at = toastPlace('bottom-right', VIEW, W, [keep, strip], [key], GAP, 120)
+    expect(at.stepAside).toBe(false)
+    expect(overlaps(column('bottom-right', at.room!), key), 'the column stands over the focused key').toBe(false)
+    expect(overlaps(column('bottom-right', at.room!), keep)).toBe(false)
+  })
+
+  it('where nothing clear of both is tall enough, keeps its transmit-safe room and steps aside while it meets it', () => {
+    // A menu filling the whole stretch between the strip and the keep row on the column's side.
+    const menu = box(600, 170, 1000, 680)
+    const at = toastPlace('bottom-right', VIEW, W, [keep, strip], [menu], GAP, 120)
+    expect(at.room, 'it moved somewhere the transmit rule does not allow').toEqual(toastRoom('bottom-right', VIEW, W, [keep, strip], GAP))
+    expect(at.stepAside).toBe(true)
+    for (const b of [keep, strip]) expect(overlaps(column('bottom-right', at.room!), b)).toBe(false)
+  })
+
+  it('does not step aside for something the column, as tall as its toasts, does not reach', () => {
+    // A lone short toast sits at the foot of its room; the menu is higher up.
+    const menu = box(600, 170, 1000, 560)
+    const room = toastRoom('bottom-right', VIEW, W, [keep, strip], GAP)!
+    const h = 80
+    expect(overlaps(col(room, h), menu)).toBe(false)
+    // The clear stretch below the menu (560+16 to 690−16) is 98 px: at 175 % a toast needs more.
+    const at = toastPlace('bottom-right', VIEW, W, [keep, strip], [menu], GAP, h, TOAST_MIN_ROOM * 1.75)
+    expect(at).toEqual({ room, stepAside: false })
   })
 })
