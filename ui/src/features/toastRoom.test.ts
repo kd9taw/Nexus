@@ -1,6 +1,6 @@
 // #445: the pop-up column's room in its corner, clear of every transmit surface (toastRoom.ts).
 import { describe, it, expect } from 'vitest'
-import { toastPlace, toastRoom, TOAST_MIN_ROOM, type Box } from './toastRoom'
+import { scrollReach, toastPlace, toastRoom, TOAST_MIN_ROOM, type Box, type Scroller } from './toastRoom'
 
 const VIEW = { w: 1024, h: 768 }
 const W = 340
@@ -145,5 +145,48 @@ describe('toastPlace: what the operator is using', () => {
     // The clear stretch below the menu (560+16 to 690−16) is 98 px: at 175 % a toast needs more.
     const at = toastPlace('bottom-right', VIEW, W, [keep, strip], [menu], GAP, h, TOAST_MIN_ROOM * 1.75)
     expect(at).toEqual({ room, stepAside: false })
+  })
+
+  it('with no transmit-safe room at all, steps aside rather than stand in the bare corner', () => {
+    const at = toastPlace('bottom-right', VIEW, W, [box(0, 0, 1024, 768)], [], GAP, 120)
+    expect(at).toEqual({ room: null, stepAside: true })
+  })
+})
+
+// The browser scrolls first and tells the page after, so a column placed against where Stop TX stood stood over it for a
+// frame while the operator scrolled (CW, Phone and JS8 at 700×800, 175 %, measured in the shell probe, check 14). A surface
+// in a scroller counts as everywhere the scroller can bring it.
+describe('scrollReach: everywhere scrolling can bring a surface', () => {
+  const shell = (top: number, maxTop: number, zoom = 1): Scroller => ({ box: box(0, 100, 700, 700), zoom, top, maxTop, left: 0, maxLeft: 0 })
+
+  it('outside any scroller, where it stands', () => {
+    expect(scrollReach(box(10, 20, 30, 40), [])).toEqual(box(10, 20, 30, 40))
+  })
+
+  it('grows up by what is left to scroll and down by what has been scrolled, cut to the scroller', () => {
+    // Stop TX at 400–440, the shell scrolled 100 of 500: content can come down 100 and go up 400.
+    expect(scrollReach(box(300, 400, 460, 440), [shell(100, 500)])).toEqual(box(300, 100, 460, 540))
+    // At the top: it can only go up, and no further than the shell's own top edge.
+    expect(scrollReach(box(300, 400, 460, 440), [shell(0, 50)])).toEqual(box(300, 350, 460, 440))
+  })
+
+  it('reads scroll px at the scroller\'s zoom', () => {
+    expect(scrollReach(box(300, 400, 460, 440), [shell(20, 40, 1.75)])).toEqual(box(300, 400 - 20 * 1.75, 460, 440 + 20 * 1.75))
+  })
+
+  it('is the same wherever the shell stands: a column placed at any scroll position is clear at every other', () => {
+    // A stop that scrolls with the content: at scroll s it stands at 600 − s.
+    const at = (s: number) => scrollReach(box(300, 600 - s, 460, 640 - s), [shell(s, 300)])
+    for (const s of [0, 75, 150, 300]) expect(at(s), `scrolled ${s}`).toEqual(at(0))
+    // And every position the stop takes lies inside it.
+    for (let s = 0; s <= 300; s += 25) {
+      const r = at(0)
+      expect(600 - s >= r.top && 640 - s <= r.bottom, `scrolled ${s}`).toBe(true)
+    }
+  })
+
+  it('never less than where it stands, even outside its scroller\'s box (a fixed surface)', () => {
+    const r = scrollReach(box(10, 5, 50, 30), [shell(100, 500)])
+    expect(r.left <= 10 && r.top <= 5 && r.right >= 50 && r.bottom >= 30, JSON.stringify(r)).toBe(true)
   })
 })

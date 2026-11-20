@@ -10,7 +10,7 @@ import * as RToast from '@radix-ui/react-toast'
 import { t } from '../i18n'
 import { dismissToast, keepToast, subscribePopups, type Toast, type ToastKind } from '../toast'
 import { getPopupCorner, subscribePopupCorner, type PopupCorner } from '../features/popupCorner'
-import { TOAST_MIN_ROOM, toastPlace, type Box } from '../features/toastRoom'
+import { TOAST_MIN_ROOM, scrollReach, toastPlace, type Box, type Scroller } from '../features/toastRoom'
 import { TX_AVOID } from '../features/txSurfaces'
 
 /** #445: a toast swipes away toward the side of the window its corner is on. (The body is
@@ -36,11 +36,38 @@ const FOCUSED = 'button, input, select, textarea, a[href], [role="button"], [rol
 /** The column's distance from its corner's side edge, and from each surface: `--space-4`. */
 const GAP_PX = 16
 
+/** Every scrolling ancestor of `el`, for `scrollReach`: an ancestor whose overflow scrolls and that has somewhere to scroll. */
+function scrollersOf(el: Element): Scroller[] {
+  const out: Scroller[] = []
+  for (let p = el.parentElement; p && p !== document.documentElement; p = p.parentElement) {
+    const y = p.scrollHeight - p.clientHeight
+    const x = p.scrollWidth - p.clientWidth
+    if (y <= 0 && x <= 0) continue
+    const cs = getComputedStyle(p)
+    const sy = y > 0 && /auto|scroll/.test(cs.overflowY)
+    const sx = x > 0 && /auto|scroll/.test(cs.overflowX)
+    if (!sy && !sx) continue
+    const r = p.getBoundingClientRect()
+    const zoom = p.offsetHeight > 0 && r.height > 0 ? r.height / p.offsetHeight : 1
+    out.push({
+      box: { left: r.left, top: r.top, right: r.right, bottom: r.bottom },
+      zoom,
+      top: sy ? p.scrollTop : 0,
+      maxTop: sy ? y : 0,
+      left: sx ? p.scrollLeft : 0,
+      maxLeft: sx ? x : 0,
+    })
+  }
+  return out
+}
+
 /** #445: measure the window's transmit surfaces and give the column the room of its corner that
  *  touches none of them, as `--toast-inset` and `--toast-max-h` on the column (styles.css reads
  *  both, in every corner). In the column's own CSS px: `.app` is zoomed, and a fixed box's insets
  *  are scaled by that zoom, so window px are divided by it (read off the column itself), and the
- *  least room a toast needs is scaled up by it. What the operator is using (`IN_USE`, the focused control) comes
+ *  least room a toast needs is scaled up by it. Each transmit surface counts as EVERYWHERE ITS SCROLLERS CAN BRING IT
+ *  (features/toastRoom.ts `scrollReach`), not where it stands: the scroll event that re-places the column comes after the
+ *  frame the browser scrolled, so a column placed against where Stop TX stood stood over it for that frame. What the operator is using (`IN_USE`, the focused control) comes
  *  second: kept off where there is room, and where there is not the column steps aside (`data-step-aside`, styles.css)
  *  while it would stand over it.
  *
@@ -74,7 +101,9 @@ function useToastRoom(viewport: RefObject<HTMLOListElement | null>, corner: Popu
       for (const el of document.querySelectorAll(TOAST_AVOID)) {
         if (vp.contains(el)) continue
         ro?.observe(el)
-        boxOf(el, avoid)
+        const at: Box[] = []
+        boxOf(el, at)
+        if (at.length) avoid.push(scrollReach(at[0], scrollersOf(el)))
       }
       const inUse: Box[] = []
       for (const el of document.querySelectorAll(IN_USE)) if (!vp.contains(el)) boxOf(el, inUse)

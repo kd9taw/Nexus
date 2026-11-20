@@ -387,6 +387,57 @@ describe('the column takes its measured room, clear of the TX surfaces (#445)', 
     })
   })
 
+  // The browser scrolls first and tells the page after: a column placed against where Stop TX stands stood over it for a
+  // frame while the shell scrolled (CW, Phone and JS8 at 700×800, 175 %, shell probe check 14). A stop in a scrolling shell
+  // is kept clear of everywhere the shell can bring it.
+  it('a stop in a scrolling shell is kept clear of every position the shell can scroll it to', () => {
+    const rects = new Map<string, Box>([
+      ['cockpit-shell', { left: 0, top: 100, right: 900, bottom: 600 }],
+      // Stop TX now at 300–340, the shell scrolled 50 of 250: it can come down to 350–390 and go up to 100.
+      ['op-btn', { left: 600, top: 300, right: 760, bottom: 340 }],
+      ['ui-toast-viewport', { left: 544, top: 430, right: 884, bottom: 584 }],
+    ])
+    const spies = [
+      vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+        const k = [...rects.keys()].find((c) => this.classList.contains(c))
+        const r = k ? rects.get(k)! : { left: 0, top: 0, right: 0, bottom: 0 }
+        return { ...r, x: r.left, y: r.top, width: r.right - r.left, height: r.bottom - r.top, toJSON: () => r } as DOMRect
+      }),
+      vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+        return this.classList.contains('cockpit-shell') ? 750 : 0
+      }),
+      vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) {
+        return this.classList.contains('cockpit-shell') ? 500 : 0
+      }),
+      // jsdom does not lay out, so it keeps no scroll position: the shell is read as scrolled 50.
+      vi.spyOn(Element.prototype, 'scrollTop', 'get').mockImplementation(function (this: Element) {
+        return this.classList.contains('cockpit-shell') ? 50 : 0
+      }),
+    ]
+    const was = [window.innerWidth, window.innerHeight]
+    Object.defineProperty(window, 'innerWidth', { value: 900, configurable: true })
+    Object.defineProperty(window, 'innerHeight', { value: 600, configurable: true })
+    try {
+      const shell = document.createElement('main')
+      shell.className = 'cockpit-shell'
+      shell.style.overflowY = 'auto'
+      const stop = document.createElement('button')
+      stop.className = 'op-btn stop'
+      stop.setAttribute('data-stop-control', 'stop-tx')
+      shell.appendChild(stop)
+      document.body.appendChild(shell)
+      const { viewport } = mount('bottom-right')
+      // Below everywhere Stop TX can be: 340 + 50 = 390, plus the gap. Placed against where it stands (340), the column
+      // started at 356, under a Stop TX the next frame of a scroll back up brings down to 390.
+      expect(viewport.style.getPropertyValue('--toast-max-h'), 'the column stands where a scroll brings Stop TX').toBe(`${600 - 16 - (390 + 16)}px`)
+      shell.remove()
+    } finally {
+      for (const sp of spies) sp.mockRestore()
+      Object.defineProperty(window, 'innerWidth', { value: was[0], configurable: true })
+      Object.defineProperty(window, 'innerHeight', { value: was[1], configurable: true })
+    }
+  })
+
   // The surfaces change under a column that is already up: a screen's first visit mounts its TX strip
   // after the toasts (PSK, JTTY), a notice above a strip moves it without resizing it, a banner
   // arrives late. Each is a change in the app's tree, and the column re-measures on it (one frame
