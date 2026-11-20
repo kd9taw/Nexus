@@ -198,3 +198,21 @@ describe('what PSK does NOT do to a macro', () => {
     expect('text' in r && r.text).toBe('cq cq de W9XYZ pse k')
   })
 })
+
+describe('every built-in reaches the air with nothing in braces', () => {
+  // An unknown token is refused rather than sent, but a built-in must never need refusing: every
+  // key of both sets expands, through the one expander the cockpit sends with, to text with no
+  // brace left in it — with the log's report box empty and with a report in it.
+  it('in both sets, with and without a report in the log', () => {
+    for (const set of ['everyday', 'contest'] as const) {
+      for (const slot of resolvePskSet(undefined, set, (k) => k)) {
+        if (!slot.text) continue
+        for (const rst of ['', '549']) {
+          const r = expandPskMacro(slot.text, { mycall: 'W9XYZ', call: 'K1ABC', exch: '05 IL', rst, myname: '', hisname: '' })
+          expect(r, `${set} ${slot.key}`).toHaveProperty('text')
+          expect('text' in r && /[{}]/.test(r.text), `${set} ${slot.key}: ${JSON.stringify(r)}`).toBe(false)
+        }
+      }
+    }
+  })
+})
