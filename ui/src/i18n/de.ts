@@ -2002,7 +2002,7 @@ export const DE: PartialCatalog = {
   "settings.n3fjp.forwardAll.label": "Jedes QSO weiterleiten",
   "settings.n3fjp.forwardAll.hint": "Schickt zusätzlich <b>jedes</b> geloggte QSO (nicht nur Contest-QSOs) an N3FJP ACLog auf dem Host oben — für den normalen Alltagsbetrieb. N3FJP entfernt Dubletten, es ist also unbedenklich, das parallel zur Contest-Übertragung laufen zu lassen.",
   "settings.n3fjp.test.label": "Verbindungstest",
-  "settings.n3fjp.test.title": "Einstellungen speichern, dann die N3FJP-TCP-Verbindung testen",
+  "settings.n3fjp.test.title": "Die N3FJP-TCP-Verbindung mit Host und Port von oben testen. Es wird nichts gespeichert.",
   "settings.n3fjp.test.action": "N3FJP testen",
   "settings.n3fjp.test.hint": "Am Clubstandort vor dem Start der Veranstaltung ausführen, um die API-Verbindung zu bestätigen.",
   "settings.n3fjp.test.noHost": "Kein N3FJP-Host eingetragen: die IP-Adresse des Hauptrechners unter Einstellungen ▸ Dienste ▸ N3FJP-Integration eintragen.",

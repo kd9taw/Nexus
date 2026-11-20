@@ -8449,7 +8449,7 @@ export const ES: PartialCatalog = {
   "settings.n3fjp.test.unreachable": "No se puede llegar a ese ordenador: comprueba la dirección IP, que los dos ordenadores estén en la misma red y que el Firewall de Windows del ordenador maestro permita N3FJP / el puerto 1100.",
   "settings.n3fjp.test.hostNotFound": "No se encontró ese nombre de host: comprueba cómo está escrito o introduce en su lugar la dirección IP del ordenador maestro.",
   "settings.n3fjp.test.label": "Prueba de conexión",
-  "settings.n3fjp.test.title": "Guardar los ajustes y luego probar la conexión TCP con N3FJP",
+  "settings.n3fjp.test.title": "Probar la conexión TCP con N3FJP en el host y el puerto de arriba. No se guarda nada.",
   "settings.n3fjp.useEnter.hint": "Anota cada contacto del concurso con la secuencia <b>ENTER</b> de N3FJP, que es la que puntúa el concurso — la vía correcta. Desactívalo para caer en una inserción <code>ADDDIRECT</code> simple (puede no puntuar). Activado por defecto.",
   "settings.n3fjp.useEnter.label": "Usar ENTER para puntuar el concurso",
   "settings.orbitalElements.hint": "Elementos keplerianos (TLE) de los satélites de radioaficionado — las horas de pasada, el apuntamiento y el Doppler salen de ellos. Se refrescan cada 6 h desde hamradiotools.io: la lista de satélites viene de la base de datos SatNOGS (CC BY-SA 4.0) y los elementos de CelesTrak y SatNOGS. Importa un archivo para un shack sin conexión o un satélite recién lanzado.",

@@ -10098,7 +10098,7 @@ export const RU: PartialCatalog = {
   "settings.n3fjp.forwardAll.label": "Пересылать каждое QSO",
   "settings.n3fjp.forwardAll.hint": "Также отправлять <b>каждое</b> записанное QSO (а не только связи соревнования) в N3FJP ACLog на хосте выше — для повседневного журнала. N3FJP отбрасывает повторы, так что это безопасно вместе с отправкой соревнования.",
   "settings.n3fjp.test.label": "Тест соединения",
-  "settings.n3fjp.test.title": "Сохраните настройки, затем протестируйте соединение N3FJP TCP",
+  "settings.n3fjp.test.title": "Проверить соединение N3FJP TCP с хостом и портом, указанными выше. Ничего не сохраняется.",
   "settings.n3fjp.test.action": "Тест N3FJP",
   "settings.n3fjp.test.hint": "Запустите это на площадке клуба до начала мероприятия, чтобы убедиться, что связь с API работает.",
   "settings.n3fjp.test.noHost": "Хост N3FJP не задан: введите IP-адрес главного компьютера в Настройки ▸ Сервисы ▸ Интеграция N3FJP.",
