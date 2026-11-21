@@ -203,6 +203,13 @@ pub(crate) const ACTIVATION_FROM_AFAR: [&str; 2] = ["clear_activation", "set_act
 
 /// What a settings save from afar may not change ([`SETTINGS_FROM_AFAR`]): each is put back into
 /// `save` as the shack has it. From the shack's own screen (`None`) the save is taken as it came.
+///
+/// ⛔ What is each radio's own (its PTT lines, keyers, power caps, the CAT broker's switches) comes
+/// back as the shack has it FOR THE RADIO THE FORM EDITED: `Engine::apply_settings` folds the
+/// save's flat fields into that radio's profile, so the shack's live flat fields, which are the
+/// radio in use's, would write that radio's keying lines and caps into another radio's profile
+/// whenever the shack switched radios after the form opened.
+#[allow(clippy::clone_on_copy)] // one list for Strings and Copy fields alike
 pub(crate) fn keep_the_shacks_transmit_settings(
     shack: &tempo_app::settings::Settings,
     save: &mut tempo_app::settings::Settings,
@@ -210,6 +217,20 @@ pub(crate) fn keep_the_shacks_transmit_settings(
 ) {
     if afar.is_none() {
         return;
+    }
+    // The radio the save's flat fields describe: the one its form was editing, the live one when
+    // it carries no roster.
+    let edited = (!save.radios.is_empty())
+        .then(|| shack.radios.iter().find(|p| p.id == save.active_radio))
+        .flatten();
+    // Each named field of the radio's own, as the shack has it for that radio.
+    macro_rules! keep_the_radios {
+        ($($f:ident),* $(,)?) => {
+            match edited {
+                Some(radio) => { $( save.$f = radio.$f.clone(); )* }
+                None => { $( save.$f = shack.$f.clone(); )* }
+            }
+        };
     }
     // What transmits by itself: JS8's APRS-IS relay, the WSPR/FST4W beacon's share of intervals,
     // and a CQ run calling again after its pause.
@@ -221,8 +242,7 @@ pub(crate) fn keep_the_shacks_transmit_settings(
     save.wsjtx_udp = shack.wsjtx_udp;
     save.wsjtx_udp_addr = shack.wsjtx_udp_addr.clone();
     save.wsjtx_udp_accept_other_computers = shack.wsjtx_udp_accept_other_computers;
-    save.cat_broker = shack.cat_broker;
-    save.cat_broker_ptt = shack.cat_broker_ptt;
+    keep_the_radios!(cat_broker, cat_broker_ptt);
     save.js8_api_tcp = shack.js8_api_tcp;
     save.js8_api_udp = shack.js8_api_udp;
     save.js8_api_tcp_accept = shack.js8_api_tcp_accept;
@@ -250,24 +270,20 @@ pub(crate) fn keep_the_shacks_transmit_settings(
     save.swr_stop_enabled = shack.swr_stop_enabled;
     save.swr_stop_threshold = shack.swr_stop_threshold;
     // The power ceilings.
-    save.max_power_phone = shack.max_power_phone;
-    save.max_power_cw = shack.max_power_cw;
-    save.max_power_digital = shack.max_power_digital;
-    save.max_power_am = shack.max_power_am;
+    keep_the_radios!(max_power_phone, max_power_cw, max_power_digital, max_power_am);
     // The licence privileges.
     save.license_class = shack.license_class;
     // The line that keys the transmitter: the serial lines' states, held for the whole session.
-    save.cat_rts_state = shack.cat_rts_state.clone();
-    save.cat_dtr_state = shack.cat_dtr_state.clone();
-    save.cat_rts_keys_ptt = shack.cat_rts_keys_ptt;
-    save.cat_ptt_line_state = shack.cat_ptt_line_state.clone();
-    save.cat_serial_handshake = shack.cat_serial_handshake.clone();
+    keep_the_radios!(
+        cat_rts_state,
+        cat_dtr_state,
+        cat_rts_keys_ptt,
+        cat_ptt_line_state,
+        cat_serial_handshake,
+    );
     // …and the PTT method and port, which are the radio's own. The save's describe the radio its
     // form was editing (`Engine::apply_settings` folds them into that radio's profile), the live one
     // when it carries no roster; so they come back as the shack has them for that radio.
-    let edited = (!save.radios.is_empty())
-        .then(|| shack.radios.iter().find(|p| p.id == save.active_radio))
-        .flatten();
     let (method, port) = match edited {
         Some(radio) => (&radio.ptt_method, &radio.ptt_serial_port),
         None => (&shack.ptt_method, &shack.ptt_serial_port),
@@ -292,13 +308,15 @@ pub(crate) fn keep_the_shacks_transmit_settings(
     // …and the other lines that key it: CW's keyer, its keyline's port and line and the WinKeyer's
     // port (the radio loop opens a CW key port as soon as its keyer is chosen, the CAT port among
     // them), and how RTTY keys, with true FSK's port and line.
-    save.cw_keyer = shack.cw_keyer;
-    save.cw_key_port = shack.cw_key_port.clone();
-    save.cw_key_line = shack.cw_key_line.clone();
-    save.winkeyer_port = shack.winkeyer_port.clone();
-    save.rtty_backend = shack.rtty_backend.clone();
-    save.rtty_fsk_port = shack.rtty_fsk_port.clone();
-    save.rtty_fsk_line = shack.rtty_fsk_line.clone();
+    keep_the_radios!(
+        cw_keyer,
+        cw_key_port,
+        cw_key_line,
+        winkeyer_port,
+        rtty_backend,
+        rtty_fsk_port,
+        rtty_fsk_line,
+    );
     // The Flex client's Beta that lets it start CW, Tune and the ATU no bench has confirmed: the
     // radio's own, as its PTT is.
     save.flex_native_unbenched = edited.map_or(shack.flex_native_unbenched, |radio| {
