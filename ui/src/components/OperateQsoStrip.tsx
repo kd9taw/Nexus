@@ -202,14 +202,27 @@ function useParkLine(ref: RefObject<HTMLElement | null>) {
  *  no reveal (the shell did not scroll: `preventScroll` alone, as a dialog gives the focus back) is left where it is, and a
  *  control already in view moves nothing. The shell's scroll padding (the parked line) is kept clear as the browser keeps it.
  *  WHERE THE SHELL STOOD BEFORE THE FOCUS is the last scroll position its scroll events reported: a plain `focus()` scrolls
- *  before the focus event is dispatched, and its scroll event comes only with the next frame. */
+ *  before the focus event is dispatched, and its scroll event comes only with the next frame.
+ *  Revealing a lower line scrolls the shell to the strip's own place, which takes the parked first line (Stop TX's) up
+ *  off the foot with it, exactly as a wheel scrolled that far does.
+ *  NEVER UNDER A PRESS: while a pointer is down on the strip nothing is re-revealed, so a press made while the shell is
+ *  still scrolling (a smooth wheel, momentum) is never moved out from under the pointer between down and up, and its
+ *  click, Stop TX's included, lands where it was pressed. And the strip is parked again in a `finally`: a reveal that
+ *  throws (a webview without `behavior: 'instant'`) can never leave it unparked with Stop TX's line off the foot. */
 function useRevealFocus(ref: RefObject<HTMLElement | null>) {
   useEffect(() => {
     const strip = ref.current
     const shell = strip?.closest<HTMLElement>('main')
     if (!strip || !shell) return
     let frame = 0
+    let pressed = false
     let seen = shell.scrollTop
+    const onDown = () => {
+      pressed = true
+    }
+    const onUp = () => {
+      pressed = false
+    }
     const onScroll = () => {
       seen = shell.scrollTop
     }
@@ -218,22 +231,32 @@ function useRevealFocus(ref: RefObject<HTMLElement | null>) {
       const from = seen
       cancelAnimationFrame(frame)
       frame = requestAnimationFrame(() => {
-        if (document.activeElement !== el || shell.scrollTop === from) return
+        if (pressed || document.activeElement !== el || shell.scrollTop === from) return
         const s = shell.getBoundingClientRect()
         const q = el.getBoundingClientRect()
         if (q.top >= s.top && q.bottom <= s.bottom) return
         const was = strip.style.position
         strip.style.position = 'static'
-        el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' })
-        strip.style.position = was
+        try {
+          el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' })
+        } finally {
+          strip.style.position = was
+        }
       })
     }
     shell.addEventListener('scroll', onScroll, { passive: true })
     strip.addEventListener('focusin', onFocus)
+    strip.addEventListener('pointerdown', onDown)
+    // Released anywhere: the pointer can leave the strip before it is let go.
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
     return () => {
       cancelAnimationFrame(frame)
       shell.removeEventListener('scroll', onScroll)
       strip.removeEventListener('focusin', onFocus)
+      strip.removeEventListener('pointerdown', onDown)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
     }
   }, [ref])
 }
