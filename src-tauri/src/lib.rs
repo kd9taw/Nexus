@@ -2183,10 +2183,11 @@ mod pskr_client_id_tests {
     }
 }
 
-/// The hops from the process's `--profile r<id>` to the three places a radio window must carry
-/// its radio: the radio loop's config (its monitor then leaves the other radio's port and rigctld
-/// to that radio's window) and both PSK Reporter client ids. Each hop dropped alone brings back
-/// two windows fighting over one radio, or bumping each other off PSK Reporter.
+/// The hops from the process's `--profile r<id>` to the places a radio window must carry its
+/// radio: the radio loop's config (its monitor then leaves the other radio's port and rigctld to
+/// that radio's window, and its WSJT-X messages carry the window's own sender id) and both PSK
+/// Reporter client ids. Each hop dropped alone brings back two windows fighting over one radio,
+/// bumping each other off PSK Reporter, or showing in GridTracker as one station.
 ///
 /// The profile is read once per process from the arguments or `NEXUS_PROFILE`, so the bound half
 /// runs in a child: this same test binary, re-run for this one test with `NEXUS_PROFILE=r1`.
@@ -2196,22 +2197,29 @@ mod bound_radio_wiring_tests {
 
     const CHILD: &str = "NEXUS_BOUND_WIRING_CHILD";
 
-    /// What this process carries: `(radio loop's bound radio, own-spots id, near-region id)`.
-    fn carried() -> (Option<u32>, String, String) {
+    /// What this process carries: `(radio loop's bound radio, own-spots id, near-region id, the
+    /// radio loop's WSJT-X sender id)`.
+    fn carried() -> (Option<u32>, String, String, String) {
         #[cfg(feature = "radio")]
-        let bound = super::radio_config_for(
-            &tempo_app::settings::Settings::default(),
-            &tempo_app::engine::SpectrumFeed::default(),
-            &std::sync::Arc::new(tempo_audio::rxtap::RxTap::new()),
-            &tempo_app::engine::MeterFeed::default(),
-        )
-        .bound_radio;
+        let (bound, wsjtx_id) = {
+            let cfg = super::radio_config_for(
+                &tempo_app::settings::Settings::default(),
+                &tempo_app::engine::SpectrumFeed::default(),
+                &std::sync::Arc::new(tempo_audio::rxtap::RxTap::new()),
+                &tempo_app::engine::MeterFeed::default(),
+            );
+            (cfg.bound_radio, cfg.wsjtx_id)
+        };
         #[cfg(not(feature = "radio"))]
-        let bound = bound_radio_id();
+        let (bound, wsjtx_id) = (
+            bound_radio_id(),
+            tempo_net::sender_id(super::active_profile()),
+        );
         (
             bound,
             pskr_feed_client_id("", "W9XYZ"),
             pskr_feed_client_id("rgn-", "W9XYZ"),
+            wsjtx_id,
         )
     }
 
@@ -2228,7 +2236,8 @@ mod bound_radio_wiring_tests {
                 (
                     Some(1),
                     "nx-W9XYZ-r1".to_string(),
-                    "nx-rgn-W9XYZ-r1".to_string()
+                    "nx-rgn-W9XYZ-r1".to_string(),
+                    "Nexus - r1".to_string(),
                 )
             );
             return;
@@ -2262,7 +2271,8 @@ mod bound_radio_wiring_tests {
                 (
                     None,
                     "nexus-W9XYZ".to_string(),
-                    "nexus-rgn-W9XYZ".to_string()
+                    "nexus-rgn-W9XYZ".to_string(),
+                    "Nexus".to_string(),
                 )
             );
         }
@@ -3073,6 +3083,8 @@ fn radio_config_for(
         mode: settings.rig_mode(), // DATA submode (PKTUSB/…) for FT8, not voice USB
         wsjtx_udp: settings.wsjtx_udp,
         wsjtx_addr: settings.wsjtx_udp_addr.clone(),
+        // Each window its own WSJT-X client, under its profile: "Nexus", "Nexus - r1", …
+        wsjtx_id: tempo_net::sender_id(active_profile()),
         pskreporter: settings.pskreporter,
         // The package's version, known once the app is built: `finish_launch` sets it.
         app_version: String::new(),

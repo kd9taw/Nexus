@@ -428,11 +428,19 @@ fn an_n1mm_contactinfo_lands_in_the_log_via_n1mm() {
     assert_eq!(via(r), Some("N1MM"));
 }
 
-/// Nexus's own datagrams sent back to the port (a WSJT-X target pointed at it) log nothing.
+/// Nexus's own datagrams sent back to the port (a WSJT-X target pointed at it), from this window
+/// or another, log nothing.
 #[test]
 fn nexus_own_datagrams_log_nothing() {
     let mut st = Station::new();
-    st.send(&encode_qso_logged("Tempo", &qso("K2DEF", "K1ABC")));
+    st.send(&encode_qso_logged(
+        tempo_net::APP_ID,
+        &qso("K2DEF", "K1ABC"),
+    ));
+    st.send(&encode_qso_logged(
+        &tempo_net::sender_id(Some("r1")),
+        &qso("K2DEF", "K1ABC"),
+    ));
     assert!(st.calls().is_empty());
     assert!(st.lines().is_empty());
 }
