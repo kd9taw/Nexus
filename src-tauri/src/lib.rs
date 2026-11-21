@@ -5075,6 +5075,80 @@ mod lotw_batch_tests {
         let _ = std::fs::remove_dir_all(dir_b);
     }
 
+    /// ★ THE NEXT WINDOW FINDS THE CONTACTS STAMPED THE MOMENT THE FIRST LETS GO. Two windows on
+    /// ONE log, as a station's windows are: window A's automatic upload signs, and its stamps reach
+    /// the store's writer just as the disk stalls. Window B's timer takes the lock the instant A's
+    /// batch ends. A batch that gave the lock up with its stamps still queued let B read the same
+    /// contacts as owed and sign them a second time; A's waits for its stamps to land first.
+    #[test]
+    fn the_next_window_finds_the_contacts_stamped_when_the_first_lets_go() {
+        let (dir, a, _) = station("lotw-one-log", 2);
+        let b = {
+            let opened = tempo_app::logstore::open(
+                &dir.join("log.adi"),
+                std::sync::Arc::new(|_| tempo_core::logbook::sqlite::Resolved::default()),
+                None,
+            )
+            .expect("window B opens the same log");
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.attach_log_store(opened);
+            let mut s = e.settings().clone();
+            s.lotw_station_location = "Home".into();
+            e.apply_settings(s);
+            std::sync::Arc::new(std::sync::Mutex::new(e))
+        };
+        let shared = dir.join("shared-data");
+        std::fs::create_dir_all(&shared).unwrap();
+        let db = tempo_core::logbook::migrate::database_path(&dir.join("log.adi"));
+        let report = lotw_upload_batch_one_signer(&a, LotwPick::Unsent, false, &shared, |_, _| {
+            // The disk stalls as TQSL finishes: the stamps wait at the writer for a moment.
+            let hold = tempo_core::logbook::sqlite::WriteHold::take(&db).expect("stall the store");
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(400));
+                drop(hold);
+            });
+            Ok((0, String::new()))
+        })
+        .expect("window A's automatic upload ran");
+        assert_eq!((report.dispatched, report.outcome.as_str()), (2, "pending"));
+        let report = lotw_upload_batch_one_signer(&b, LotwPick::Unsent, false, &shared, |_, _| {
+            panic!("window B signed the contacts window A had just signed")
+        })
+        .expect("window B's automatic upload ran");
+        assert_eq!(
+            (report.dispatched, report.outcome.as_str()),
+            (0, "none"),
+            "nothing is owed: A's stamps were on disk before B could read"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The button pressed while this window's own automatic upload signs is refused as already
+    /// running, not as another window's.
+    #[test]
+    fn the_button_during_this_windows_own_upload_says_one_is_already_running() {
+        let (dir, a, _) = station("lotw-own-window", 1);
+        let shared = dir.join("shared-data");
+        std::fs::create_dir_all(&shared).unwrap();
+        let mut pressed = None;
+        lotw_upload_batch_one_signer(&a, LotwPick::Unsent, false, &shared, |_, _| {
+            pressed = Some(lotw_upload_batch_one_signer(
+                &a,
+                LotwPick::Unsent,
+                true,
+                &shared,
+                |_, _| panic!("a second batch ran in the same window"),
+            ));
+            Ok((0, String::new()))
+        })
+        .expect("the automatic upload ran");
+        assert_eq!(
+            pressed.expect("pressed while it signed").unwrap_err(),
+            LOTW_ALREADY_RUNNING
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     const SIGNER_CHILD: &str = "NEXUS_LOTW_SIGNER_CHILD";
 
     /// ★ A WINDOW THAT DIES MID-BATCH DOES NOT LOCK LOTW OUT. The lock is the operating system's,
@@ -40808,8 +40882,12 @@ fn lotw_upload_batch(
 /// Every window of a station runs its own automatic-upload timer over that ONE log, and the
 /// Logbook's button can start a batch in any of them. Two batches at once read the same owed
 /// contacts, so TQSL signed and LoTW received each of them twice. The lock is taken before the
-/// owed contacts are read and held until their stamps are written, so a second batch, started
-/// while the first runs, is refused, and one started after it finds them stamped.
+/// owed contacts are read and held until their stamps are in the database on disk (each run
+/// waits for them, [`lotw_sign_run`]), so a second batch, started while the first runs, is
+/// refused, and one started after it finds them stamped.
+///
+/// Refused with [`LOTW_ALREADY_RUNNING`] when the batch holding the lock is this window's own
+/// (its timer's, while the button is pressed), and [`LOTW_ANOTHER_WINDOW`] otherwise.
 fn lotw_upload_batch_one_signer(
     state: &SharedEngine,
     pick: LotwPick,
@@ -40818,13 +40896,23 @@ fn lotw_upload_batch_one_signer(
     tqsl: impl FnMut(&str, &[String]) -> Result<(i32, String), String>,
 ) -> Result<UploadReportDto, String> {
     let Some(_signer) = lotw_signer(data_dir) else {
-        return Err(LOTW_ANOTHER_WINDOW.into());
+        return Err(if engine_lock(state).lotw_batch_running() {
+            LOTW_ALREADY_RUNNING
+        } else {
+            LOTW_ANOTHER_WINDOW
+        }
+        .into());
     };
     lotw_upload_batch_with(state, pick, wait, tqsl)
 }
 
 /// The lock file beside the shared log that one LoTW batch at a time holds.
 const LOTW_SIGNER_LOCK: &str = ".lotw-upload.lock";
+
+/// Why a LoTW upload does not start: this window is uploading to LoTW already (its automatic
+/// upload, when the button is pressed).
+const LOTW_ALREADY_RUNNING: &str = "An upload to LoTW is already running. Try again when it \
+     finishes.";
 
 /// Why a LoTW upload does not start: another Nexus window is uploading the same log now.
 const LOTW_ANOTHER_WINDOW: &str = "Another Nexus window is uploading this log to LoTW right now. \
@@ -41261,14 +41349,15 @@ fn lotw_sign_run(
                     ),
                 );
             }
-            // The Logbook button waits for the stamps to reach the disk; the six-hourly
-            // automatic batch does not (a stamp it loses is re-derived by the next echo).
-            // TQSL has answered by now (signed and sent, or refused), whatever the wait answers.
-            let unconfirmed = if wait {
-                durable.wait(tempo_app::logstore::DURABLE_WAIT).err()
-            } else {
-                None
-            };
+            // Both wait for the stamps to reach the database, bounded, before the batch ends and
+            // gives up the signer lock (`lotw_upload_batch_one_signer`): `stamp` only hands them
+            // to the store's writer, and another window that took the lock before they landed
+            // read these contacts as still owed and signed them again. Only the Logbook button
+            // reports a stamp that did not land; the automatic batch leaves it to its next
+            // round, which finds the contact still owed. TQSL has answered by now (signed and
+            // sent, or refused), whatever the wait answers.
+            let landed = durable.wait(tempo_app::logstore::DURABLE_WAIT);
+            let unconfirmed = if wait { landed.err() } else { None };
             // ⛔ THE LINE THAT MAKES THE STAMP'S OWN SENTENCE TRUE.
             //
             // `UploadDetail`'s sentences tell the operator the service's own wording "was in
@@ -53921,9 +54010,10 @@ fn start_on_the_logbook(
                         _ => {}
                     }
                 }
-                // Another window is signing this log now: this round is skipped, quietly. Its
+                // Another batch is signing this log now (another window's, or this one's own
+                // from the button): this round is skipped, quietly. Its
                 // batch stamps what it sends, so the next round finds only what is still owed.
-                Err(e) if e == LOTW_ANOTHER_WINDOW => {}
+                Err(e) if e == LOTW_ANOTHER_WINDOW || e == LOTW_ALREADY_RUNNING => {}
                 Err(e) => eprintln!("[lotw-auto] failed: {e}"),
             }
         });
