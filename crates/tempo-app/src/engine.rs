@@ -38334,6 +38334,12 @@ contact yourself."
         self.station.lotw_batch_over()
     }
 
+    /// Whether a LoTW batch of this window's is running ([`Self::lotw_batch_begun`] counted it
+    /// and [`Self::lotw_batch_over`] has not yet).
+    pub fn lotw_batch_running(&self) -> bool {
+        self.station.lotw_batches > 0
+    }
+
     /// See [`StationCore::stamp_lotw_upload`]: how many were stamped.
     pub fn stamp_lotw_upload(
         &mut self,
