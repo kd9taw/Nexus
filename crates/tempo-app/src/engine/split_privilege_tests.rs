@@ -664,3 +664,68 @@ fn a_refused_pick_leaves_the_radio_simplex_on_the_downlink() {
         "the dial is judged: inside the licence (the disclosed state)"
     );
 }
+
+/// A General in Phone at 14.250 USB with split to 14.300 acknowledged and REVERSED: VFO B
+/// selected on an Icom behind Hamlib, which then transmits on VFO A, 14.250
+/// ([`Engine::observe_rig_freq_after_vfo_select`]). Both are inside General phone (14.225 up).
+fn reversed_general() -> Engine {
+    let mut e = station();
+    e.settings.license_class = LicenseClass::General;
+    e.set_frequency(14.250, "20m", "USB");
+    let _ = e.take_split_request();
+    assert!(e.request_operator_split(Some(14.300)).is_ok());
+    let _ = e.take_split_request();
+    e.rig_split_applied_on(14_300_000, ReceiverId::Main);
+    e.observe_rig_freq_after_vfo_select(14_300_000, true);
+    assert!(
+        (e.tx_emission_mhz() - 14.250).abs() < 1e-9,
+        "precondition: judged at VFO A"
+    );
+    assert!(
+        e.tx_allowed(),
+        "precondition: VFO A is inside General phone"
+    );
+    e
+}
+
+/// ⛔ A NEW SPLIT PROPOSED WHILE THE SPLIT IS REVERSED IS JUDGED AT THE PROPOSAL, not at VFO A.
+/// 14.200 is Extra-only phone; VFO A (14.250) is not. Judged at VFO A, the press was admitted.
+#[test]
+fn a_split_press_while_reversed_is_judged_at_the_press() {
+    let mut e = reversed_general();
+    assert!(!e.split_tx_allowed(14.200, ReceiverId::Main));
+    assert_eq!(
+        e.request_operator_split(Some(14.200)),
+        Err(SPLIT_REFUSED_PRIVILEGES.to_string())
+    );
+    assert_eq!(
+        e.take_split_request(),
+        None,
+        "nothing is queued for the radio"
+    );
+    assert!(
+        (e.tx_emission_mhz() - 14.250).abs() < 1e-9,
+        "the judgement put the reversed split back as it was"
+    );
+}
+
+/// ⛔ A RADIO SWITCH ENDS A REVERSED SPLIT: the next radio's acknowledged split is judged at its
+/// own TX dial, never at the old radio's VFO A.
+#[test]
+fn a_radio_switch_drops_a_reversed_split() {
+    let mut e = reversed_general();
+    e.settings.ensure_radio_profiles();
+    e.settings.sync_active_from_flat();
+    let other = e.add_radio();
+    e.set_active_radio(other);
+    assert_eq!(e.settings.active_radio, other, "precondition: switched");
+    assert_eq!(e.split_tx_on_vfo_a_hz, None);
+    e.set_frequency(14.250, "20m", "USB");
+    let _ = e.take_split_request();
+    e.tx_split_confirmed_hz = Some(14_200_000);
+    assert!(
+        (e.tx_emission_mhz() - 14.200).abs() < 1e-9,
+        "judged at the new radio's split"
+    );
+    assert!(!e.tx_allowed());
+}

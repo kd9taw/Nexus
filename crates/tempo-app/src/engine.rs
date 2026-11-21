@@ -2326,7 +2326,12 @@ struct StandingSplit {
 /// rig had acknowledged it.
 struct ProposedSplit<'a> {
     engine: &'a mut Engine,
-    held: (Option<u64>, crate::dualrx::ReceiverId, Option<u64>),
+    held: (
+        Option<u64>,
+        crate::dualrx::ReceiverId,
+        Option<u64>,
+        Option<u64>,
+    ),
 }
 
 impl<'a> ProposedSplit<'a> {
@@ -2335,6 +2340,10 @@ impl<'a> ProposedSplit<'a> {
             engine.tx_split_confirmed_hz,
             engine.tx_split_confirmed_rx,
             engine.sat_uplink_acked_hz,
+            // ⛔ AND THE REVERSED SPLIT'S VFO A, TAKEN OUT: a proposal is judged at the proposal.
+            // Left in, every split proposed while VFO B was selected under split was judged at
+            // VFO A, so a TX dial past the band edge was admitted.
+            engine.split_tx_on_vfo_a_hz.take(),
         );
         engine.tx_split_confirmed_hz = Some(tx_hz);
         engine.tx_split_confirmed_rx = rx;
@@ -2357,6 +2366,7 @@ impl Drop for ProposedSplit<'_> {
             e.tx_split_confirmed_hz,
             e.tx_split_confirmed_rx,
             e.sat_uplink_acked_hz,
+            e.split_tx_on_vfo_a_hz,
         ) = self.held;
     }
 }
@@ -9942,6 +9952,7 @@ impl Engine {
         // let the loop apply that TX frequency to whichever rig came next.
         // Marking dirty commands the NEW radio back to simplex instead.
         self.tx_split_confirmed_hz = None; // the radio moved — the confirmation is void
+        self.split_tx_on_vfo_a_hz = None; // …and a reversed split with it
         self.observed_split = None; // …and what the rig said about the OLD dial says nothing here
         self.split_standing = None; // …and the split the OLD radio had is not the new one's
                                     // The new radio gets `S 0` (below) when either was in doubt.
@@ -10591,6 +10602,7 @@ impl Engine {
         // A plain QSY always returns the rig to SIMPLEX — leftover split from a
         // pile-up must never silently shift TX on the next frequency.
         self.tx_split_confirmed_hz = None; // the radio moved — the confirmation is void
+        self.split_tx_on_vfo_a_hz = None; // …and a reversed split with it
         self.split_qsy_gen = self.split_qsy_gen.wrapping_add(1);
         self.observed_split = None; // …and what the rig said about the OLD dial says nothing here
         if self.split_tx_mhz.take().is_some() || self.split_unknown {
@@ -12634,6 +12646,7 @@ impl Engine {
         }
         // The rig refused: whatever we thought it acknowledged is no longer true.
         self.tx_split_confirmed_hz = None;
+        self.split_tx_on_vfo_a_hz = None; // …and a reversed split with it
         self.split_standing = None;
     }
 
@@ -12723,6 +12736,9 @@ impl Engine {
             }
         }
         self.tx_split_confirmed_hz = standing.map(|s| s.hz);
+        if standing.is_none() {
+            self.split_tx_on_vfo_a_hz = None;
+        }
         if let Some(s) = standing {
             self.tx_split_confirmed_rx = s.rx;
             self.sat_uplink_acked_hz = s.sat_uplink_acked_hz;
@@ -12749,6 +12765,7 @@ impl Engine {
         self.split_standing = None;
         self.split_unknown = false;
         self.tx_split_confirmed_hz = None;
+        self.split_tx_on_vfo_a_hz = None; // …and a reversed split with it
         self.sat_uplink_acked_hz = None;
     }
 
@@ -12758,6 +12775,7 @@ impl Engine {
     pub fn rig_split_unknown(&mut self) {
         self.split_standing = None;
         self.tx_split_confirmed_hz = None;
+        self.split_tx_on_vfo_a_hz = None; // …and a reversed split with it
         self.split_unknown = true;
     }
 
@@ -12772,6 +12790,7 @@ impl Engine {
         // this one yet, so between here and the ack there is nothing confirmed to judge. TX
         // locks for that gap, which is the correct direction.
         self.tx_split_confirmed_hz = None;
+        self.split_tx_on_vfo_a_hz = None; // …and a reversed split with it
     }
 
     /// Set (`Some("USB"|"LSB"|"FM")`) or clear (`None` = AUTO) the transient Phone mode override
@@ -25489,6 +25508,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if !on {
             // The rig is not split. Anything we believed it had acknowledged is void.
             self.tx_split_confirmed_hz = None;
+            self.split_tx_on_vfo_a_hz = None; // …and a reversed split with it
             self.split_standing = None;
             self.split_unknown = false;
         }

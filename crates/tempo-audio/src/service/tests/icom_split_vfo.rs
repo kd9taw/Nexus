@@ -261,3 +261,51 @@ fn split_with_vfo_b_selected_on_a_hamlib_ic9700_is_judged_as_before() {
     assert!((tx - 14.250).abs() < 1e-9, "judged at {tx}");
     assert!(allowed);
 }
+
+/// ⛔ A SPLIT REQUEST UNDER A HELD PTT, WHILE THE SPLIT IS REVERSED, IS JUDGED AT THE REQUEST. A
+/// General at 14.250 USB with split to 14.300, VFO B selected (the radio keys VFO A, 14.250, inside
+/// General phone), PTT held: a request for 14.200 (Extra-only phone) is written into a keyed radio
+/// only if the loop's own check passes it, and judged at VFO A it did.
+#[test]
+fn a_split_request_under_ptt_while_reversed_is_judged_at_the_request() {
+    let (addr, log, _) = icom_rigctld();
+    let engine = station(3073);
+    {
+        let mut e = engine.lock().unwrap();
+        e.set_license_class("general");
+        e.set_frequency(14.250, "20m", "USB");
+    }
+    let mut rig = Rig::rigctld(&addr);
+    run(
+        &engine,
+        &mut rig,
+        vec![
+            idle,
+            |e| e.request_split(Some(14.300)),
+            idle,
+            |e| e.request_vfo(true),
+            idle,
+            idle,
+            |e| {
+                assert!(
+                    (e.snapshot().radio.tx_emission_mhz.unwrap() - 14.250).abs() < 1e-9,
+                    "precondition: reversed, judged at VFO A"
+                );
+                e.set_tx_enabled(true);
+                e.set_ptt(true);
+                assert!(e.manual_ptt(), "precondition: PTT held in privileges");
+            },
+            |e| e.request_split(Some(14.200)),
+            idle,
+        ],
+    );
+    let lines = log.lock().unwrap().clone();
+    assert!(
+        lines.iter().any(|l| l == "T 1"),
+        "precondition: keyed: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|l| l == "I 14200000"),
+        "an Extra-only split never reaches the keyed radio: {lines:?}"
+    );
+}
