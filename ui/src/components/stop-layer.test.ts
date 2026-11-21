@@ -76,3 +76,90 @@ describe('Stop TX above every overlay: the stop layer outranks them all', () => 
     expect(above, `z-indexes at or above the stop layer's ${layer}`).toEqual([])
   })
 })
+
+// A SCRIM MUST BE THE OVERLAY OR ITS ANCESTOR (StopLayer.tsx's header). The layer spares a stop control its hit tests
+// when no part of an open overlay meets it — the element with the role or aria-modal, what it holds and what holds it —
+// so a full-window scrim drawn BESIDE the dialog it dims would cover Stop TX unseen. Every full-window scrim the
+// sheets declare (fixed, inset 0) is found here, and every place the app draws one must be the overlay itself, or
+// hold one as its first child, or be a Radix modal dialog's own overlay (which locks the page's pointer events, and
+// then every stop is hit-tested).
+describe('every full-window scrim is an overlay, or holds one', () => {
+  const OVERLAY_ATTR = /\brole=["{]?["']?(dialog|alertdialog|menu)\b|\baria-modal=(["']true["']|\{true\})/
+  /** The single-class selectors whose rules draw a fixed box over the whole window. */
+  function scrims(): string[] {
+    const decls = new Map<string, Map<string, string>>()
+    for (const name of SHEETS) {
+      const sheet = readFileSync(join(SRC, name), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+      for (const r of parseRules(sheet)) {
+        const sel = r.selector.trim()
+        if (!/^\.[\w-]+$/.test(sel)) continue
+        const m = decls.get(sel) ?? new Map<string, string>()
+        for (const d of r.decls) m.set(d.prop, d.value.trim())
+        decls.set(sel, m)
+      }
+    }
+    return [...decls]
+      .filter(([sel, d]) => sel !== '.stop-layer' && d.get('position') === 'fixed' &&
+        (d.get('inset') === '0' || ['top', 'right', 'bottom', 'left'].every((k) => d.get(k) === '0')))
+      .map(([sel]) => sel.slice(1))
+      .sort()
+  }
+  /** The JSX opening tag that starts at `at` (a '<'), braces and quotes skipped, '>' at depth 0 ending it. */
+  function tagAt(src: string, at: number): string {
+    let depth = 0
+    let quote = ''
+    for (let i = at + 1; i < src.length; i++) {
+      const c = src[i]
+      if (quote) {
+        if (c === quote) quote = ''
+      } else if (c === '"' || c === "'" || c === '`') quote = c
+      else if (c === '{') depth++
+      else if (c === '}') depth--
+      else if (c === '>' && depth === 0) return src.slice(at, i + 1)
+    }
+    return src.slice(at)
+  }
+  const appFiles = (dir: string): string[] =>
+    readdirSync(dir).flatMap((n) => {
+      const p = join(dir, n)
+      if (statSync(p).isDirectory()) return n === 'probe' ? [] : appFiles(p)
+      return /\.tsx$/.test(n) && !/\.test\.tsx$/.test(n) ? [p] : []
+    })
+
+  it('the scrims the sheets declare are the known ones (a new one is checked below once added here)', () => {
+    expect(scrims()).toEqual(['logconfirm-backdrop', 'mv-packs-overlay', 'radio-picker-overlay', 'roam-modal', 'ui-dialog-overlay'])
+  })
+
+  it('every place the app draws a scrim, it is the overlay, holds one as its first child, or is a Radix modal overlay', () => {
+    const all = scrims()
+    const tokens = all.map((cls) => [cls, new RegExp(`(?<![\\w-])${cls}(?![\\w-])`)] as const)
+    const found = new Map<string, number>()
+    const bad: string[] = []
+    for (const p of appFiles(SRC)) {
+      const src = readFileSync(p, 'utf8')
+      if (!all.some((cls) => src.includes(cls))) continue
+      for (const [cls, token] of tokens) {
+        for (const m of src.matchAll(/className=("[^"]*"|\{[^}]*\})/g)) {
+          if (!token.test(m[1])) continue
+          found.set(cls, (found.get(cls) ?? 0) + 1)
+          const start = src.lastIndexOf('<', m.index)
+          const tag = tagAt(src, start)
+          const where = `${p.slice(SRC.length + 1)}:${src.slice(0, start).split('\n').length} (${cls})`
+          if (OVERLAY_ATTR.test(tag)) continue
+          // A Radix dialog's Overlay is drawn only for a modal dialog, which locks the page's pointer events.
+          if (/^<(RD|Dialog)\.Overlay\b/.test(tag)) {
+            if (/modal=\{false\}/.test(src)) bad.push(`${where}: a Radix Overlay in a file with a non-modal dialog`)
+            continue
+          }
+          // The first child: the next JSX opening tag, past whitespace and {/* comments */}.
+          const rest = src.slice(start + tag.length).replace(/^(\s|\{\/\*[\s\S]*?\*\/\})*/, '')
+          if (rest.startsWith('<') && OVERLAY_ATTR.test(tagAt(rest, 0))) continue
+          bad.push(`${where}: neither the overlay nor holding one`)
+        }
+      }
+    }
+    expect([...found.keys()].sort(), 'premise: every scrim is drawn somewhere').toEqual(all)
+    expect(bad).toEqual([])
+  })
+})
+
