@@ -38,14 +38,22 @@ const W = 700
 const H = 800
 const STOP_BOX = { left: 294, top: 59, width: 75, height: 32 }
 const OVERLAY = '.ui-dialog-overlay, .logconfirm-backdrop, .radio-picker-overlay, [role="menu"]'
+/** Where an overlay is drawn: the whole window, unless a test draws it over part of Stop TX only. */
+let overlayBox = { left: 0, top: 0, width: W, height: H }
 
 /** The geometry jsdom lacks: Stop TX's box, the window for every overlay, nothing for anything else. */
 function layout() {
   const rect = (l: number, t: number, w: number, h: number) =>
     ({ left: l, top: t, width: w, height: h, right: l + w, bottom: t + h, x: l, y: t, toJSON: () => ({}) }) as DOMRect
   vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+    // `data-box="left,top,width,height"`: an element a test draws at a place of its own (a part of an overlay).
+    const own = this.getAttribute('data-box')
+    if (own) {
+      const [l, t, w, h] = own.split(',').map(Number)
+      return rect(l, t, w, h)
+    }
     if (this.matches('[data-stop-control], [data-stop-mirror]')) return rect(STOP_BOX.left, STOP_BOX.top, STOP_BOX.width, STOP_BOX.height)
-    if (this.matches(OVERLAY) || this.matches('[role="dialog"], [aria-modal="true"]')) return rect(0, 0, W, H)
+    if (this.matches(OVERLAY) || this.matches('[role="dialog"], [aria-modal="true"]')) return rect(overlayBox.left, overlayBox.top, overlayBox.width, overlayBox.height)
     return rect(0, 0, 0, 0)
   })
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, get() { return STOP_BOX.width } })
@@ -56,7 +64,7 @@ function layout() {
       const r = el.getBoundingClientRect()
       return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom && r.width > 0
     }
-    const overlays = [...document.querySelectorAll(OVERLAY)].filter(inBox).reverse()
+    const overlays = [...document.querySelectorAll(`${OVERLAY}, [data-box]`)].filter(inBox).reverse()
     const stops = [...document.querySelectorAll('[data-stop-control]')].filter(inBox).filter((e) => !inert(e))
     return [...overlays, ...stops, document.documentElement]
   }
@@ -71,11 +79,11 @@ function inert(el: Element): boolean {
   return false
 }
 
-/** One left click where Stop TX is drawn, sent where a browser sends it (see the header). */
-function clickWhereDrawn(): void {
+/** One left click where Stop TX is drawn (its centre, or the point `at`), sent where a browser sends it (see the
+ *  header). */
+function clickWhereDrawn(at?: [number, number]): void {
   const mirror = document.querySelector<HTMLElement>('.stop-layer [data-stop-mirror]')
-  const x = STOP_BOX.left + STOP_BOX.width / 2
-  const y = STOP_BOX.top + STOP_BOX.height / 2
+  const [x, y] = at ?? [STOP_BOX.left + STOP_BOX.width / 2, STOP_BOX.top + STOP_BOX.height / 2]
   const under = document.elementsFromPoint(x, y)[0] as HTMLElement
   const hit = mirror ?? (inert(under) ? document.documentElement : under)
   fireEvent.pointerDown(hit, { button: 0, ctrlKey: false, pointerType: 'mouse' })
@@ -103,6 +111,7 @@ beforeEach(layout)
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
+  overlayBox = { left: 0, top: 0, width: W, height: H }
   document.body.style.pointerEvents = ''
 })
 
@@ -201,6 +210,145 @@ describe('one click where Stop TX is drawn stops once, and the overlay stays ope
       expect(document.activeElement, 'the keyboard stays where it was').toBe(before)
     })
   }
+
+  // ANY PART COVERED IS COVERED: a menu over part of Stop TX with its centre free still takes the press that lands on
+  // that part (the band menu over 41 % of it at 1366×768 @175 %, over 78 % on FT with only some points free).
+  for (const [part, box] of [
+    ['its left third, the centre free', { left: STOP_BOX.left - 4, top: STOP_BOX.top - 4, width: STOP_BOX.width / 3 + 4, height: STOP_BOX.height + 8 }],
+    ['a strip along its foot, the centre free', { left: STOP_BOX.left - 4, top: STOP_BOX.top + STOP_BOX.height * 0.8, width: STOP_BOX.width + 8, height: 40 }],
+  ] as const) {
+    it(`a menu over ${part}: Stop TX is mirrored, and a press on the covered part stops once, the menu open`, async () => {
+      overlayBox = box
+      const halt = vi.fn()
+      page(halt, KINDS[KINDS.length - 1].open())
+      await KINDS[KINDS.length - 1].after?.()
+      await frames()
+      expect(screen.queryByRole('menu', { hidden: true }), 'premise: the menu is open').not.toBeNull()
+      expect(document.querySelector('.stop-layer [data-stop-mirror]'), 'a mirror stands').not.toBeNull()
+      const before = document.activeElement
+      clickWhereDrawn([STOP_BOX.left + STOP_BOX.width / 6, STOP_BOX.top + STOP_BOX.height * 0.9])
+      await frames()
+      expect(halt).toHaveBeenCalledTimes(1)
+      expect(screen.queryByRole('menu', { hidden: true }), 'the menu is still open').not.toBeNull()
+      expect(document.activeElement, 'the keyboard stays where it was').toBe(before)
+    })
+  }
+
+  it('a menu open beside Stop TX, touching none of it: no mirror, and not one hit test spent on it', async () => {
+    overlayBox = { left: STOP_BOX.left + STOP_BOX.width + 2, top: STOP_BOX.top, width: 200, height: 200 }
+    page(vi.fn(), KINDS[KINDS.length - 1].open())
+    await KINDS[KINDS.length - 1].after?.()
+    await frames()
+    expect(screen.queryByRole('menu', { hidden: true }), 'premise: the menu is open').not.toBeNull()
+    const hits = vi.spyOn(document, 'elementsFromPoint')
+    await frames()
+    expect(document.querySelector('[data-stop-mirror]')).toBeNull()
+    expect(hits).not.toHaveBeenCalled()
+  })
+
+  // WHERE AN OVERLAY IS DRAWN IS WHERE ANY PART OF IT IS DRAWN. The pass that spares a stop control its hit tests
+  // when no overlay meets it must count every part of an overlay: a child drawn outside the overlay's own box (placed
+  // absolutely, overflowing), and the children of an overlay whose own box is empty.
+  const LEFT_THIRD = `${STOP_BOX.left - 4},${STOP_BOX.top - 4},${STOP_BOX.width / 3 + 4},${STOP_BOX.height + 8}`
+  it("a part of a menu drawn outside the menu's own box, over part of Stop TX: Stop TX is mirrored", async () => {
+    page(vi.fn(), (
+      <div role="menu" aria-label="elsewhere" data-box="500,600,120,80">
+        <div className="probe-flyout" data-box={LEFT_THIRD} />
+      </div>
+    ))
+    await frames()
+    expect(document.querySelector('.stop-layer [data-stop-mirror]')).not.toBeNull()
+  })
+
+  it('the children of an overlay with an empty box, over part of Stop TX: Stop TX is mirrored', async () => {
+    page(vi.fn(), (
+      <>
+        <div role="menu" aria-label="drawn elsewhere" data-box="500,600,120,80" />
+        <div role="menu" aria-label="empty box" data-box="0,0,0,0">
+          <div className="probe-flyout" data-box={LEFT_THIRD} />
+        </div>
+      </>
+    ))
+    await frames()
+    expect(document.querySelector('.stop-layer [data-stop-mirror]')).not.toBeNull()
+  })
+
+  // An overlay that opens by itself over Stop TX while the pointer is already down on it: a mirror drawn under the
+  // pointer then would take the release, and the click would land on neither (Chrome sends it to their common
+  // ancestor). The press is the button's; the mirror comes once it ends.
+  /** Stop TX, the stop layer, and (when `menu`) a menu over its left third that opened by itself. */
+  const pressPage = (halt: () => void) => {
+    overlayBox = { left: STOP_BOX.left - 4, top: STOP_BOX.top - 4, width: STOP_BOX.width / 3 + 4, height: STOP_BOX.height + 8 }
+    const tree = (menu: boolean) => (
+      <>
+        <div className="app">
+          <button type="button" className="op-btn stop" data-stop-control onClick={halt}>Stop TX</button>
+        </div>
+        {menu && <div role="menu" aria-label="opened by itself" />}
+        <StopLayer />
+      </>
+    )
+    const { rerender } = render(tree(false))
+    return { stop: screen.getByRole('button', { name: 'Stop TX' }), openMenu: () => rerender(tree(true)) }
+  }
+  const mirrored = () => document.querySelector('.stop-layer [data-stop-mirror]') != null
+  const MOUSE = { pointerType: 'mouse', isPrimary: true, pointerId: 1 }
+
+  it('a menu that opens over part of Stop TX while it is being pressed: no mirror until the press ends, and it stops once', async () => {
+    const halt = vi.fn()
+    const { stop, openMenu } = pressPage(halt)
+    await frames()
+    fireEvent.pointerDown(stop, { button: 0, ...MOUSE })
+    fireEvent.mouseDown(stop, { button: 0 })
+    openMenu()
+    await frames()
+    expect(mirrored(), 'no mirror under a press on the button').toBe(false)
+    fireEvent.pointerUp(stop, { button: 0, ...MOUSE })
+    fireEvent.mouseUp(stop, { button: 0 })
+    fireEvent.click(stop, { button: 0 })
+    await frames()
+    expect(halt).toHaveBeenCalledTimes(1)
+    expect(mirrored(), 'the press over, the mirror stands').toBe(true)
+  })
+
+  it('the hold ends only on its own pointer: another pointer let go leaves it, its own release ends it', async () => {
+    const { stop, openMenu } = pressPage(vi.fn())
+    await frames()
+    fireEvent.pointerDown(stop, { button: 0, ...MOUSE })
+    openMenu()
+    await frames()
+    fireEvent.pointerUp(document.body, { button: 0, pointerType: 'touch', isPrimary: false, pointerId: 7 })
+    await frames()
+    expect(mirrored(), 'another pointer let go: still held').toBe(false)
+    fireEvent.pointerUp(stop, { button: 0, ...MOUSE })
+    await frames()
+    expect(mirrored(), 'its own release: the mirror stands').toBe(true)
+  })
+
+  it('a release the page never heard cannot hold the layer: the next press elsewhere, or the window losing focus, ends it', async () => {
+    for (const end of ['press elsewhere', 'blur'] as const) {
+      const { stop, openMenu } = pressPage(vi.fn())
+      await frames()
+      fireEvent.pointerDown(stop, { button: 0, ...MOUSE })
+      openMenu()
+      await frames()
+      expect(mirrored(), `${end}: premise, held`).toBe(false)
+      if (end === 'blur') fireEvent.blur(window)
+      else fireEvent.pointerDown(document.body, { button: 0, ...MOUSE })
+      await frames()
+      expect(mirrored(), `${end}: the hold is over`).toBe(true)
+      cleanup()
+    }
+  })
+
+  it('only a main-button press holds: a right-button press on Stop TX does not', async () => {
+    const { stop, openMenu } = pressPage(vi.fn())
+    await frames()
+    fireEvent.pointerDown(stop, { button: 2, ...MOUSE })
+    openMenu()
+    await frames()
+    expect(mirrored()).toBe(true)
+  })
 
   it('a mirror stands only while an overlay covers Stop TX, and a disabled stop is a disabled mirror', async () => {
     const halt = vi.fn()

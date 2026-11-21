@@ -221,7 +221,12 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         on the Logbook and on Operate at 700×800 (xs) and 2560×1440 (xl): one
                         real click on Stop TX stops once, closes the menu and leaves the keyboard
                         on Stop TX, with the modal menu's pointer lock planted as the control
-                        that must swallow the click (ui/probe/menustop-probe.mjs; it builds nothing)
+                        that must swallow the click; then on FT at 1366×768 @175 %, 1920×1080 and
+                        2560×1440, every menu and popover opened in turn leaves every stop control
+                        clear (its centre and 90 % of a 9 × 5 grid its own or its mirror's), and a
+                        menu planted over a third of Stop TX gets a mirror that stops once, with the
+                        same plant minus the stop layer as the control (ui/probe/menustop-probe.mjs;
+                        it builds nothing)
   --desktop topbar      the top bar on the FT screen and on CW at the common full-screen sizes
                         and 125/150 % on a 1080p screen, without and with a status-lane message,
                         asserting the message changes neither the bar's height nor the line any
