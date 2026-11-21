@@ -228,13 +228,47 @@ describe('one click where Stop TX is drawn stops once, and the overlay stays ope
     })
   }
 
-  it('a menu open beside Stop TX, touching none of it: no mirror', async () => {
+  it('a menu open beside Stop TX, touching none of it: no mirror, and not one hit test spent on it', async () => {
     overlayBox = { left: STOP_BOX.left + STOP_BOX.width + 2, top: STOP_BOX.top, width: 200, height: 200 }
     page(vi.fn(), KINDS[KINDS.length - 1].open())
     await KINDS[KINDS.length - 1].after?.()
     await frames()
     expect(screen.queryByRole('menu', { hidden: true }), 'premise: the menu is open').not.toBeNull()
+    const hits = vi.spyOn(document, 'elementsFromPoint')
+    await frames()
     expect(document.querySelector('[data-stop-mirror]')).toBeNull()
+    expect(hits).not.toHaveBeenCalled()
+  })
+
+  // An overlay that opens by itself over Stop TX while the pointer is already down on it: a mirror drawn under the
+  // pointer then would take the release, and the click would land on neither (Chrome sends it to their common
+  // ancestor). The press is the button's; the mirror comes once it ends.
+  it('a menu that opens over part of Stop TX while it is being pressed: no mirror until the press ends, and it stops once', async () => {
+    overlayBox = { left: STOP_BOX.left - 4, top: STOP_BOX.top - 4, width: STOP_BOX.width / 3 + 4, height: STOP_BOX.height + 8 }
+    const halt = vi.fn()
+    const tree = (menu: boolean) => (
+      <>
+        <div className="app">
+          <button type="button" className="op-btn stop" data-stop-control onClick={halt}>Stop TX</button>
+        </div>
+        {menu && <div role="menu" aria-label="opened by itself" />}
+        <StopLayer />
+      </>
+    )
+    const { rerender } = render(tree(false))
+    await frames()
+    const stop = screen.getByRole('button', { name: 'Stop TX' })
+    fireEvent.pointerDown(stop, { button: 0, pointerType: 'mouse' })
+    fireEvent.mouseDown(stop, { button: 0 })
+    rerender(tree(true))
+    await frames()
+    expect(document.querySelector('.stop-layer [data-stop-mirror]'), 'no mirror under a press on the button').toBeNull()
+    fireEvent.pointerUp(stop, { button: 0, pointerType: 'mouse' })
+    fireEvent.mouseUp(stop, { button: 0 })
+    fireEvent.click(stop, { button: 0 })
+    await frames()
+    expect(halt).toHaveBeenCalledTimes(1)
+    expect(document.querySelector('.stop-layer [data-stop-mirror]'), 'the press over, the mirror stands').not.toBeNull()
   })
 
   it('a mirror stands only while an overlay covers Stop TX, and a disabled stop is a disabled mirror', async () => {

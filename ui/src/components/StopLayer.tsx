@@ -86,6 +86,28 @@ function overlayOpen(): boolean {
   return false
 }
 
+/** Where the open overlays are drawn: each drawn overlay's box and the box of every element it sits in (a scrim that
+ *  holds a dialog, a popper's wrapper), up to <body>. Null when the page's pointer events are locked: then nothing
+ *  under the overlay can be pressed, wherever it is drawn. A stop control none of these boxes meets cannot be covered
+ *  by an overlay, so it needs no hit test (the grid below costs 46 of them, on every frame while an overlay is open). */
+function overlayBoxes(): DOMRect[] | null {
+  if (document.body.style.pointerEvents === 'none') return null
+  const boxes: DOMRect[] = []
+  for (const el of document.querySelectorAll(OVERLAY)) {
+    const r = el.getBoundingClientRect()
+    if (r.width <= 0 || r.height <= 0) continue
+    for (let n: Element | null = el; n && n !== document.body && n !== document.documentElement; n = n.parentElement) {
+      boxes.push(n.getBoundingClientRect())
+    }
+  }
+  return boxes
+}
+
+/** Whether some overlay's box meets `box` (null boxes: the page is locked, so every stop control is in question). */
+function meets(boxes: DOMRect[] | null, box: Box): boolean {
+  return boxes == null || boxes.some((r) => r.left < box.right && r.right > box.left && r.top < box.bottom && r.bottom > box.top)
+}
+
 /** The part of `el` the operator can see: its box cut to the window and to every ancestor that clips. Null if none. */
 function visibleBox(el: HTMLElement): Box | null {
   const r = el.getBoundingClientRect()
@@ -170,6 +192,14 @@ export function StopLayer() {
     // While a press on a mirror is in progress the layer holds still: the press may close what covered the button,
     // and the mirror must still be there for the click that ends it.
     let pressed: { el: HTMLElement; x: number; y: number } | null = null
+    // While the pointer is down on a stop control ITSELF, no new mirror is drawn: an overlay that opens on its own over
+    // the button in that moment would put a mirror under the pointer, and the press — begun on the button, ended on
+    // the mirror — would click neither. The press ends on the button and stops; the mirror follows it.
+    let holding = false
+    const onPointerDown = (e: PointerEvent) => {
+      const t = e.target as Element | null
+      if (t && !layer.contains(t) && t.closest?.(STOP_CONTROL)) holding = true
+    }
 
     const drop = (el: HTMLElement) => {
       mirrors.get(el)?.node.remove()
@@ -267,16 +297,17 @@ export function StopLayer() {
 
     const sync = () => {
       refresh()
-      if (pressed) return
+      if (pressed || holding) return
       if (!overlayOpen()) {
         for (const el of [...mirrors.keys()]) drop(el)
         return
       }
       const stops = new Set(document.querySelectorAll<HTMLElement>(STOP_CONTROL))
       for (const el of [...mirrors.keys()]) if (!stops.has(el)) drop(el)
+      const covers = overlayBoxes()
       for (const el of stops) {
         const box = present(el) ? visibleBox(el) : null
-        if (!box || uncovered(el, box, layer)) drop(el)
+        if (!box || !meets(covers, box) || uncovered(el, box, layer)) drop(el)
         else place(el, box)
       }
     }
@@ -285,8 +316,10 @@ export function StopLayer() {
     const released = () =>
       setTimeout(() => {
         pressed = null
+        holding = false
         refresh()
       }, 0)
+    window.addEventListener('pointerdown', onPointerDown, true)
     window.addEventListener('pointerup', released, true)
     window.addEventListener('pointercancel', released, true)
     let frame = 0
@@ -298,6 +331,7 @@ export function StopLayer() {
     return () => {
       cancelAnimationFrame(frame)
       unwatch()
+      window.removeEventListener('pointerdown', onPointerDown, true)
       window.removeEventListener('pointerup', released, true)
       window.removeEventListener('pointercancel', released, true)
       layer.remove()
