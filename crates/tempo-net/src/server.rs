@@ -98,7 +98,47 @@ pub fn refused_from_other_computer(
     shapes_a_transmission && !accept_from_other_computers && !from.is_loopback()
 }
 
+/// Whether the window whose sender id is `own` acts on `inbound`. A request that acts on one
+/// station — Reply (works a station and arms TX), FreeText (sets what goes out), Location (moves
+/// the grid), HighlightCallsign and Clear (its panes) — names in its id the client it is for, as a
+/// WSJT-X server addresses one client. Each window of a station is its own client (`sender_id`),
+/// and they share a multicast group or a listener's broadcast, so a request for "Nexus - r2" is
+/// left to r2. The station's base window (`APP_ID`) also takes a request under an id that is no
+/// Nexus window's: WSJT-X itself acts on these whatever id they carry, and a single-window
+/// station's logger may never have learned the name.
+///
+/// ⛔ A HaltTx is obeyed whoever it names: stopping a window that was not asked is safe, missing
+/// a halt is not. Replay is answered by each window under its own id (more decodes than asked,
+/// never fewer), and the messages a companion program SENDS (Decode, QSO Logged, Logged ADIF)
+/// carry their sender's id, not a target.
+pub fn addressed_to(own: &str, inbound: &Inbound) -> bool {
+    let target = match inbound {
+        Inbound::Reply { id, .. }
+        | Inbound::FreeText { id, .. }
+        | Inbound::Location { id, .. }
+        | Inbound::HighlightCallsign { id, .. }
+        | Inbound::Clear { id, .. } => id,
+        Inbound::HaltTx { .. }
+        | Inbound::Replay { .. }
+        | Inbound::Decode { .. }
+        | Inbound::QsoLogged { .. }
+        | Inbound::LoggedAdif { .. }
+        | Inbound::Other { .. } => return true,
+    };
+    target == own || (own == APP_ID && !is_nexus_id(target))
+}
+
 impl WsjtxServer {
+    /// The sender id this window's datagrams carry ([`sender_id`]).
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Whether this window acts on `inbound` ([`addressed_to`]).
+    pub fn addressed_here(&self, inbound: &Inbound) -> bool {
+        addressed_to(&self.id, inbound)
+    }
+
     /// Bind a UDP socket at `bind` and send to `target`.
     ///
     /// - `bind` is typically `0.0.0.0:0` (ephemeral) for pure output, or a fixed
@@ -515,6 +555,52 @@ mod tests {
             "",
         ] {
             assert!(!is_nexus_id(id), "{id:?}");
+        }
+    }
+
+    /// A request that acts on one station is taken only by the window it names; a halt by every
+    /// window. The base window also takes one under an id that is no Nexus window's.
+    #[test]
+    fn a_request_is_taken_by_the_window_it_names_and_a_halt_by_all() {
+        let reply = |to: &str| Inbound::Reply {
+            id: to.into(),
+            time_ms: 0,
+            snr: -5,
+            delta_time: 0.1,
+            delta_freq: 1500,
+            mode: "~".into(),
+            message: "CQ W1AW FN31".into(),
+            low_confidence: false,
+            modifiers: 0,
+        };
+        let halt = |to: &str| Inbound::HaltTx {
+            id: to.into(),
+            auto_only: false,
+        };
+        let (base, r1, r2) = (
+            sender_id(None),
+            sender_id(Some("r1")),
+            sender_id(Some("r2")),
+        );
+        assert!(addressed_to(&r1, &reply(&r1)));
+        assert!(!addressed_to(&r1, &reply(&r2)), "r2's Reply is left to r2");
+        assert!(!addressed_to(&r1, &reply(&base)), "the base window's too");
+        assert!(
+            !addressed_to(&r1, &reply("GridTracker")),
+            "a radio window: its own id only"
+        );
+        assert!(addressed_to(&base, &reply(&base)));
+        assert!(!addressed_to(&base, &reply(&r2)));
+        assert!(
+            addressed_to(&base, &reply("WSJT-X")),
+            "a single window, as WSJT-X"
+        );
+        for to in [&base, &r1, &r2, &"anything".to_string()] {
+            assert!(addressed_to(&r1, &halt(to)), "a halt for {to} stops r1");
+            assert!(
+                addressed_to(&base, &halt(to)),
+                "a halt for {to} stops the base window"
+            );
         }
     }
 

@@ -17703,6 +17703,11 @@ impl RadioLoop {
                     note_udp_request_refused(&inb, from);
                     continue;
                 }
+                // A request for another window of this station is left to that window; a halt is
+                // obeyed whoever it names (`tempo_net::server::addressed_to`).
+                if !server.addressed_here(&inb) {
+                    continue;
+                }
                 match inb {
                     WsjtxInbound::HaltTx { .. } => {
                         eng.halt_tx();
