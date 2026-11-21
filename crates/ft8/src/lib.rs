@@ -19,7 +19,7 @@ pub use tempo_fast_sys::{FT8_NMAX as NMAX, FT8_NN as NN, FT8_NZ as NZ};
 mod var;
 pub use tempo_fast_sys::{Ft8VarParams, OPENMP_THREAD_STACK};
 pub use var::{
-    decode_frame_var, decode_frame_var_raw, napwid_for_dial, on_decoder_thread_wait,
+    decode_frame_var, decode_frame_var_raw, leave_a_core, napwid_for_dial, on_decoder_thread_wait,
     openmp_selfcheck, var_load_callsign_db, var_reset, var_slices, var_threads, VarRequest,
 };
 

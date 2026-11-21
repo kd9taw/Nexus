@@ -44,7 +44,8 @@ pub struct VarRequest<'a> {
     /// AP window, Hz: 5 below 30 MHz, 15 below 100 MHz, else 50 (`mainwindow.cpp:5511-5513`);
     /// see [`napwid_for_dial`].
     pub napwid: i32,
-    /// Threads: 0 = WSJT-X's automatic count, 1..=12.
+    /// Threads: 0 = WSJT-X's automatic count, 1..=12; an explicit count is held under this
+    /// computer's logical cores ([`leave_a_core`]).
     pub threads: i32,
     /// Decoding cycles 1..=3 (`nft8cycles`).
     pub cycles: i32,
@@ -117,7 +118,11 @@ impl VarRequest<'_> {
             nftx: self.nftx,
             nqso_progress: self.nqso_progress,
             napwid: self.napwid,
-            nmt: self.threads,
+            // Never the last core (`leave_a_core`): the window and the UI keep one while it decodes.
+            nmt: leave_a_core(
+                self.threads,
+                std::thread::available_parallelism().map_or(1, |n| n.get() as i32),
+            ),
             nft8cycles: self.cycles,
             nft8rxfsens: if self.hound {
                 1
@@ -514,6 +519,21 @@ pub fn var_reset() {
     on_decoder_thread_wait(|| unsafe { tempo_fast_sys::ft8var_reset() })
 }
 
+/// The threads an EXPLICIT request (Ludicrous's 12, a Custom count) may take on a computer of
+/// `cores` logical cores: never the last one, never fewer than one. Automatic (`0`, Keen) is passed
+/// on as it is: WSJT-X's own table already leaves one to three cores free.
+///
+/// WSJT-X caps an explicit count at the logical cores only (`ft8var_threads`); it runs its decoder
+/// in a process of its own. Nexus decodes in the app's process, and a decode on every core made
+/// dragging or resizing the window stutter once a period (1.25.0-beta.2, Windows, Ludicrous). A
+/// standalone function so anything that chooses a thread count later can call it.
+pub fn leave_a_core(requested: i32, cores: i32) -> i32 {
+    if requested <= 0 {
+        return requested;
+    }
+    requested.min(cores - 1).max(1)
+}
+
 /// The thread count WSJT-X would use for `requested` (0 = automatic) on this machine.
 pub fn var_threads(requested: i32) -> i32 {
     // SAFETY: reads the core count; no modem state.
@@ -537,6 +557,80 @@ pub fn var_slices(nfa: i32, nfb: i32, n: usize) -> Vec<(i32, i32)> {
 mod tests {
     use super::{marked, noise_shape, plain_path_for_fortran, swl_noise_shape};
     use crate::Decode;
+
+    fn request(threads: i32) -> super::VarRequest<'static> {
+        super::VarRequest {
+            nzhsym: 49,
+            utc_seconds: 0,
+            nfa: 200,
+            nfb: 4000,
+            nfqso: 1500,
+            nftx: 1500,
+            nqso_progress: 0,
+            napwid: 75,
+            threads,
+            cycles: 3,
+            sensitivity: 3,
+            rx_freq_sensitivity: 3,
+            cand_thin: 100,
+            ap: true,
+            hide_dupes: true,
+            mycall: "K1ABC",
+            hiscall: "",
+            mybcall: "K1ABC",
+            hisbcall: "",
+            hisgrid: "",
+            mycall_std: true,
+            hiscall_std: false,
+            hound: false,
+            dx_search: false,
+            wide_dx_search: true,
+            swl: false,
+        }
+    }
+
+    /// An explicit thread count (Ludicrous's 12, a Custom count) never takes this computer's last
+    /// logical core, so the window and the UI keep one while a period decodes; automatic (Keen's 0)
+    /// is WSJT-X's own table, which already leaves cores free, and is passed on as it is. Run under
+    /// `taskset -c 0-7` this is the 8-thread case of an 8-thread laptop: Ludicrous decodes on 7.
+    #[test]
+    fn an_explicit_thread_count_leaves_this_computer_a_core() {
+        let cores = std::thread::available_parallelism().map_or(1, |n| n.get() as i32);
+        assert_eq!(
+            request(12).params().nmt,
+            12.min(cores - 1).max(1),
+            "{cores} logical cores"
+        );
+        assert_eq!(request(1).params().nmt, 1);
+        assert_eq!(
+            request(0).params().nmt,
+            0,
+            "automatic is WSJT-X's table, untouched"
+        );
+    }
+
+    /// The cap itself: below the last core, never below one thread, automatic untouched.
+    #[test]
+    fn the_cap_is_one_under_the_cores_and_never_zero() {
+        use super::leave_a_core;
+        assert_eq!(leave_a_core(12, 8), 7, "Ludicrous on an 8-thread laptop");
+        assert_eq!(leave_a_core(8, 8), 7);
+        assert_eq!(leave_a_core(6, 8), 6, "a request under the cap is kept");
+        assert_eq!(leave_a_core(12, 2), 1);
+        assert_eq!(leave_a_core(12, 1), 1, "one core: one thread, never none");
+        assert_eq!(
+            leave_a_core(4, 0),
+            1,
+            "no core count read: still one thread"
+        );
+        assert_eq!(
+            leave_a_core(12, 32),
+            12,
+            "ft8var's own ceiling stands where it is lower"
+        );
+        assert_eq!(leave_a_core(0, 8), 0, "automatic (Keen) is passed on");
+        assert_eq!(leave_a_core(0, 2), 0);
+    }
 
     /// The app's resource folder on Windows comes as a verbatim `\\?\` path, and the decoder
     /// opens `<folder>/ALLCALL7.TXT` with a forward slash, which a verbatim path takes literally:
