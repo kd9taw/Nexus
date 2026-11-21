@@ -185,3 +185,79 @@ fn b_pressed_under_split_on_a_hamlib_icom_stays_on_b_with_split() {
         "the dial follows VFO B"
     );
 }
+
+/// A General in Phone at 14.200 USB (Extra-only phone) with split to 14.250 (inside General
+/// phone), on Hamlib model `model`; `then` runs after the split, a tick apart each. Returns
+/// whether the licence lets the transmitter key, and the frequency it judges the emission at.
+fn general_split(model: u32, then: Vec<fn(&mut Engine)>) -> (bool, f64, Vec<String>) {
+    let (addr, log, _) = icom_rigctld();
+    let engine = station(model);
+    engine.lock().unwrap().set_license_class("general");
+    let mut rig = Rig::rigctld(&addr);
+    let mut ticks: Vec<fn(&mut Engine)> = vec![idle, |e| e.request_split(Some(14.250)), idle];
+    ticks.extend(then);
+    ticks.extend([idle as fn(&mut Engine), idle, idle]);
+    run(&engine, &mut rig, ticks);
+    let e = engine.lock().unwrap();
+    let lines = log.lock().unwrap().clone();
+    (
+        e.tx_allowed(),
+        e.snapshot().radio.tx_emission_mhz.unwrap_or(0.0),
+        lines,
+    )
+}
+
+/// CONTROL: split on, VFO A selected: the radio transmits on VFO B, 14.250, inside General phone.
+#[test]
+fn a_split_on_vfo_a_is_judged_at_vfo_b() {
+    let (allowed, tx, lines) = general_split(3073, vec![]);
+    assert!(lines.iter().any(|l| l == "S 1 VFOB"), "{lines:?}");
+    assert!((tx - 14.250).abs() < 1e-9, "judged at {tx}");
+    assert!(allowed, "14.250 is inside General phone");
+}
+
+/// ⛔ SPLIT WITH VFO B SELECTED TRANSMITS ON VFO A, AND IS JUDGED THERE (operator ruling: treat
+/// VFO A as TX in that state). An IC-7300 behind Hamlib receives on B and keys A, here 14.200,
+/// which a General may not use for phone, though B is inside. The gate used to judge B and let it
+/// key.
+#[test]
+fn split_with_vfo_b_selected_on_a_hamlib_icom_is_judged_at_vfo_a() {
+    for model in [3073u32, 3085, 3070, 3090] {
+        let (allowed, tx, lines) = general_split(model, vec![|e| e.request_vfo(true)]);
+        assert!(
+            lines.iter().any(|l| l == "V VFOB"),
+            "model {model}: {lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.starts_with("S 0")),
+            "model {model}: split stays on: {lines:?}"
+        );
+        assert!(
+            (tx - 14.200).abs() < 1e-9,
+            "model {model}: judged at {tx}, not VFO A"
+        );
+        assert!(
+            !allowed,
+            "model {model}: VFO A, 14.200, is outside General phone"
+        );
+    }
+}
+
+/// …and back on VFO A, the transmitter is VFO B again.
+#[test]
+fn split_back_on_vfo_a_is_judged_at_vfo_b_again() {
+    let (allowed, tx, _) = general_split(
+        3073,
+        vec![|e| e.request_vfo(true), idle, |e| e.request_vfo(false)],
+    );
+    assert!((tx - 14.250).abs() < 1e-9, "judged at {tx}");
+    assert!(allowed);
+}
+
+/// CONTROL: the IC-9700 (satellite mode) is judged as before, at the split TX dial.
+#[test]
+fn split_with_vfo_b_selected_on_a_hamlib_ic9700_is_judged_as_before() {
+    let (allowed, tx, _) = general_split(3081, vec![|e| e.request_vfo(true)]);
+    assert!((tx - 14.250).abs() < 1e-9, "judged at {tx}");
+    assert!(allowed);
+}
