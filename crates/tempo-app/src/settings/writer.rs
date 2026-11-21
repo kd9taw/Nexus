@@ -42,6 +42,27 @@
 //!   waiting, a successful one supersedes it.
 //! - **A read-modify-write of the file**, the base profile's mirrors: [`SettingsWriter::rewrite`]
 //!   writes whatever is waiting first, then reads.
+//!
+//! # Several processes, one file
+//!
+//! The base profile's `settings.json` is rewritten by every radio window (its roster, routing
+//! table and simultaneous-radios flag), and each window is its own process with its own writer:
+//! the file lock above keeps nothing of another process out. So a rewrite also holds an exclusive
+//! OS lock on `<file name>.lock` beside the file from its read to its write
+//! ([`hold_across_processes`]); otherwise one window reads, another writes, and the first writes
+//! back what it read, losing the second's change.
+//!
+//! - **A crashed window never locks the file out.** The OS drops a process's locks when it ends,
+//!   however it ends (`flock` on Unix, `LockFileEx` on Windows, through std's `File::lock`), as the
+//!   radio claims and the profile lock rely on. The file left behind means nothing.
+//! - **The wait is bounded** ([`CROSS_PROCESS_PATIENCE`]): a radio window's mirrors rewrite under
+//!   the Engine lock, so an unbounded wait on a stalled holder would stall its radio loop. Out of
+//!   patience, the rewrite fails (a mirror is best-effort and says so) rather than write unlocked.
+//! - **It fails open only where the filesystem cannot lock**, as the radio claims do: refusing
+//!   every rewrite there would be worse than the hazard.
+//!
+//! Only the rewrite takes it. A plain save writes a whole snapshot without reading the file, so
+//! no lock can keep a change it never read; a lost update there is the shared store's to solve.
 //! - **A command whose answer is the save's result**: [`Ticket::wait`], once the lock is released.
 //! - **A quit, a restart, a relaunch and the Windows installer**: [`SettingsWriter::flush`], so
 //!   the last change reaches the disk before the process goes.
@@ -51,6 +72,7 @@
 
 use super::Settings;
 use std::collections::HashMap;
+use std::fs::{File, OpenOptions, TryLockError};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -331,14 +353,24 @@ impl SettingsWriter {
     /// supersedes nothing, so no hand-over can be reordered by it. The base window's "use one
     /// radio" (`use_single_radio`) calls it with no Engine lock; a per-radio window's mirrors call
     /// it under one.
+    ///
+    /// Another process's rewrite of the same file is kept out from the read to the write; see
+    /// "Several processes, one file" in the module header.
     pub fn rewrite(&self, edit: impl FnOnce(&mut Settings) -> bool) -> io::Result<()> {
         let file = lock(&self.shared.file);
         let written = self.shared.write_pending();
-        let mut s = Settings::load(&self.shared.path);
-        let result = if edit(&mut s) {
-            (self.shared.write)(&s, &self.shared.path)
-        } else {
-            Ok(())
+        let result = match hold_across_processes(&self.shared.path, CROSS_PROCESS_PATIENCE) {
+            Ok(across) => {
+                let mut s = Settings::load(&self.shared.path);
+                let result = if edit(&mut s) {
+                    (self.shared.write)(&s, &self.shared.path)
+                } else {
+                    Ok(())
+                };
+                drop(across);
+                result
+            }
+            Err(e) => Err(e),
         };
         drop(file);
         self.shared.finish(written);
@@ -424,6 +456,48 @@ impl Ticket {
             Some((_, kind, message)) => io::Error::new(*kind, message.clone()),
             None => io::Error::other("the settings were not saved"),
         })
+    }
+}
+
+/// How long a rewrite waits for another process's rewrite of the same file. A rewrite holds the
+/// lock for one read and one write of a small file, milliseconds; this is for a holder that has
+/// stalled, so a radio window's loop is never held for long behind it.
+const CROSS_PROCESS_PATIENCE: Duration = Duration::from_secs(2);
+
+/// Take the exclusive lock every process's rewrite of `path` holds, `<file name>.lock` beside it,
+/// waiting at most `patience` for another process to let go. `Ok(None)` when this filesystem
+/// cannot lock (fail-open, as the radio claims are); `TimedOut` when another process still holds
+/// it. Let go when the returned handle is dropped, or by the OS when the process ends.
+fn hold_across_processes(path: &Path, patience: Duration) -> io::Result<Option<File>> {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".lock");
+    let at = path.with_file_name(name);
+    if let Some(dir) = at.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let Ok(f) = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&at)
+    else {
+        return Ok(None); // no lock file can be made here: fail open
+    };
+    let deadline = Instant::now() + patience;
+    loop {
+        match f.try_lock() {
+            Ok(()) => return Ok(Some(f)),
+            Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(TryLockError::WouldBlock) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "another Nexus window is still writing this settings file",
+                ));
+            }
+            Err(TryLockError::Error(_)) => return Ok(None), // cannot lock here: fail open
+        }
     }
 }
 

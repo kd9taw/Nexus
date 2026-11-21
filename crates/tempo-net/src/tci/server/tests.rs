@@ -953,9 +953,9 @@ mod slow_readers {
     use crate::tci::server::conn::WRITE_STALL;
 
     /// The MSS a program with small buffers announces. Linux sizes the server's send buffer for
-    /// that connection from it, 25,600 bytes on this box where loopback's own MSS gives megabytes,
-    /// so one write of the writer's (up to 64 KiB of frames) fills the buffers between the server
-    /// and a program that does not read it.
+    /// that connection from it, kilobytes where loopback's own MSS gives megabytes. How many
+    /// kilobytes is the kernel's own choice and moves between kernels (25,600 bytes on one, over
+    /// 100 KB on 6.18), so a test that must fill them measures them ([`held_by_small_buffers`]).
     const SMALL_MSS: libc::c_int = 384;
 
     /// How much of what the server sends a slow program reads at a time, every [`SLOW_GAP`]: in a
@@ -974,7 +974,7 @@ mod slow_readers {
     /// Receive audio as large as one write of the writer's, in one frame: eight of the largest
     /// frames a program may stream ([`rx_frame`]) make such a write, but the writer gathers them as
     /// they come, so its first writes of them can be one frame each. One frame of the same size is
-    /// the first write, from the moment it is sent, and more than the buffers hold.
+    /// one whole write, from the moment it is sent.
     fn one_whole_write() -> Vec<u8> {
         let mut f = tx_frame(16 * 1024, 16 * 1024);
         f[24] = 1;
@@ -1010,6 +1010,25 @@ mod slow_readers {
             .connect(&SocketAddr::from((Ipv4Addr::LOCALHOST, port)).into())
             .expect("connected");
         socket.into()
+    }
+
+    /// What the buffers between a server and a program over [`small_buffers`] hold on this
+    /// kernel, unread: what the server's side takes before a write of it would block.
+    fn held_by_small_buffers() -> usize {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("a free port");
+        let port = listener.local_addr().expect("its port").port();
+        let _program = small_buffers(port);
+        let (mut server, _) = listener.accept().expect("accepted");
+        server.set_nonblocking(true).expect("non-blocking");
+        let chunk = [0u8; 4096];
+        let mut held = 0;
+        loop {
+            match server.write(&chunk) {
+                Ok(n) => held += n,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => return held,
+                Err(e) => panic!("measuring the buffers: {e}"),
+            }
+        }
     }
 
     /// A program over [`small_buffers`] through its init burst, its receive audio started and its
@@ -1052,23 +1071,37 @@ mod slow_readers {
     }
 
     /// ⭐ A PROGRAM THAT READS SLOWLY CANNOT HOLD OFF ITS FAREWELL: a program holding a `tci` key,
-    /// through small buffers, is sent one write of receive audio, more than the buffers hold, then
-    /// reads [`SLOW_READ`] bytes of it every [`SLOW_GAP`], with a command of its own each time so it
-    /// is never silent. Each write of the socket goes on a little before a timeout on it would end
-    /// it, so with a timeout on each write alone the writer's write lasted as long as the slow read
-    /// went on, and the farewell that ends the program's transmissions never came meanwhile. Each
-    /// write of the writer's has [`WRITE_STALL`] in all: past it the program is taken for gone, its
-    /// transmissions end, and it is closed as lost, as one that stopped reading is.
+    /// through small buffers, is sent whole writes of receive audio, twice what the buffers hold,
+    /// then reads [`SLOW_READ`] bytes of it every [`SLOW_GAP`], with a command of its own each time
+    /// so it is never silent. Each write of the socket goes on a little before a timeout on it
+    /// would end it, so with a timeout on each write alone the writer's first write that did not
+    /// fit lasted as long as the slow read went on, and the farewell that ends the program's
+    /// transmissions never came meanwhile. Each write of the writer's has [`WRITE_STALL`] in all:
+    /// past it the program is taken for gone, its transmissions end, and it is closed as lost, as
+    /// one that stopped reading is.
+    ///
+    /// The audio is sized from the buffers as measured, never from a size assumed for them: one
+    /// write that the kernel's buffers swallow whole holds nothing up, and the test then waits for
+    /// a stall that cannot happen.
     #[test]
     fn a_program_that_reads_slowly_cannot_hold_off_its_farewell() {
         let b = Bench::new();
         let c = keyed_through_small_buffers(&b);
         let id = b.id(1);
-        let sent = Instant::now();
+        let whole = one_whole_write();
+        let writes = 2 * held_by_small_buffers() / whole.len() + 1;
         assert!(
-            b.handle.send_rx_audio(id, one_whole_write()),
-            "its audio is started"
+            writes * whole.len() <= Limits::default().outbox,
+            "{writes} writes of audio do not fit the outbox; the buffers grew past what this \
+             test can fill"
         );
+        let sent = Instant::now();
+        for _ in 0..writes {
+            assert!(
+                b.handle.send_rx_audio(id, whole.clone()),
+                "its audio is started"
+            );
+        }
         let read = Arc::new(AtomicUsize::new(0));
         let reader = {
             let read = Arc::clone(&read);

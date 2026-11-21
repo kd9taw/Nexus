@@ -2183,10 +2183,11 @@ mod pskr_client_id_tests {
     }
 }
 
-/// The hops from the process's `--profile r<id>` to the three places a radio window must carry
-/// its radio: the radio loop's config (its monitor then leaves the other radio's port and rigctld
-/// to that radio's window) and both PSK Reporter client ids. Each hop dropped alone brings back
-/// two windows fighting over one radio, or bumping each other off PSK Reporter.
+/// The hops from the process's `--profile r<id>` to the places a radio window must carry its
+/// radio: the radio loop's config (its monitor then leaves the other radio's port and rigctld to
+/// that radio's window, and its WSJT-X messages carry the window's own sender id) and both PSK
+/// Reporter client ids. Each hop dropped alone brings back two windows fighting over one radio,
+/// bumping each other off PSK Reporter, or showing in GridTracker as one station.
 ///
 /// The profile is read once per process from the arguments or `NEXUS_PROFILE`, so the bound half
 /// runs in a child: this same test binary, re-run for this one test with `NEXUS_PROFILE=r1`.
@@ -2196,22 +2197,29 @@ mod bound_radio_wiring_tests {
 
     const CHILD: &str = "NEXUS_BOUND_WIRING_CHILD";
 
-    /// What this process carries: `(radio loop's bound radio, own-spots id, near-region id)`.
-    fn carried() -> (Option<u32>, String, String) {
+    /// What this process carries: `(radio loop's bound radio, own-spots id, near-region id, the
+    /// radio loop's WSJT-X sender id)`.
+    fn carried() -> (Option<u32>, String, String, String) {
         #[cfg(feature = "radio")]
-        let bound = super::radio_config_for(
-            &tempo_app::settings::Settings::default(),
-            &tempo_app::engine::SpectrumFeed::default(),
-            &std::sync::Arc::new(tempo_audio::rxtap::RxTap::new()),
-            &tempo_app::engine::MeterFeed::default(),
-        )
-        .bound_radio;
+        let (bound, wsjtx_id) = {
+            let cfg = super::radio_config_for(
+                &tempo_app::settings::Settings::default(),
+                &tempo_app::engine::SpectrumFeed::default(),
+                &std::sync::Arc::new(tempo_audio::rxtap::RxTap::new()),
+                &tempo_app::engine::MeterFeed::default(),
+            );
+            (cfg.bound_radio, cfg.wsjtx_id)
+        };
         #[cfg(not(feature = "radio"))]
-        let bound = bound_radio_id();
+        let (bound, wsjtx_id) = (
+            bound_radio_id(),
+            tempo_net::sender_id(super::active_profile()),
+        );
         (
             bound,
             pskr_feed_client_id("", "W9XYZ"),
             pskr_feed_client_id("rgn-", "W9XYZ"),
+            wsjtx_id,
         )
     }
 
@@ -2228,7 +2236,8 @@ mod bound_radio_wiring_tests {
                 (
                     Some(1),
                     "nx-W9XYZ-r1".to_string(),
-                    "nx-rgn-W9XYZ-r1".to_string()
+                    "nx-rgn-W9XYZ-r1".to_string(),
+                    "Nexus - r1".to_string(),
                 )
             );
             return;
@@ -2262,7 +2271,8 @@ mod bound_radio_wiring_tests {
                 (
                     None,
                     "nexus-W9XYZ".to_string(),
-                    "nexus-rgn-W9XYZ".to_string()
+                    "nexus-rgn-W9XYZ".to_string(),
+                    "Nexus".to_string(),
                 )
             );
         }
@@ -2989,6 +2999,23 @@ fn radio_profile_key(radio_id: u32) -> String {
     format!("r{radio_id}")
 }
 
+/// The WSJT-X sink's lines in the Connections log ([`tempo_audio::service::WsjtxUdpNote`]): why
+/// it cannot send, standing until it can, and then the line that says it has stopped failing.
+#[cfg(feature = "radio")]
+fn note_wsjtx_udp(line: Result<String, String>) {
+    match line {
+        Err(why) => conn_log_standing(WSJTX_UDP, "error", why),
+        Ok(line) => {
+            conn_log_standing_ends(WSJTX_UDP);
+            conn_log(WSJTX_UDP, "ok", line);
+        }
+    }
+}
+
+/// The WSJT-X sink's name in the Connections log: the switch's own label.
+#[cfg(feature = "radio")]
+const WSJTX_UDP: &str = "WSJT-X UDP API";
+
 /// The radio loop's startup config, from the launch settings and the three shared feeds `run`
 /// builds. A function rather than a literal inside `run` so the one field `run` cannot take from
 /// settings, the radio this process is bound to, is reachable by a test.
@@ -3073,6 +3100,9 @@ fn radio_config_for(
         mode: settings.rig_mode(), // DATA submode (PKTUSB/…) for FT8, not voice USB
         wsjtx_udp: settings.wsjtx_udp,
         wsjtx_addr: settings.wsjtx_udp_addr.clone(),
+        // Each window its own WSJT-X client, under its profile: "Nexus", "Nexus - r1", …
+        wsjtx_id: tempo_net::sender_id(active_profile()),
+        on_wsjtx_udp: Some(std::sync::Arc::new(note_wsjtx_udp)),
         pskreporter: settings.pskreporter,
         // The package's version, known once the app is built: `finish_launch` sets it.
         app_version: String::new(),
@@ -3852,6 +3882,41 @@ mod picker_radio_hold_tests {
         assert!(!gate.quit());
         gate.hold_or_start(|| false, 8, |i| started.lock().unwrap().push(i));
         assert_eq!(*started.lock().unwrap(), vec![8]);
+    }
+
+    /// The radio loop's WSJT-X sink reports to the Connections log: a failure stands as one line
+    /// until it ends, and the end is said.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn the_wsjtx_sink_reports_to_the_connections_log() {
+        let note = radio_config_for(
+            &tempo_app::settings::Settings::default(),
+            &tempo_app::engine::SpectrumFeed::default(),
+            &std::sync::Arc::new(tempo_audio::rxtap::RxTap::new()),
+            &tempo_app::engine::MeterFeed::default(),
+        )
+        .on_wsjtx_udp
+        .expect("the radio loop is told where to report");
+        let says = |message: &str| {
+            get_connection_log()
+                .iter()
+                .any(|e| e.connector == WSJTX_UDP && e.message == message)
+        };
+        let standing = || {
+            CONN_LOG
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|e| e.standing && e.connector == WSJTX_UDP)
+                .count()
+        };
+        note(Err("cannot send: first".into()));
+        note(Err("cannot send: second".into()));
+        assert!(says("cannot send: second"));
+        assert_eq!(standing(), 1, "one standing line, the latest");
+        note(Ok("sending to 127.0.0.1:2237 again".into()));
+        assert_eq!(standing(), 0, "the failure no longer stands");
+        assert!(says("sending to 127.0.0.1:2237 again"));
     }
 
     /// A window refused its launch radio (another window runs it) waits; switching it to a free
@@ -5027,6 +5092,177 @@ mod lotw_batch_tests {
                  and both uploaded contacts still in the log are marked"
             );
         }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// ★ ONE SIGNER ACROSS EVERY WINDOW. Two windows share one log, and each runs its own
+    /// automatic upload: here window B's timer fires while window A's TQSL is still signing.
+    /// Without a lock both batches read the same owed contacts and LoTW received each twice. B is
+    /// refused without starting TQSL, A's batch signs and stamps, and once A is done the lock is
+    /// free again for the next batch.
+    #[test]
+    fn a_second_window_skips_its_lotw_batch_while_another_signs() {
+        let (dir, a, _) = station("lotw-one-signer-a", 2);
+        let (dir_b, b, _) = station("lotw-one-signer-b", 2);
+        let shared = dir.join("shared-data");
+        std::fs::create_dir_all(&shared).unwrap();
+        let mut b_answer = None;
+        let report = lotw_upload_batch_one_signer(&a, LotwPick::Unsent, true, &shared, |_, _| {
+            b_answer = Some(lotw_upload_batch_one_signer(
+                &b,
+                LotwPick::Unsent,
+                true,
+                &shared,
+                |_, _| panic!("window B ran TQSL while window A was signing"),
+            ));
+            Ok((0, String::new()))
+        })
+        .expect("window A's upload ran");
+        assert_eq!((report.dispatched, report.outcome.as_str()), (2, "pending"));
+        assert_eq!(
+            b_answer
+                .expect("window B tried while A signed")
+                .unwrap_err(),
+            LOTW_ANOTHER_WINDOW,
+            "window B skips"
+        );
+        let mut ran = false;
+        let report = lotw_upload_batch_one_signer(&b, LotwPick::Unsent, true, &shared, |_, _| {
+            ran = true;
+            Ok((0, String::new()))
+        })
+        .expect("window B's upload ran once A was done");
+        assert!(
+            ran && report.dispatched == 2,
+            "the lock is released when a batch ends"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(dir_b);
+    }
+
+    /// ★ THE NEXT WINDOW FINDS THE CONTACTS STAMPED THE MOMENT THE FIRST LETS GO. Two windows on
+    /// ONE log, as a station's windows are: window A's automatic upload signs, and its stamps reach
+    /// the store's writer just as the disk stalls. Window B's timer takes the lock the instant A's
+    /// batch ends. A batch that gave the lock up with its stamps still queued let B read the same
+    /// contacts as owed and sign them a second time; A's waits for its stamps to land first.
+    #[test]
+    fn the_next_window_finds_the_contacts_stamped_when_the_first_lets_go() {
+        let (dir, a, _) = station("lotw-one-log", 2);
+        let b = {
+            let opened = tempo_app::logstore::open(
+                &dir.join("log.adi"),
+                std::sync::Arc::new(|_| tempo_core::logbook::sqlite::Resolved::default()),
+                None,
+            )
+            .expect("window B opens the same log");
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.attach_log_store(opened);
+            let mut s = e.settings().clone();
+            s.lotw_station_location = "Home".into();
+            e.apply_settings(s);
+            std::sync::Arc::new(std::sync::Mutex::new(e))
+        };
+        let shared = dir.join("shared-data");
+        std::fs::create_dir_all(&shared).unwrap();
+        let db = tempo_core::logbook::migrate::database_path(&dir.join("log.adi"));
+        let report = lotw_upload_batch_one_signer(&a, LotwPick::Unsent, false, &shared, |_, _| {
+            // The disk stalls as TQSL finishes: the stamps wait at the writer for a moment.
+            let hold = tempo_core::logbook::sqlite::WriteHold::take(&db).expect("stall the store");
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(400));
+                drop(hold);
+            });
+            Ok((0, String::new()))
+        })
+        .expect("window A's automatic upload ran");
+        assert_eq!((report.dispatched, report.outcome.as_str()), (2, "pending"));
+        let report = lotw_upload_batch_one_signer(&b, LotwPick::Unsent, false, &shared, |_, _| {
+            panic!("window B signed the contacts window A had just signed")
+        })
+        .expect("window B's automatic upload ran");
+        assert_eq!(
+            (report.dispatched, report.outcome.as_str()),
+            (0, "none"),
+            "nothing is owed: A's stamps were on disk before B could read"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The button pressed while this window's own automatic upload signs is refused as already
+    /// running, not as another window's.
+    #[test]
+    fn the_button_during_this_windows_own_upload_says_one_is_already_running() {
+        let (dir, a, _) = station("lotw-own-window", 1);
+        let shared = dir.join("shared-data");
+        std::fs::create_dir_all(&shared).unwrap();
+        let mut pressed = None;
+        lotw_upload_batch_one_signer(&a, LotwPick::Unsent, false, &shared, |_, _| {
+            pressed = Some(lotw_upload_batch_one_signer(
+                &a,
+                LotwPick::Unsent,
+                true,
+                &shared,
+                |_, _| panic!("a second batch ran in the same window"),
+            ));
+            Ok((0, String::new()))
+        })
+        .expect("the automatic upload ran");
+        assert_eq!(
+            pressed.expect("pressed while it signed").unwrap_err(),
+            LOTW_ALREADY_RUNNING
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    const SIGNER_CHILD: &str = "NEXUS_LOTW_SIGNER_CHILD";
+
+    /// ★ A WINDOW THAT DIES MID-BATCH DOES NOT LOCK LOTW OUT. The lock is the operating system's,
+    /// held by the process: another process cannot take it while the holder lives, and the holder
+    /// killed outright — no destructor, no cleanup, as a crash — leaves it free at once. A lock
+    /// FILE that meant "busy" by existing would refuse every later upload, forever.
+    ///
+    /// The holder is this same test binary re-run as a child, which takes the lock and waits.
+    #[test]
+    fn a_crashed_signer_does_not_hold_the_lotw_lock() {
+        if let Some(dir) = std::env::var_os(SIGNER_CHILD) {
+            let dir = PathBuf::from(dir);
+            let held = lotw_signer(&dir).expect("the child takes the lock");
+            assert!(held.is_some(), "control: this filesystem locks");
+            std::fs::write(dir.join("child-holds"), b"").unwrap();
+            std::thread::sleep(std::time::Duration::from_secs(120));
+            panic!("the child was not killed");
+        }
+        let dir = test_dirs::root().join("lotw-signer-crash");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([
+                "--exact",
+                "lotw_batch_tests::a_crashed_signer_does_not_hold_the_lotw_lock",
+                "--nocapture",
+            ])
+            .env(SIGNER_CHILD, &dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("re-run this test binary");
+        let start = std::time::Instant::now();
+        while !dir.join("child-holds").exists() {
+            if start.elapsed() > std::time::Duration::from_secs(60) {
+                let _ = child.kill();
+                panic!("the child never took the lock");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            lotw_signer(&dir).is_none(),
+            "another process's batch holds it: this window skips"
+        );
+        child.kill().expect("kill the holder, as a crash");
+        child.wait().expect("reap the holder");
+        assert!(
+            matches!(lotw_signer(&dir), Some(Some(_))),
+            "the dead holder's lock is gone with it"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -40693,12 +40929,85 @@ impl LotwPick {
 /// runs the SAME code the button does rather than a parallel copy that drifts from it.
 /// Plain sync: nothing in here awaits — the command above was only ever `async` for the
 /// `State` lifetime.
+///
+/// One signer at a time across every Nexus window: the batch runs only while this process holds
+/// the LoTW signer lock beside the shared log ([`lotw_signer`]), and is refused with
+/// [`LOTW_ANOTHER_WINDOW`] while another window's batch runs.
 fn lotw_upload_batch(
     state: &SharedEngine,
     pick: LotwPick,
     wait: bool,
 ) -> Result<UploadReportDto, String> {
-    lotw_upload_batch_with(state, pick, wait, run_tqsl)
+    lotw_upload_batch_one_signer(state, pick, wait, &shared_data_dir(), run_tqsl)
+}
+
+/// [`lotw_upload_batch_with`] under the signer lock in `data_dir`, the folder that holds the one
+/// logbook every window shares.
+///
+/// Every window of a station runs its own automatic-upload timer over that ONE log, and the
+/// Logbook's button can start a batch in any of them. Two batches at once read the same owed
+/// contacts, so TQSL signed and LoTW received each of them twice. The lock is taken before the
+/// owed contacts are read and held until their stamps are in the database on disk (each run
+/// waits for them, [`lotw_sign_run`]), so a second batch, started while the first runs, is
+/// refused, and one started after it finds them stamped.
+///
+/// Refused with [`LOTW_ALREADY_RUNNING`] when the batch holding the lock is this window's own
+/// (its timer's, while the button is pressed), and [`LOTW_ANOTHER_WINDOW`] otherwise.
+fn lotw_upload_batch_one_signer(
+    state: &SharedEngine,
+    pick: LotwPick,
+    wait: bool,
+    data_dir: &Path,
+    tqsl: impl FnMut(&str, &[String]) -> Result<(i32, String), String>,
+) -> Result<UploadReportDto, String> {
+    let Some(_signer) = lotw_signer(data_dir) else {
+        return Err(if engine_lock(state).lotw_batch_running() {
+            LOTW_ALREADY_RUNNING
+        } else {
+            LOTW_ANOTHER_WINDOW
+        }
+        .into());
+    };
+    lotw_upload_batch_with(state, pick, wait, tqsl)
+}
+
+/// The lock file beside the shared log that one LoTW batch at a time holds.
+const LOTW_SIGNER_LOCK: &str = ".lotw-upload.lock";
+
+/// Why a LoTW upload does not start: this window is uploading to LoTW already (its automatic
+/// upload, when the button is pressed).
+const LOTW_ALREADY_RUNNING: &str = "An upload to LoTW is already running. Try again when it \
+     finishes.";
+
+/// Why a LoTW upload does not start: another Nexus window is uploading the same log now.
+const LOTW_ANOTHER_WINDOW: &str = "Another Nexus window is uploading this log to LoTW right now. \
+     Try again when it finishes.";
+
+/// Take the LoTW signer lock in `data_dir`: `None` while another batch holds it, in this window
+/// or another; otherwise `Some` of the held lock (`Some(None)` where there is no lock to hold —
+/// see fail-open below). The lock is the operating system's advisory lock on [`LOTW_SIGNER_LOCK`], held by
+/// the returned `File` and released when it drops — and by the operating system when the process
+/// ends, a crash included, so a window that dies mid-batch never leaves the next one locked out.
+/// The file itself stays; it is only ever the thing locked.
+///
+/// Fail-open, as the profile lock is ([`hold_profile_lock`]): a folder where the file cannot be
+/// made, or a filesystem with no locking, lets the batch run as it did before this lock existed,
+/// rather than stopping every upload.
+fn lotw_signer(data_dir: &Path) -> Option<Option<std::fs::File>> {
+    let file = match std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(data_dir.join(LOTW_SIGNER_LOCK))
+    {
+        Ok(f) => f,
+        Err(_) => return Some(None),
+    };
+    match file.try_lock() {
+        Ok(()) => Some(Some(file)),
+        Err(std::fs::TryLockError::WouldBlock) => None,
+        Err(std::fs::TryLockError::Error(_)) => Some(None),
+    }
 }
 
 /// [`lotw_upload_batch`], with TQSL named: `tqsl` runs it once over a batch file, to
@@ -41105,14 +41414,15 @@ fn lotw_sign_run(
                     ),
                 );
             }
-            // The Logbook button waits for the stamps to reach the disk; the six-hourly
-            // automatic batch does not (a stamp it loses is re-derived by the next echo).
-            // TQSL has answered by now (signed and sent, or refused), whatever the wait answers.
-            let unconfirmed = if wait {
-                durable.wait(tempo_app::logstore::DURABLE_WAIT).err()
-            } else {
-                None
-            };
+            // Both wait for the stamps to reach the database, bounded, before the batch ends and
+            // gives up the signer lock (`lotw_upload_batch_one_signer`): `stamp` only hands them
+            // to the store's writer, and another window that took the lock before they landed
+            // read these contacts as still owed and signed them again. Only the Logbook button
+            // reports a stamp that did not land; the automatic batch leaves it to its next
+            // round, which finds the contact still owed. TQSL has answered by now (signed and
+            // sent, or refused), whatever the wait answers.
+            let landed = durable.wait(tempo_app::logstore::DURABLE_WAIT);
+            let unconfirmed = if wait { landed.err() } else { None };
             // ⛔ THE LINE THAT MAKES THE STAMP'S OWN SENTENCE TRUE.
             //
             // `UploadDetail`'s sentences tell the operator the service's own wording "was in
@@ -53765,6 +54075,10 @@ fn start_on_the_logbook(
                         _ => {}
                     }
                 }
+                // Another batch is signing this log now (another window's, or this one's own
+                // from the button): this round is skipped, quietly. Its
+                // batch stamps what it sends, so the next round finds only what is still owed.
+                Err(e) if e == LOTW_ANOTHER_WINDOW || e == LOTW_ALREADY_RUNNING => {}
                 Err(e) => eprintln!("[lotw-auto] failed: {e}"),
             }
         });

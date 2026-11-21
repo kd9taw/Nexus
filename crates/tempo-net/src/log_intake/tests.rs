@@ -110,7 +110,7 @@ fn reads_adif_with_header_and_a_small_batch() {
 }
 
 #[test]
-fn ignores_nexus_own_id_tempo() {
+fn ignores_nexus_own_ids() {
     assert_eq!(
         read_datagram(&encode_qso_logged(NEXUS_WSJTX_ID, &qso("K1ABC"))),
         Intake::Own
@@ -119,6 +119,14 @@ fn ignores_nexus_own_id_tempo() {
         read_datagram(&encode_logged_adif(
             NEXUS_WSJTX_ID,
             "<CALL:5>K1ABC<QSO_DATE:8>20261014<TIME_ON:4>0102<EOR>"
+        )),
+        Intake::Own
+    );
+    // Another Nexus window's: a radio window's id carries its profile.
+    assert_eq!(
+        read_datagram(&encode_qso_logged(
+            &crate::server::sender_id(Some("r1")),
+            &qso("K1ABC")
         )),
         Intake::Own
     );
