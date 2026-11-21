@@ -19625,6 +19625,38 @@ mod contest_session_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ⛔ A RADIO THE STATION DOES NOT HAVE TAKES THE STRICTER CAP: the backup's own, or the one in
+    /// force at the station now, whichever is lower (no cap counts as none). A file radio at 10 %
+    /// lands at 10 % where 20 % is in force, and one at 50 % at the 20 % in force.
+    #[test]
+    fn a_restored_radio_the_station_lacks_takes_the_stricter_cap() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-new-radio-caps", 0);
+        let station_ui = with_station_paths_set(&engine, "C:\\Shack");
+        two_capped_radios(&engine, Some(0.2));
+        engine_lock(&engine).set_active_radio(1);
+        assert_eq!(digital_caps(&engine).1, Some(0.2), "premise: 20 % in force");
+        let text = settings_bundle(&engine, station_ui.clone(), None).unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let template = v["settings"]["radios"][1].clone();
+        for (id, cap, port) in [(7, 0.1, 4597), (8, 0.5, 4598)] {
+            let mut r = template.clone();
+            r["id"] = serde_json::json!(id);
+            r["name"] = serde_json::json!(format!("Radio {id}"));
+            r["rigctldPort"] = serde_json::json!(port);
+            r["maxPowerDigital"] = serde_json::json!(cap);
+            v["settings"]["radios"].as_array_mut().unwrap().push(r);
+        }
+        restore_settings_bundle(&engine, v.to_string(), || station_ui.clone(), |_| true, no_key_change)
+            .unwrap();
+        let caps = digital_caps(&engine).0;
+        assert_eq!(
+            caps.iter().filter(|(id, _)| *id >= 7).copied().collect::<Vec<_>>(),
+            vec![(7, Some(0.1)), (8, Some(0.2))],
+            "the stricter of the file's cap and the one in force"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ⛔ A BACKUP TAKEN ON ONE RADIO, RESTORED WHILE ANOTHER IS IN USE, KEEPS EACH RADIO'S CAP. The
     /// backup was taken on radio A (30 %); the station has since switched to radio B (no cap). The
     /// restore lands on the backup's radio, A: A keeps 30 %, never B's "no cap", and B keeps none.
@@ -23332,7 +23364,8 @@ fn settings_from_bundle(
 /// inside the bundle's radio list as well as on its flat fields. So each radio the bundle brings
 /// takes the station's caps for the radio with its id (the live radio's from the station's flat
 /// fields, which an unsaved edit may have lowered), a radio the station does not have takes the
-/// caps in force now, and the bundle's flat caps are its own radio's: `apply_restored_settings`
+/// stricter of its own caps and those in force now (most restrictive wins), and the bundle's flat
+/// caps are its own radio's: `apply_restored_settings`
 /// folds the flat fields into the bundle's radio, which need not be the station's live one.
 fn keep_the_stations_power_caps(
     settings: &mut tempo_app::settings::Settings,
@@ -23349,23 +23382,39 @@ fn keep_the_stations_power_caps(
             s.max_power_am,
         )
     };
-    let station_caps = |id: u32| match own.radios.iter().find(|p| p.id == id) {
-        Some(_) if id == own.active_radio => flat(own),
-        Some(p) => (
-            p.max_power_phone,
-            p.max_power_cw,
-            p.max_power_digital,
-            p.max_power_am,
-        ),
-        None => flat(own),
+    // The lower of two caps; no cap is none at all, so the other wins.
+    let stricter = |a: Option<f32>, b: Option<f32>| match (a, b) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, None) => a,
+        (None, b) => b,
     };
     for r in settings.radios.iter_mut() {
+        let caps = match own.radios.iter().find(|p| p.id == r.id) {
+            Some(_) if r.id == own.active_radio => flat(own),
+            Some(p) => (
+                p.max_power_phone,
+                p.max_power_cw,
+                p.max_power_digital,
+                p.max_power_am,
+            ),
+            // A radio the station does not have: the most restrictive of the backup's own cap and
+            // the one in force at the station now.
+            None => {
+                let now = flat(own);
+                (
+                    stricter(r.max_power_phone, now.0),
+                    stricter(r.max_power_cw, now.1),
+                    stricter(r.max_power_digital, now.2),
+                    stricter(r.max_power_am, now.3),
+                )
+            }
+        };
         (
             r.max_power_phone,
             r.max_power_cw,
             r.max_power_digital,
             r.max_power_am,
-        ) = station_caps(r.id);
+        ) = caps;
     }
     if let Some(r) = settings.radios.iter().find(|r| r.id == settings.active_radio) {
         (
