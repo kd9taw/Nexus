@@ -8,8 +8,7 @@ import { RemoteApp } from './RemoteApp'
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 // The old watch/control workspace and observer are hidden behind this flag while streaming is proven;
 // the tests of those views set it, which is how the hidden workspace stays covered.
-function account(entitled = true): AccountSession {
-  const accountId = crypto.randomUUID()
+function account(entitled = true, accountId: string = crypto.randomUUID()): AccountSession {
   const now = Date.now()
   return { accountId, serverNow: now, stations: [], pending: null,
     entitlement: { accountId, enabled: entitled, expiresAt: now + 3600000,
@@ -322,9 +321,11 @@ it('shows how long this browser stays approved, and warns in its last seven days
 // still shows its date.
 it('says this browser is approved until it is removed at the shack, with no date and no warning', async () => {
   const forever = Date.UTC(9999, 11, 31, 23, 59, 59, 999)
+  // Fixed ids with no 9 in them: the page shows the account id, and a random UUID holding "9999"
+  // would fail the no-year-9999 check below for a reason that has nothing to do with the date.
   for (const untilRemoved of [true, false]) {
-    const session = account()
-    session.stations.push({ id: crypto.randomUUID(), name: 'Shack', device: { id: crypto.randomUUID(), name: 'Laptop', approved: 1,
+    const session = account(true, 'a1b2c3d4-e5f6-4a7b-8c0d-1e2f3a4b5c6d')
+    session.stations.push({ id: 'b1b2c3d4-e5f6-4a7b-8c0d-1e2f3a4b5c6d', name: 'Shack', device: { id: 'c1b2c3d4-e5f6-4a7b-8c0d-1e2f3a4b5c6d', name: 'Laptop', approved: 1,
       expires_at: untilRemoved ? forever : session.serverNow + 3 * 86400000, renewsUntil: null, untilRemoved } })
     client(session)
     render(<RemoteApp />)
