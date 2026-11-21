@@ -47749,6 +47749,155 @@ mod tests {
         );
     }
 
+    /// An FTDX10 behind Hamlib with Split Operation = Rig, on `from`'s screen, the operator's split
+    /// 2 kHz up, then the FT screen entered with `follow` (re-home the dial or keep it). The split
+    /// lines on the wire, in order, and the split the engine is left with.
+    fn split_into_ft(from: &'static str, follow: bool) -> (Vec<String>, Option<f64>) {
+        let (addr, seen) = recording_rigctld_stub();
+        let engine = engine_on(1042);
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.split_mode = tempo_app::settings::SplitMode::Rig;
+            e.apply_settings(s);
+            e.set_operating_mode(from, false);
+        }
+        fn press(e: &mut Engine, _: &mut RadioLoop) {
+            let dial = e.settings().dial_hz() as f64 / 1e6;
+            e.request_split(Some(dial + 0.002));
+        }
+        fn into_ft_homed(e: &mut Engine, _: &mut RadioLoop) {
+            e.set_operating_mode("digital", true);
+        }
+        fn into_ft_kept(e: &mut Engine, _: &mut RadioLoop) {
+            e.set_operating_mode("digital", false);
+        }
+        let enter = if follow { into_ft_homed } else { into_ft_kept };
+        split_ticks(
+            &engine,
+            Rig::rigctld(&addr),
+            vec![|_, _| {}, press, |_, _| {}, enter, |_, _| {}, |_, _| {}],
+        );
+        let wire = split_verbs(&seen);
+        let split = engine.lock().unwrap().split_tx_mhz();
+        (wire, split)
+    }
+
+    /// ⛔ THE OPERATOR'S SPLIT ENDS ON ENTERING THE FT SCREENS, even where the entry keeps the dial
+    /// (the FTDX10 report: from CW or Phone into FT8 the radio stayed in split). FT runs its own
+    /// split (Split Operation), as WSJT-X turns a split it finds off when it takes over. Only an
+    /// entry that re-homed the dial dropped it, through the QSY.
+    #[test]
+    fn the_operators_split_ends_on_entering_ft_with_the_dial_kept() {
+        for from in ["cw", "phone"] {
+            let (wire, split) = split_into_ft(from, false);
+            assert!(
+                wire.iter().any(|l| l == "S 1 VFOB"),
+                "{from}: precondition: {wire:?}"
+            );
+            assert_eq!(split, None, "{from}: the split is dropped");
+            assert_eq!(
+                wire.last().map(String::as_str),
+                Some("S 0 VFOA"),
+                "{from}: the radio is taken out of split: {wire:?}"
+            );
+        }
+    }
+
+    /// CONTROL: an entry that re-homes the dial drops it as it always did.
+    #[test]
+    fn the_operators_split_ends_on_entering_ft_with_a_re_home() {
+        for from in ["cw", "phone"] {
+            let (wire, split) = split_into_ft(from, true);
+            assert_eq!(split, None, "{from}");
+            assert_eq!(
+                wire.last().map(String::as_str),
+                Some("S 0 VFOA"),
+                "{from}: {wire:?}"
+            );
+        }
+    }
+
+    /// CONTROL: a held satellite pass keeps its uplink split through the entry into FT; the uplink
+    /// is the pass's, not a split the operator carried in.
+    #[test]
+    fn a_held_pass_keeps_its_uplink_split_on_entering_ft() {
+        let (addr, seen) = recording_rigctld_stub();
+        let so50 = tempo_core::doppler::Transponder {
+            uplink_centre_hz: 145_850_000,
+            downlink_centre_hz: 436_795_000,
+            invert: false,
+            half_width_hz: 0,
+        };
+        let engine = ab_sat_pick_engine("phone", so50, FM_BIRD, false);
+        split_ticks(
+            &engine,
+            Rig::rigctld(&addr),
+            vec![
+                |_, _| {},
+                |e, _| e.set_operating_mode("digital", false),
+                |_, _| {},
+            ],
+        );
+        let wire = split_verbs(&seen);
+        assert!(
+            wire.iter().any(|l| l == "I 145850000"),
+            "precondition: {wire:?}"
+        );
+        assert!(!wire.iter().any(|l| l.starts_with("S 0")), "{wire:?}");
+        assert!(engine.lock().unwrap().split_tx_mhz().is_some());
+    }
+
+    /// CONTROL, the other way: leaving the FT screens for CW or Phone lets go of Split Operation =
+    /// Rig's split (`rig_split_hold_ends`), with or without a re-home.
+    #[test]
+    fn rig_split_is_let_go_of_on_leaving_ft_for_cw_or_phone() {
+        for follow in [true, false] {
+            for to in ["cw", "phone"] {
+                let (addr, seen) = recording_rigctld_stub();
+                let engine = engine_on(1042);
+                {
+                    let mut e = engine.lock().unwrap();
+                    let mut s = e.settings().clone();
+                    s.split_mode = tempo_app::settings::SplitMode::Rig;
+                    e.apply_settings(s);
+                    e.set_operating_mode("digital", false);
+                }
+                fn hold(e: &mut Engine, l: &mut RadioLoop) {
+                    l.hold_rig_split(e.settings().dial_hz());
+                }
+                fn leave_cw(e: &mut Engine, _: &mut RadioLoop) {
+                    e.set_operating_mode("cw", true);
+                }
+                fn leave_cw_kept(e: &mut Engine, _: &mut RadioLoop) {
+                    e.set_operating_mode("cw", false);
+                }
+                fn leave_phone(e: &mut Engine, _: &mut RadioLoop) {
+                    e.set_operating_mode("phone", true);
+                }
+                fn leave_phone_kept(e: &mut Engine, _: &mut RadioLoop) {
+                    e.set_operating_mode("phone", false);
+                }
+                let leave = match (to, follow) {
+                    ("cw", true) => leave_cw,
+                    ("cw", false) => leave_cw_kept,
+                    (_, true) => leave_phone,
+                    _ => leave_phone_kept,
+                };
+                split_ticks(
+                    &engine,
+                    Rig::rigctld(&addr),
+                    vec![|_, _| {}, hold, leave, |_, _| {}, |_, _| {}],
+                );
+                let wire = split_verbs(&seen);
+                assert!(
+                    wire.iter().any(|l| l.starts_with("S 0")),
+                    "{to} follow={follow}: Rig split released: {wire:?}"
+                );
+            }
+        }
+    }
+
     /// CONTROL: any other Hamlib radio gets exactly what it got before: `S` and `I` per press.
     #[test]
     fn a_split_press_on_any_other_hamlib_radio_is_unchanged() {

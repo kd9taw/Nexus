@@ -11924,6 +11924,21 @@ impl Engine {
             self.tune_dial_with_reset(dial, &band, &sideband, DialOrigin::Operator, &mut reset);
             re_homed = true;
         }
+        // ⛔ THE FT SCREENS RUN THEIR OWN SPLIT (Split Operation), so a split the operator set on
+        // another screen ends on the way in, as a QSY ends it, whether or not the dial moves. An
+        // entry that kept the dial carried the CW or Phone split into FT, and the radio stayed in
+        // it (an FTDX10 report). WSJT-X turns a split it finds off whenever it sets its state
+        // without one (`HamlibTransceiver::do_tx_frequency`). A held pass keeps its uplink split.
+        // A spot worked into FT sets its own split after this entry (`work_spot_split`).
+        if entry.mode == OperatingMode::Digital
+            && (self.split_tx_mhz.is_some() || self.split_unknown)
+            && self.sat_tune.is_none()
+            && self.sat_dial_owner.is_none()
+        {
+            self.split_tx_mhz = None;
+            self.split_dirty = true;
+            self.tx_split_confirmed_hz = None;
+        }
         if let Some(sideband) = carried {
             self.dial_residency = Some(DialResidency {
                 band: self.settings.band.clone(),
