@@ -19571,6 +19571,81 @@ mod contest_session_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A two-radio station on the store: radio A (0) capped at 30 % digital, radio B (1) at
+    /// `b_digital`, A in use.
+    fn two_capped_radios(engine: &SharedEngine, b_digital: Option<f32>) {
+        let b = engine_lock(engine).add_radio();
+        assert_eq!(b, 1, "premise: radio B is id 1");
+        let mut s = engine_lock(engine).settings().clone();
+        s.active_radio = 0;
+        s.max_power_digital = Some(0.3);
+        s.radios[0].max_power_digital = Some(0.3);
+        s.radios[1].max_power_digital = b_digital;
+        engine_lock(engine).apply_restored_settings(s);
+    }
+
+    /// Each radio's digital cap, by id, and the flat (in force) one.
+    fn digital_caps(engine: &SharedEngine) -> (Vec<(u32, Option<f32>)>, Option<f32>) {
+        let e = engine_lock(engine);
+        let s = e.settings();
+        (
+            s.radios.iter().map(|r| (r.id, r.max_power_digital)).collect(),
+            s.max_power_digital,
+        )
+    }
+
+    /// ⛔ A BACKUP NEVER RAISES A RADIO'S POWER CAP. The caps are each radio's own, inside the
+    /// bundle's radio list: a file that lifts radio B's digital cap to 100 % restores everything
+    /// else and keeps B's cap (and A's) as the station has them.
+    #[test]
+    fn a_restore_never_raises_a_radios_own_power_cap() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-radio-caps", 0);
+        let station_ui = with_station_paths_set(&engine, "C:\\Shack");
+        two_capped_radios(&engine, Some(0.2));
+        let text = settings_bundle(&engine, station_ui.clone(), None).unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        v["settings"]["mycall"] = serde_json::json!("W9NEW");
+        for r in v["settings"]["radios"].as_array_mut().unwrap() {
+            r["maxPowerDigital"] = serde_json::json!(1.0);
+            r["maxPowerPhone"] = serde_json::json!(1.0);
+        }
+        restore_settings_bundle(&engine, v.to_string(), || station_ui.clone(), |_| true, no_key_change)
+            .unwrap();
+        assert_eq!(engine_lock(&engine).settings().mycall, "W9NEW", "the rest lands");
+        assert_eq!(
+            digital_caps(&engine),
+            (vec![(0, Some(0.3)), (1, Some(0.2))], Some(0.3)),
+            "each radio keeps its own cap, and A's is in force"
+        );
+        assert_eq!(
+            engine_lock(&engine).settings().radios[1].max_power_phone,
+            None,
+            "B's phone cap stays as the station has it (none), not the file's"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ A BACKUP TAKEN ON ONE RADIO, RESTORED WHILE ANOTHER IS IN USE, KEEPS EACH RADIO'S CAP. The
+    /// backup was taken on radio A (30 %); the station has since switched to radio B (no cap). The
+    /// restore lands on the backup's radio, A: A keeps 30 %, never B's "no cap", and B keeps none.
+    #[test]
+    fn a_restore_while_another_radio_is_in_use_keeps_each_radios_cap() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-switched-caps", 0);
+        let station_ui = with_station_paths_set(&engine, "C:\\Shack");
+        two_capped_radios(&engine, None);
+        let text = settings_bundle(&engine, station_ui.clone(), None).unwrap();
+        engine_lock(&engine).set_active_radio(1);
+        assert_eq!(digital_caps(&engine).1, None, "premise: on B, uncapped");
+        restore_settings_bundle(&engine, text, || station_ui.clone(), |_| true, no_key_change)
+            .unwrap();
+        assert_eq!(
+            digital_caps(&engine),
+            (vec![(0, Some(0.3)), (1, None)], Some(0.3)),
+            "A keeps its 30 %, in force on A; B keeps none"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ⛔ A BACKUP NEVER CHANGES WHETHER OTHER COMPUTERS' WSJT-X REQUESTS ARE TAKEN: not a file
     /// that says yes where the station says no, in its settings or a saved profile, and not one
     /// that says no where the station says yes. The rest of the backup lands.
@@ -23253,6 +23328,60 @@ fn settings_from_bundle(
     Ok(settings)
 }
 
+/// ⛔ A restore never sets a power cap ([`STATION_TX_SAFETY`]), and the caps are each radio's own,
+/// inside the bundle's radio list as well as on its flat fields. So each radio the bundle brings
+/// takes the station's caps for the radio with its id (the live radio's from the station's flat
+/// fields, which an unsaved edit may have lowered), a radio the station does not have takes the
+/// caps in force now, and the bundle's flat caps are its own radio's: `apply_restored_settings`
+/// folds the flat fields into the bundle's radio, which need not be the station's live one.
+fn keep_the_stations_power_caps(
+    settings: &mut tempo_app::settings::Settings,
+    own: &tempo_app::settings::Settings,
+) {
+    // A radio from an older file has no fields of its own yet: give it them first, so the caps
+    // set here are not filled over from the bundle's flat fields afterwards.
+    settings.ensure_radio_profiles();
+    let flat = |s: &tempo_app::settings::Settings| {
+        (
+            s.max_power_phone,
+            s.max_power_cw,
+            s.max_power_digital,
+            s.max_power_am,
+        )
+    };
+    let station_caps = |id: u32| match own.radios.iter().find(|p| p.id == id) {
+        Some(_) if id == own.active_radio => flat(own),
+        Some(p) => (
+            p.max_power_phone,
+            p.max_power_cw,
+            p.max_power_digital,
+            p.max_power_am,
+        ),
+        None => flat(own),
+    };
+    for r in settings.radios.iter_mut() {
+        (
+            r.max_power_phone,
+            r.max_power_cw,
+            r.max_power_digital,
+            r.max_power_am,
+        ) = station_caps(r.id);
+    }
+    if let Some(r) = settings.radios.iter().find(|r| r.id == settings.active_radio) {
+        (
+            settings.max_power_phone,
+            settings.max_power_cw,
+            settings.max_power_digital,
+            settings.max_power_am,
+        ) = (
+            r.max_power_phone,
+            r.max_power_cw,
+            r.max_power_digital,
+            r.max_power_am,
+        );
+    }
+}
+
 /// Restore a bundle written by [`export_settings_bundle`] (#28 item 4).
 ///
 /// Refuses anything that is not one of ours, by name and by schema, rather than trying its best
@@ -23432,6 +23561,7 @@ fn restore_settings_bundle(
     keep_the_stations_paths(&mut v, &station, || station_ui.clone());
     keep_the_stations_profile_keys(&mut v, &station_ui);
     let mut settings = settings_from_bundle(v.get("settings").cloned().unwrap_or_default())?;
+    keep_the_stations_power_caps(&mut settings, &own);
     // Where uploads start is kept beside the log, never in the settings, so a restore leaves it as
     // it is. A backup an earlier build of that change wrote may carry one in its settings: it
     // fills a service that has none beside the log, once the restore has gone through.
