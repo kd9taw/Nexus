@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest'
 import { useState } from 'react'
 import { render, screen, fireEvent, within } from '@testing-library/react'
-import { JtdxDecoderFields, PRESET_KNOBS, autoThreads } from './JtdxDecoderFields'
+import { JTDX_MAX_THREADS, JtdxDecoderFields, PRESET_KNOBS, autoThreads, leaveACore } from './JtdxDecoderFields'
 import type { Settings } from '../types'
 
 /** The fields over a live form, the way SettingsPanel holds it; `seen` gets every form. */
@@ -44,8 +44,15 @@ describe('Settings ▸ FT8 decoder', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Ludicrous' }))
     expect(last(seen).jtdxPreset).toBe('ludicrous')
     expect(container.querySelector('[data-ludicrous-warning]')?.textContent).toBe(
-      'Ludicrous decodes on up to 12 cores; this computer has 4. On a Raspberry Pi or a small laptop, decodes may arrive too late to answer.',
+      'Ludicrous decodes on up to 3 cores; this computer has 4. On a Raspberry Pi or a small laptop, decodes may arrive too late to answer.',
     )
+  })
+
+  it('counts Ludicrous’s cores as the decoder takes them: one under this computer’s, up to 12, never none', () => {
+    // The decoder holds an explicit count one under the logical cores (ft8 `leave_a_core`).
+    expect([1, 2, 4, 8, 12, 13, 32].map((c) => leaveACore(JTDX_MAX_THREADS, c))).toEqual([1, 1, 3, 7, 11, 12, 12])
+    const { container } = render(<Harness start={{ jtdxPreset: 'ludicrous' }} seen={[]} cores={32} />)
+    expect(container.querySelector('[data-ludicrous-warning]')?.textContent).toMatch(/^Ludicrous decodes on up to 12 cores; this computer has 32\./)
   })
 
   it('warns on Keen too, with the threads WSJT-X picks for this computer', () => {
