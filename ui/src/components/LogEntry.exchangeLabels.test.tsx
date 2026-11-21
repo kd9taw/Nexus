@@ -167,8 +167,8 @@ const TABLE: [string, string, string[], string[]][] = [
   ['nyqp', 'in_state', ['RST', 'County / State'], ['', '']],
   ['nyqp', 'w_ve', ['RST', 'NY county'], ['', '']],
   ['nyqp', 'dx', ['RST', 'NY county'], ['', '']],
-  ['arrlss_cw', '', ['Serial', 'Precedence', 'Call', 'Check', 'Section'], ['', '', '', '', '']],
-  ['arrlss_ssb', '', ['Serial', 'Precedence', 'Call', 'Check', 'Section'], ['', '', '', '', '']],
+  ['arrlss_cw', '', ['Serial', 'Precedence', 'Check', 'Section'], ['', '', '', '']],
+  ['arrlss_ssb', '', ['Serial', 'Precedence', 'Check', 'Section'], ['', '', '', '']],
   // CQ WW's zone box is blank too until a call is typed; then its placeholder is the country
   // file's hint for that call, the one hint a received box shows.
   ['cqww_cw', '', ['RST', 'Zone'], ['', '']],
