@@ -34,6 +34,12 @@ export function autoThreads(cores: number): number {
   return JTDX_MAX_THREADS
 }
 
+/** The threads an explicit count (Ludicrous's, a Custom count) takes on `cores` logical cores: one under them,
+ *  never none, as the decoder holds it (ft8 `leave_a_core`). 0 (automatic) is passed on as it is. */
+export function leaveACore(requested: number, cores: number): number {
+  return requested <= 0 ? requested : Math.max(1, Math.min(requested, cores - 1))
+}
+
 /** The logical cores this computer reports (what WSJT-X's thread count is measured against). */
 export function logicalCores(): number {
   const n = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency : 0
@@ -167,7 +173,7 @@ export function JtdxDecoderFields({ form, setForm, markDirty, locked, cores }: J
           {preset === 'ludicrous' && (
             <span className="settings-hint settings-warn" role="note" data-cpu-warning="ludicrous" data-ludicrous-warning>
               {t('settings.digital.jtdxPreset.ludicrousWarning', {
-                cores: Math.min(JTDX_MAX_THREADS, PRESET_KNOBS.ludicrous.threads),
+                cores: leaveACore(Math.min(JTDX_MAX_THREADS, PRESET_KNOBS.ludicrous.threads), have),
                 have,
               })}
             </span>
