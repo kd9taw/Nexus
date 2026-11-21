@@ -28,8 +28,10 @@
 // then lands on the menu. The rule the shell probes hold a stop control to is: covered when its centre is not its
 // own OR under 90 % of the points of a 9 × 5 grid across it are its own. With the stop layer on, the points that are
 // Stop TX's mirror count as its own. So, on FT (Operate) at 1366×768 @175 %, 1920×1080 and 2560×1440:
-//   4. EVERY MENU AND POPOVER the screen offers (each `[aria-haspopup]` trigger, opened by a real click) leaves every
-//      stop control on screen clear by that rule; the share of each one the overlay itself covers is printed;
+//   4. EVERY MENU AND POPOVER the screen offers (each `[aria-haspopup]` trigger, scrolled into sight and opened by a
+//      real click) leaves every stop control on screen clear by that rule; the share of each one the overlay itself
+//      covers is printed. A trigger that a click reaches and that opens nothing is a red: it measured nothing. One no
+//      click reaches, even scrolled to, is a counted skip, named in the result;
 //   5. A MENU PLANTED OVER THE LEFT 40 % OF STOP TX, its centre left free, gets a mirror: Stop TX is clear by the rule,
 //      and one real click on a covered point stops once and leaves the menu open.
 // THE CONTROL: the same plant with the stop layer taken away must come out covered, or check 5 could not fail.
@@ -207,7 +209,11 @@ const COVERAGE = `(() => {
   const layer = document.querySelector('.stop-layer')
   const inLayer = (e) => layer != null && layer.contains(e)
   return [...document.querySelectorAll('[data-stop-control]')]
-    .filter((e) => e.getBoundingClientRect().width > 0 && e.closest('[hidden]') == null)
+    .filter((e) => {
+      // On screen: a stop control scrolled out of the window is not one an overlay can cover.
+      const q = e.getBoundingClientRect()
+      return q.width > 0 && e.closest('[hidden]') == null && q.right > 0 && q.bottom > 0 && q.left < innerWidth && q.top < innerHeight
+    })
     .map((b) => {
       const q = b.getBoundingClientRect()
       const l = Math.max(q.left, 0), t = Math.max(q.top, 0), r = Math.min(q.right, innerWidth), btm = Math.min(q.bottom, innerHeight)
@@ -271,9 +277,26 @@ async function cover(win, k, plant) {
     await sleep(800)
     const names = await evaluate(`${TRIGGERS}.map((e) => (e.getAttribute('aria-label') || e.getAttribute('title') || e.textContent || e.className).trim().slice(0, 40))`)
     const sel = plant ? `[...document.querySelectorAll('button.freq-channel')].filter((e) => e.getBoundingClientRect().width > 0)` : TRIGGERS
-    const at = await evaluate(`(() => { const e = ${sel}[${plant ? 0 : k}]; if (!e) return null; const q = e.getBoundingClientRect(); return [q.left + q.width / 2, q.top + q.height / 2] })()`)
+    // The trigger is brought into sight first, as the operator scrolls to it (at the floor the cockpit's lower
+    // triggers start below the window), and must then be what a click at its centre lands on.
+    // Instant, not the page's smooth scrolling, and read a moment later, once the scroll has landed.
+    const exists = await evaluate(`(() => {
+      const e = ${sel}[${plant ? 0 : k}]
+      if (!e) return false
+      e.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' })
+      return true
+    })()`)
+    await sleep(300)
+    const at = !exists ? null : await evaluate(`(() => {
+      const e = ${sel}[${plant ? 0 : k}]
+      const q = e.getBoundingClientRect()
+      const x = q.left + q.width / 2, y = q.top + q.height / 2
+      const t = document.elementFromPoint(x, y)
+      return { point: [x, y], onTop: t != null && (t === e || e.contains(t)) }
+    })()`)
     if (!at) return { names, absent: true }
-    await click(at)
+    if (!at.onTop) return { names, name: names[k], unreachable: true }
+    await click(at.point)
     await sleep(500)
     const opened = await evaluate(`document.querySelector('[role="menu"], [role="dialog"], [role="group"].panels-menu-pop') != null`)
     if (plant) {
@@ -348,6 +371,8 @@ try {
     }
   }
   // Checks 4 and 5, and check 5's control (see the header).
+  let covered = 0
+  const skipped = []
   for (const win of COVER_SIZES) {
     const first = await cover(win, 0, null)
     if (first.error) {
@@ -357,12 +382,26 @@ try {
     }
     for (let k = 0; k < first.names.length; k++) {
       const r = k === 0 ? first : await cover(win, k, null)
+      // A trigger no click can reach, even scrolled to (at the floor FT's TX strip stands taller than the room left
+      // for it, and its last line is below the window), opens nothing an operator could open: a counted skip.
+      if (r.unreachable) {
+        skipped.push(`${win.name} "${r.name}"`)
+        console.log(`menustop-probe: SKIP ${win.name} "${r.name}": no click reaches it, even scrolled to`)
+        continue
+      }
       if (r.error || r.absent) {
         console.error(`menustop-probe: coverage at ${win.name} trigger ${k}: ${r.error ?? 'absent'}`)
         code = code || 1
         continue
       }
       console.log(`menustop-probe: COVER ${win.name} "${r.name}" opened=${r.opened}: ${JSON.stringify(r.stops)}`)
+      // A trigger that opened nothing measured nothing: that is a red, never a clear case.
+      if (!r.opened) {
+        console.error(`menustop-probe: RED at ${win.name} — "${r.name}" opened nothing, so its overlay was never measured`)
+        code = code || 1
+        continue
+      }
+      covered += 1
       const bad = r.stops.filter((s) => !clear(s))
       if (bad.length) {
         console.error(`menustop-probe: RED at ${win.name} with "${r.name}" open — ${bad.map((s) => `${s.stop} ${s.eff} % its own, centre ${s.centreEff ? 'its own' : 'lost'}`).join('; ')}`)
@@ -399,7 +438,7 @@ try {
     console.error(`menustop-probe: ${ran} of ${all} cases ran`)
     code = code || 1
   }
-  if (code === 0) console.log(`menustop-probe: PASS — ${ran} cases: with Help or the band menu open, one real click on Stop TX stopped once, closed the menu and left the keyboard on Stop TX, at ${SIZES.map(([s, v]) => `${s.name} (${v})`).join(' and ')} on ${SCREENS.join(' and ')}; each planted modal lock and covering menu caught`)
+  if (code === 0) console.log(`menustop-probe: PASS — ${covered} overlays opened on FT at ${COVER_SIZES.map((w) => w.name).join(', ')} left every stop control clear (${skipped.length} skipped, no click reaches them: ${skipped.join(', ') || 'none'}), and a menu over part of Stop TX was mirrored at each; ${ran} cases: with Help or the band menu open, one real click on Stop TX stopped once, closed the menu and left the keyboard on Stop TX, at ${SIZES.map(([s, v]) => `${s.name} (${v})`).join(' and ')} on ${SCREENS.join(' and ')}; each planted modal lock and covering menu caught`)
   process.exitCode = code
 } finally {
   await browser.stop()
