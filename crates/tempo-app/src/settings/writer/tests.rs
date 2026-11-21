@@ -658,3 +658,177 @@ fn measure_how_long_a_settings_change_holds_the_engine_lock() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The file every process's read-modify-write of `settings.json` locks, beside it. Spelled out
+/// here rather than borrowed from the writer: it is the contract between processes, and a rename
+/// on one side only would let two windows rewrite at once again.
+fn rewrite_lock(d: &Dir) -> PathBuf {
+    d.0.join("settings.json.lock")
+}
+
+/// A write as another PROCESS makes it: its own temporary file (a process's is named by its pid,
+/// so two processes never share one), renamed over the file, after `delay` — the slow disk that
+/// widens the gap between a rewrite's read and its write.
+fn as_another_process(tag: &'static str, delay: Duration) -> Write {
+    Arc::new(move |s: &Settings, p: &Path| {
+        std::thread::sleep(delay);
+        let own = p.with_file_name(format!("settings-{tag}.json"));
+        s.save(&own)?;
+        std::fs::rename(&own, p)
+    })
+}
+
+/// ★ TWO WINDOWS' MIRRORS NEVER LOSE EACH OTHER'S CHANGE. Every radio window rewrites the base
+/// profile's settings.json (its roster, routing table and simultaneous-radios flag); each window
+/// is its own process with its own writer, so the writer's in-process lock kept nothing out. Two
+/// writers here, with their own locks and their own temporary files, are two processes: each
+/// rewrites a different field again and again, and both counts survive. (Without the lock across
+/// processes one read the file, the other wrote it, and the first wrote back what it had read:
+/// that is how this test was first seen red.)
+#[test]
+fn two_processes_rewriting_the_base_file_keep_each_others_changes() {
+    let d = Dir::new("two-processes");
+    Settings::default()
+        .save(&d.settings())
+        .expect("the base file");
+    let a = SettingsWriter::new(
+        d.settings(),
+        as_another_process("a", Duration::from_millis(3)),
+    );
+    let b = SettingsWriter::new(
+        d.settings(),
+        as_another_process("b", Duration::from_millis(3)),
+    );
+    const ROUNDS: u64 = 25;
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            for _ in 0..ROUNDS {
+                a.rewrite(|s| {
+                    s.qrz_last_sync_unix += 1;
+                    true
+                })
+                .expect("a rewrote");
+            }
+        });
+        scope.spawn(|| {
+            for _ in 0..ROUNDS {
+                b.rewrite(|s| {
+                    s.lotw_last_auto_upload_unix += 1;
+                    true
+                })
+                .expect("b rewrote");
+            }
+        });
+    });
+    let back = Settings::load(&d.settings());
+    assert_eq!(
+        (back.qrz_last_sync_unix, back.lotw_last_auto_upload_unix),
+        (ROUNDS, ROUNDS),
+        "every change of both windows is on the disk"
+    );
+}
+
+/// A rewrite waits while another process holds the lock (here a handle of the test's own, which
+/// the OS treats as another holder), and goes ahead the moment it is let go.
+#[test]
+fn a_rewrite_waits_for_another_process_holding_the_base_file() {
+    let d = Dir::new("held");
+    Settings::default()
+        .save(&d.settings())
+        .expect("the base file");
+    let holder = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(rewrite_lock(&d))
+        .expect("the lock file");
+    holder.lock().expect("another process holds it");
+    let w = SettingsWriter::new(d.settings(), Arc::new(Settings::save));
+    let (done_tx, done) = mpsc::channel();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let r = w.rewrite(|s| {
+                s.simultaneous_radios = true;
+                true
+            });
+            done_tx.send(r.is_ok()).unwrap();
+        });
+        assert!(
+            done.recv_timeout(Duration::from_millis(300)).is_err(),
+            "the rewrite waits while another process holds the file"
+        );
+        holder.unlock().expect("let go");
+        assert_eq!(
+            done.recv_timeout(Duration::from_secs(10)),
+            Ok(true),
+            "and goes ahead once it is let go"
+        );
+    });
+    assert!(Settings::load(&d.settings()).simultaneous_radios);
+}
+
+const REWRITE_CHILD: &str = "NEXUS_REWRITE_LOCK_CHILD_DIR";
+
+/// The child half of the crash test: hold the base file's rewrite lock, say so, and wait to be
+/// killed.
+#[test]
+fn rewrite_lock_child_holds_until_killed() {
+    let Ok(dir) = std::env::var(REWRITE_CHILD) else {
+        return; // only as the child
+    };
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(PathBuf::from(dir).join("settings.json.lock"))
+        .expect("the lock file");
+    f.lock().expect("the child holds the lock");
+    println!("REWRITE-CHILD-HELD");
+    std::thread::sleep(Duration::from_secs(120));
+}
+
+/// A window that crashed in the middle of a rewrite (SIGKILL / TerminateProcess: no destructor)
+/// never locks the base file out: the OS drops its lock with it, and the file it left behind
+/// refuses nothing.
+#[test]
+fn a_window_that_crashed_holding_the_base_file_never_blocks_a_rewrite() {
+    use std::io::BufRead;
+    let d = Dir::new("crashed");
+    Settings::default()
+        .save(&d.settings())
+        .expect("the base file");
+    let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args([
+            "--exact",
+            "settings::writer::tests::rewrite_lock_child_holds_until_killed",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(REWRITE_CHILD, &d.0)
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("start the child window");
+    let out = child.stdout.take().expect("its stdout");
+    let held = std::io::BufReader::new(out)
+        .lines()
+        .any(|l| l.expect("a line").contains("REWRITE-CHILD-HELD"));
+    assert!(held, "the child holds the lock");
+    child.kill().expect("kill the child, no cleanup");
+    let _ = child.wait();
+    assert!(
+        rewrite_lock(&d).exists(),
+        "premise: its lock file is left behind"
+    );
+    let w = SettingsWriter::new(d.settings(), Arc::new(Settings::save));
+    let started = Instant::now();
+    w.rewrite(|s| {
+        s.simultaneous_radios = true;
+        true
+    })
+    .expect("rewritten");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "a dead window holds nothing"
+    );
+    assert!(Settings::load(&d.settings()).simultaneous_radios);
+}
