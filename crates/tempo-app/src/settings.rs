@@ -5843,8 +5843,9 @@ pub struct RadioProfile {
     // A profile written before these existed carries none of them (`per_radio_seeded` false):
     // `ensure_radio_profiles` fills them, from the flat fields for the active radio and with
     // [`Settings::fields_for_another_radio`] for any other, so one radio never takes another's
-    // keying lines or keyers and no radio's power caps come out higher than they were. (The TCI
-    // server stays the station's, by the operator's ruling: one server, whichever radio.)
+    // keying lines or keyers and no radio's power caps come out higher than they were. (The
+    // services other programs reach stay the station's, by the operator's rulings: the TCI server,
+    // the CAT broker and the JS8 API, one each, whichever radio is in use.)
     pub cat_rts_state: String,
     pub cat_dtr_state: String,
     pub cat_rts_keys_ptt: bool,
@@ -5867,11 +5868,6 @@ pub struct RadioProfile {
     pub sdrconnect_host: String,
     pub sdrconnect_port: u16,
     pub sdrconnect_follow: String,
-    pub cat_broker: bool,
-    pub cat_broker_port: u16,
-    pub cat_broker_ptt: bool,
-    pub js8_api_tcp_port: u16,
-    pub js8_api_udp_port: u16,
     /// ⛔ This radio's per-mode power caps, fractions of the radio's full power as the flat
     /// `max_power_*` are, and its tune and SSTV percentages. Fractions, not watts, on purpose: a
     /// cap kept in watts would be turned back into a fraction through `rated_watts`, so an
@@ -6281,11 +6277,6 @@ macro_rules! per_radio_station_fields {
             sdrconnect_host,
             sdrconnect_port,
             sdrconnect_follow,
-            cat_broker,
-            cat_broker_port,
-            cat_broker_ptt,
-            js8_api_tcp_port,
-            js8_api_udp_port,
             max_power_phone,
             max_power_cw,
             max_power_digital,
@@ -6416,11 +6407,6 @@ impl Default for RadioProfile {
             sdrconnect_host: default_sdrconnect_host(),
             sdrconnect_port: SDRCONNECT_DEFAULT_PORT,
             sdrconnect_follow: default_sdrconnect_follow(),
-            cat_broker: true,
-            cat_broker_port: 4532,
-            cat_broker_ptt: true,
-            js8_api_tcp_port: default_js8_api_tcp_port(),
-            js8_api_udp_port: default_js8_api_udp_port(),
             max_power_phone: None,
             max_power_cw: None,
             max_power_digital: None,
@@ -10580,7 +10566,7 @@ mod tests {
     /// round-trip must probe EVERY one both ways, never skip one as a probe its type refused (two
     /// are enums, whose probe is another of their words, and several are `Option`s at `None`,
     /// whose probe is a number); the radio Edit's patch carries none of them.
-    const PER_RADIO_STATION_FIELDS: [&str; 33] = [
+    const PER_RADIO_STATION_FIELDS: [&str; 28] = [
         "catRtsState",
         "catDtrState",
         "catRtsKeysPtt",
@@ -10603,11 +10589,6 @@ mod tests {
         "sdrconnectHost",
         "sdrconnectPort",
         "sdrconnectFollow",
-        "catBroker",
-        "catBrokerPort",
-        "catBrokerPtt",
-        "js8ApiTcpPort",
-        "js8ApiUdpPort",
         "maxPowerPhone",
         "maxPowerCw",
         "maxPowerDigital",

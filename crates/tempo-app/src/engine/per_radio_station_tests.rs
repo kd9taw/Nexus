@@ -1,7 +1,7 @@
 //! The station fields that are each radio's own: its PTT keying lines, keyers, devices, split,
-//! scope, service ports and power caps. A radio switch brings the new radio's, a radio never takes
-//! another radio's keying lines, and a settings file from before they were per radio keeps every
-//! radio's transmit power exactly where it was.
+//! scope and power caps (the CAT broker, JS8 API and TCI server stay the station's). A radio
+//! switch brings the new radio's, a radio never takes another radio's keying lines, and a settings
+//! file from before they were per radio keeps every radio's transmit power exactly where it was.
 
 use super::*;
 use crate::settings::{CwKeyerBackend, OperatingMode, Settings, SplitMode};
@@ -55,9 +55,9 @@ fn assert_no_cable_of_a(s: &Settings, why: &str) {
     assert_eq!(s.rtty_backend, d.rtty_backend, "{why}: RTTY backend");
 }
 
-/// ★ A SWITCH BRINGS THE RADIO'S OWN KEYING LINES, PORTS AND CAPS. Radio A keys on RTS with its
-/// WinKeyer on COM6, its broker on 4600 and its digital cap at 80 %; radio B is set up through its
-/// own form with other values. Each switch puts the radio's own in force, both ways. (Flat-only,
+/// ★ A SWITCH BRINGS THE RADIO'S OWN KEYING LINES, KEYERS AND CAPS. Radio A keys on RTS with its
+/// WinKeyer on COM6 and its digital cap at 80 %; radio B is set up through its own form with other
+/// values. Each switch puts the radio's own in force, both ways. (Flat-only,
 /// these stayed radio A's on radio B, and B's edits overwrote A's: that is how this test was first
 /// seen red.)
 #[test]
@@ -71,6 +71,7 @@ fn a_switch_brings_the_radios_own_keying_lines_ports_and_caps() {
     // B's own, through its own form.
     e.settings.ptt_method = "cat".into();
     e.settings.winkeyer_port = "COM9".into();
+    // The station's, moved while B is in use.
     e.settings.cat_broker_port = 4700;
     e.settings.js8_api_tcp_port = 2444;
     e.settings.monitor_device = "Headphones B".into();
@@ -93,8 +94,8 @@ fn a_switch_brings_the_radios_own_keying_lines_ports_and_caps() {
     assert_eq!(s.winkeyer_port, "COM6");
     assert_eq!(
         (s.cat_broker_port, s.js8_api_tcp_port),
-        (4600, 2443),
-        "radio A's service ports"
+        (4700, 2444),
+        "the CAT broker and JS8 API stay the station's: a switch does not move them"
     );
     assert_eq!(s.monitor_device, "Headphones A");
     assert_eq!(s.split_mode, SplitMode::Rig);
@@ -114,7 +115,11 @@ fn a_switch_brings_the_radios_own_keying_lines_ports_and_caps() {
     let s = &e.settings;
     assert_eq!((s.ptt_method.as_str(), s.cat_rts_keys_ptt), ("cat", false));
     assert_eq!(s.winkeyer_port, "COM9");
-    assert_eq!((s.cat_broker_port, s.js8_api_tcp_port), (4700, 2444));
+    assert_eq!(
+        (s.cat_broker_port, s.js8_api_tcp_port),
+        (4700, 2444),
+        "still the station's"
+    );
     assert_eq!(s.monitor_device, "Headphones B");
     assert_eq!(s.split_mode, SplitMode::FakeIt);
     assert_eq!(
@@ -203,8 +208,8 @@ fn radio_b_never_inherits_radio_as_ptt_method_or_keying_lines() {
         "nor its RTS"
     );
     assert_eq!(s.winkeyer_port, "", "nor its WinKeyer port");
-    // What is not its cable it takes from the station, as it had until now: the CAT broker
-    // other programs reach whichever radio is in use stays on its port.
+    // What is not its cable it takes from the station, as it had until now (and the CAT broker,
+    // the station's, stays on its port).
     assert_eq!(
         (s.cat_broker_port, s.split_mode),
         (4600, SplitMode::Rig),
@@ -273,8 +278,8 @@ fn the_migration_keeps_each_radios_effective_watts() {
 
 /// ★ A RADIO WITH NO CAPS OF ITS OWN IS NEVER UNCAPPED BY IT. A profile from before the caps were
 /// per radio, and a radio added to the roster, take the caps the station has now — the ones that
-/// applied to them until now — and never a default of "no cap", which would be full power. So does
-/// the switch that lets a program on the CAT broker key PTT: off for the station stays off on them.
+/// applied to them until now — and never a default of "no cap", which would be full power. The
+/// switch that lets a program on the CAT broker key PTT is the station's: off stays off on them.
 #[test]
 fn a_radio_without_caps_of_its_own_takes_the_stricter_never_uncapped() {
     let s = on_radio(old_file(), 1);

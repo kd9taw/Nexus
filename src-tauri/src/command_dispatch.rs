@@ -204,7 +204,7 @@ pub(crate) const ACTIVATION_FROM_AFAR: [&str; 2] = ["clear_activation", "set_act
 /// What a settings save from afar may not change ([`SETTINGS_FROM_AFAR`]): each is put back into
 /// `save` as the shack has it. From the shack's own screen (`None`) the save is taken as it came.
 ///
-/// ⛔ What is each radio's own (its PTT lines, keyers, power caps, the CAT broker's switches) comes
+/// ⛔ What is each radio's own (its PTT lines, keyers and power caps) comes
 /// back as the shack has it FOR THE RADIO THE FORM EDITED: `Engine::apply_settings` folds the
 /// save's flat fields into that radio's profile, so the shack's live flat fields, which are the
 /// radio in use's, would write that radio's keying lines and caps into another radio's profile
@@ -242,7 +242,8 @@ pub(crate) fn keep_the_shacks_transmit_settings(
     save.wsjtx_udp = shack.wsjtx_udp;
     save.wsjtx_udp_addr = shack.wsjtx_udp_addr.clone();
     save.wsjtx_udp_accept_other_computers = shack.wsjtx_udp_accept_other_computers;
-    keep_the_radios!(cat_broker, cat_broker_ptt);
+    save.cat_broker = shack.cat_broker;
+    save.cat_broker_ptt = shack.cat_broker_ptt;
     save.js8_api_tcp = shack.js8_api_tcp;
     save.js8_api_udp = shack.js8_api_udp;
     save.js8_api_tcp_accept = shack.js8_api_tcp_accept;

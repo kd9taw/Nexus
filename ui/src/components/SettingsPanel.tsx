@@ -1423,8 +1423,8 @@ export function SettingsPanel({
     stationOnly(key) ? (
       <span className="settings-hint" data-set-at-station={key}>{t('settings.stationOnly.hint')}</span>
     ) : null
-  // The settings each radio keeps for itself (its PTT lines, keyers, devices, split, scope,
-  // service ports and power caps): with more than one radio, say whose they are. They edit the
+  // The settings each radio keeps for itself (its PTT lines, keyers, devices, split, scope and
+  // power caps): with more than one radio, say whose they are. They edit the
   // radio in use, as the Rig & CAT form does; a switch brings the other radio's own.
   const thisRadio = () => {
     const radios = form?.radios ?? []
@@ -9221,7 +9221,6 @@ export function SettingsPanel({
                   />
                 </span>
               )}
-              {thisRadio()}
               {form.catBroker && (
                 <div className="settings-field">
                   <span className="settings-label">{t('settings.transmit.foreignPtt.label')}</span>
