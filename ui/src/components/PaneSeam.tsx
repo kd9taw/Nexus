@@ -74,6 +74,8 @@ interface SeamDrag {
   at: (ev: PointerEvent) => number
   paint: (v: number) => void
   restore: () => void
+  /** The drag is over (released, cancelled or abandoned), before any commit or restore. */
+  end?: () => void
 }
 
 /** What the one element needs from its kind. Values are in the kind's own unit: CSS px, or a
@@ -129,6 +131,7 @@ function SeamHandle(h: HandleProps) {
     }
     let moved = false
     const end = () => {
+      d.end?.()
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
       window.removeEventListener('pointercancel', cancel)
@@ -339,6 +342,8 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
   // The % on the container now: the preference fitted into the live box, or a drag in flight;
   // null while the strip stands at the sheet's own size.
   const painted = useRef<number | null>(pref.current)
+  // A drag in flight: the box's observers do not re-fit the preference under it (below).
+  const dragging = useRef(false)
   const [view, setView] = useState<{ px: number; lo: number; hi: number } | null>(null)
   // A strip whose stock size is the sheet's own is MARKED while a size is painted: its sheet rule
   // keys the sized shape (grow 0, the variable as the basis) on `data-sized`.
@@ -445,9 +450,13 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
     // are the ones that matter again. Every box it has been laid out in stays observed, and so does
     // the box its default is a share of (`defaultOf`).
     const watched = new Set<Element>()
+    // NOT DURING A DRAG. A neighbour that follows the strip (FT's lower region, under the waterfall) resizes on
+    // every move of a drag, and its re-fit painted the stored preference back over the drag's: the divider stood
+    // still under the pointer and jumped only on release (1.24.0 to 1.25, real Chrome). The release commits
+    // through the same clamps, and the next resize re-fits as before.
     const ro = new ResizeObserver(() => {
       watch(container())
-      fitRef.current()
+      if (!dragging.current) fitRef.current()
     })
     function watch(e: Element | null) {
       if (e && !watched.has(e)) {
@@ -517,7 +526,11 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
         const start = current(b)
         const p0 = axis === 'y' ? e.clientY : e.clientX
         const was = painted.current
+        dragging.current = true
         return {
+          end: () => {
+            dragging.current = false
+          },
           at: (ev) => clampIn(b, start + ((after ? -1 : 1) * ((axis === 'y' ? ev.clientY : ev.clientX) - p0)) / b.z),
           paint: (px) => write(b, px),
           restore: () => {
