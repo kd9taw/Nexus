@@ -22,8 +22,8 @@ const SEED: &str = include_str!("../src/fd_rules.seed.json");
 
 /// The bundled seed's `generated` stamp and the digest of everything else in it. Change them
 /// only to what a failure of `the_bundled_seed_changes_only_with_a_later_stamp` prints.
-const PINNED_STAMP: &str = "2026-11-14T14:00:00Z";
-const PINNED_DIGEST: u64 = 0x20a0f62445a91ba1;
+const PINNED_STAMP: &str = "2026-11-21T12:00:00Z";
+const PINNED_DIGEST: u64 = 0xaedad07131421a7a;
 
 /// `Ok` when `seed` carries the pinned stamp and content; otherwise what to do about it. Stamps
 /// compare as plain strings, as `fd_rules::install_from` compares them, which orders them only in
