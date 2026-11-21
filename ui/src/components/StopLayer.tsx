@@ -7,7 +7,7 @@
 //
 // THE RULE, once, for every overlay present and future: while any overlay is open (anything drawn with role dialog,
 // alertdialog or menu, anything aria-modal, or a page whose pointer events are locked), every stop control
-// on screen that the overlay keeps from being clicked gets a MIRROR in this layer — the one layer above every other
+// on screen that the overlay covers ANY PART of gets a MIRROR in this layer — the one layer above every other
 // (`.stop-layer`, the top z-index of the app; `stop-layer.test.ts` computes that it wins over every overlay's). The
 // mirror is a copy of the button, drawn at the button's own place and size (Stop TX does not move), and a click on it
 // is the button's own click: `original.click()`, so the stop runs through exactly the handler and the wire it always
@@ -48,7 +48,12 @@
 // Screen readers see only the button: the layer and every mirror are aria-hidden, and the mirror has no id. The
 // button stays the accessible control (under a Radix dialog it is hidden from them with the rest of the page, as it
 // always was).
-// A stop control the overlay does NOT cover keeps no mirror and is clicked as it is (a menu beside Stop TX closes and
+// ANY PART COVERED IS COVERED. A press lands wherever the operator's pointer is, not at the button's centre, so a stop
+// control is clear only when its centre AND every point of a 9 × 5 grid across its visible part are the button itself,
+// topmost. A menu over part of Stop TX — the band menu over 78 % of it on FT at 1366×768 @175 %, a few of its points
+// still its own — gets it a mirror. (The shell probes call a stop control covered when its centre is lost or under
+// 90 % of its points are its own; every point is the stricter rule, so a stop the layer leaves alone passes theirs.)
+// A stop control the overlay covers NONE of keeps no mirror and is clicked as it is (a menu beside Stop TX closes and
 // lets the click through, MenuParts.tsx). With no overlay open there is no mirror at all, so nothing here can hide a
 // layout fault the shell probes exist to catch.
 //
@@ -59,9 +64,9 @@ export const STOP_CONTROL = '[data-stop-control]'
 /** What counts as an overlay, once it is drawn. A page whose pointer events are locked (a Radix modal) is one too.
  *  Not `listbox`: Operate's decode list is one, on screen all the time. */
 const OVERLAY = '[role="dialog"], [role="alertdialog"], [role="menu"], [aria-modal="true"]'
-/** The points of a stop control tested for being the topmost thing there: 5 across, 3 down. */
-const COLS = 5
-const ROWS = 3
+/** The points of a stop control tested for being the topmost thing there: 9 across, 5 down, and the centre. */
+const COLS = 9
+const ROWS = 5
 
 interface Box {
   left: number
@@ -98,17 +103,20 @@ function visibleBox(el: HTMLElement): Box | null {
   return box.right > box.left && box.bottom > box.top ? box : null
 }
 
-/** Whether some point of `el`'s visible part is `el` itself, topmost, not counting this layer's own mirrors. */
-function reachable(el: HTMLElement, box: Box, layer: HTMLElement): boolean {
+/** Whether every point of `el`'s visible part (the grid and the centre) is `el` itself, topmost, not counting this
+ *  layer's own mirrors: false as soon as anything else stands over any of them. */
+function uncovered(el: HTMLElement, box: Box, layer: HTMLElement): boolean {
+  const own = (x: number, y: number) => {
+    const top = document.elementsFromPoint(x, y).find((e) => !layer.contains(e))
+    return top != null && (top === el || el.contains(top))
+  }
+  if (!own((box.left + box.right) / 2, (box.top + box.bottom) / 2)) return false
   for (let j = 1; j <= ROWS; j++) {
     for (let i = 1; i <= COLS; i++) {
-      const x = box.left + ((box.right - box.left) * i) / (COLS + 1)
-      const y = box.top + ((box.bottom - box.top) * j) / (ROWS + 1)
-      const top = document.elementsFromPoint(x, y).find((e) => !layer.contains(e))
-      if (top && (top === el || el.contains(top))) return true
+      if (!own(box.left + ((box.right - box.left) * i) / (COLS + 1), box.top + ((box.bottom - box.top) * j) / (ROWS + 1))) return false
     }
   }
-  return false
+  return true
 }
 
 /** Every computed style of `from` (and of each descendant) written inline onto its copy `to`: the mirror is drawn
@@ -268,7 +276,7 @@ export function StopLayer() {
       for (const el of [...mirrors.keys()]) if (!stops.has(el)) drop(el)
       for (const el of stops) {
         const box = present(el) ? visibleBox(el) : null
-        if (!box || reachable(el, box, layer)) drop(el)
+        if (!box || uncovered(el, box, layer)) drop(el)
         else place(el, box)
       }
     }
