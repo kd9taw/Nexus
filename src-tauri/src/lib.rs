@@ -5030,6 +5030,103 @@ mod lotw_batch_tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// ★ ONE SIGNER ACROSS EVERY WINDOW. Two windows share one log, and each runs its own
+    /// automatic upload: here window B's timer fires while window A's TQSL is still signing.
+    /// Without a lock both batches read the same owed contacts and LoTW received each twice. B is
+    /// refused without starting TQSL, A's batch signs and stamps, and once A is done the lock is
+    /// free again for the next batch.
+    #[test]
+    fn a_second_window_skips_its_lotw_batch_while_another_signs() {
+        let (dir, a, _) = station("lotw-one-signer-a", 2);
+        let (dir_b, b, _) = station("lotw-one-signer-b", 2);
+        let shared = dir.join("shared-data");
+        std::fs::create_dir_all(&shared).unwrap();
+        let mut b_answer = None;
+        let report = lotw_upload_batch_one_signer(&a, LotwPick::Unsent, true, &shared, |_, _| {
+            b_answer = Some(lotw_upload_batch_one_signer(
+                &b,
+                LotwPick::Unsent,
+                true,
+                &shared,
+                |_, _| panic!("window B ran TQSL while window A was signing"),
+            ));
+            Ok((0, String::new()))
+        })
+        .expect("window A's upload ran");
+        assert_eq!((report.dispatched, report.outcome.as_str()), (2, "pending"));
+        assert_eq!(
+            b_answer
+                .expect("window B tried while A signed")
+                .unwrap_err(),
+            LOTW_ANOTHER_WINDOW,
+            "window B skips"
+        );
+        let mut ran = false;
+        let report = lotw_upload_batch_one_signer(&b, LotwPick::Unsent, true, &shared, |_, _| {
+            ran = true;
+            Ok((0, String::new()))
+        })
+        .expect("window B's upload ran once A was done");
+        assert!(
+            ran && report.dispatched == 2,
+            "the lock is released when a batch ends"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(dir_b);
+    }
+
+    const SIGNER_CHILD: &str = "NEXUS_LOTW_SIGNER_CHILD";
+
+    /// ★ A WINDOW THAT DIES MID-BATCH DOES NOT LOCK LOTW OUT. The lock is the operating system's,
+    /// held by the process: another process cannot take it while the holder lives, and the holder
+    /// killed outright — no destructor, no cleanup, as a crash — leaves it free at once. A lock
+    /// FILE that meant "busy" by existing would refuse every later upload, forever.
+    ///
+    /// The holder is this same test binary re-run as a child, which takes the lock and waits.
+    #[test]
+    fn a_crashed_signer_does_not_hold_the_lotw_lock() {
+        if let Some(dir) = std::env::var_os(SIGNER_CHILD) {
+            let dir = PathBuf::from(dir);
+            let held = lotw_signer(&dir).expect("the child takes the lock");
+            assert!(held.is_some(), "control: this filesystem locks");
+            std::fs::write(dir.join("child-holds"), b"").unwrap();
+            std::thread::sleep(std::time::Duration::from_secs(120));
+            panic!("the child was not killed");
+        }
+        let dir = test_dirs::root().join("lotw-signer-crash");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([
+                "--exact",
+                "lotw_batch_tests::a_crashed_signer_does_not_hold_the_lotw_lock",
+                "--nocapture",
+            ])
+            .env(SIGNER_CHILD, &dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("re-run this test binary");
+        let start = std::time::Instant::now();
+        while !dir.join("child-holds").exists() {
+            if start.elapsed() > std::time::Duration::from_secs(60) {
+                let _ = child.kill();
+                panic!("the child never took the lock");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            lotw_signer(&dir).is_none(),
+            "another process's batch holds it: this window skips"
+        );
+        child.kill().expect("kill the holder, as a crash");
+        child.wait().expect("reap the holder");
+        assert!(
+            matches!(lotw_signer(&dir), Some(Some(_))),
+            "the dead holder's lock is gone with it"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// TQSL drops a contact whose mode it does not know yet — a JTTY contact, written as ADIF 3.1.8
     /// spells it, `MODE=MFSK SUBMODE=JTTY` — and the batch then exits 9 and is read as rejected for
     /// every contact in it. So the JTTY contact never reaches TQSL: the others are signed and stamped, it stays
@@ -40693,12 +40790,71 @@ impl LotwPick {
 /// runs the SAME code the button does rather than a parallel copy that drifts from it.
 /// Plain sync: nothing in here awaits — the command above was only ever `async` for the
 /// `State` lifetime.
+///
+/// One signer at a time across every Nexus window: the batch runs only while this process holds
+/// the LoTW signer lock beside the shared log ([`lotw_signer`]), and is refused with
+/// [`LOTW_ANOTHER_WINDOW`] while another window's batch runs.
 fn lotw_upload_batch(
     state: &SharedEngine,
     pick: LotwPick,
     wait: bool,
 ) -> Result<UploadReportDto, String> {
-    lotw_upload_batch_with(state, pick, wait, run_tqsl)
+    lotw_upload_batch_one_signer(state, pick, wait, &shared_data_dir(), run_tqsl)
+}
+
+/// [`lotw_upload_batch_with`] under the signer lock in `data_dir`, the folder that holds the one
+/// logbook every window shares.
+///
+/// Every window of a station runs its own automatic-upload timer over that ONE log, and the
+/// Logbook's button can start a batch in any of them. Two batches at once read the same owed
+/// contacts, so TQSL signed and LoTW received each of them twice. The lock is taken before the
+/// owed contacts are read and held until their stamps are written, so a second batch, started
+/// while the first runs, is refused, and one started after it finds them stamped.
+fn lotw_upload_batch_one_signer(
+    state: &SharedEngine,
+    pick: LotwPick,
+    wait: bool,
+    data_dir: &Path,
+    tqsl: impl FnMut(&str, &[String]) -> Result<(i32, String), String>,
+) -> Result<UploadReportDto, String> {
+    let Some(_signer) = lotw_signer(data_dir) else {
+        return Err(LOTW_ANOTHER_WINDOW.into());
+    };
+    lotw_upload_batch_with(state, pick, wait, tqsl)
+}
+
+/// The lock file beside the shared log that one LoTW batch at a time holds.
+const LOTW_SIGNER_LOCK: &str = ".lotw-upload.lock";
+
+/// Why a LoTW upload does not start: another Nexus window is uploading the same log now.
+const LOTW_ANOTHER_WINDOW: &str = "Another Nexus window is uploading this log to LoTW right now. \
+     Try again when it finishes.";
+
+/// Take the LoTW signer lock in `data_dir`: `None` while another batch holds it, in this window
+/// or another; otherwise `Some` of the held lock (`Some(None)` where there is no lock to hold —
+/// see fail-open below). The lock is the operating system's advisory lock on [`LOTW_SIGNER_LOCK`], held by
+/// the returned `File` and released when it drops — and by the operating system when the process
+/// ends, a crash included, so a window that dies mid-batch never leaves the next one locked out.
+/// The file itself stays; it is only ever the thing locked.
+///
+/// Fail-open, as the profile lock is ([`hold_profile_lock`]): a folder where the file cannot be
+/// made, or a filesystem with no locking, lets the batch run as it did before this lock existed,
+/// rather than stopping every upload.
+fn lotw_signer(data_dir: &Path) -> Option<Option<std::fs::File>> {
+    let file = match std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(data_dir.join(LOTW_SIGNER_LOCK))
+    {
+        Ok(f) => f,
+        Err(_) => return Some(None),
+    };
+    match file.try_lock() {
+        Ok(()) => Some(Some(file)),
+        Err(std::fs::TryLockError::WouldBlock) => None,
+        Err(std::fs::TryLockError::Error(_)) => Some(None),
+    }
 }
 
 /// [`lotw_upload_batch`], with TQSL named: `tqsl` runs it once over a batch file, to
@@ -53765,6 +53921,9 @@ fn start_on_the_logbook(
                         _ => {}
                     }
                 }
+                // Another window is signing this log now: this round is skipped, quietly. Its
+                // batch stamps what it sends, so the next round finds only what is still owed.
+                Err(e) if e == LOTW_ANOTHER_WINDOW => {}
                 Err(e) => eprintln!("[lotw-auto] failed: {e}"),
             }
         });
