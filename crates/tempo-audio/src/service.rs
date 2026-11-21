@@ -24390,7 +24390,12 @@ mod tests {
         let take = || std::mem::take(&mut *said.lock().unwrap());
 
         assert!(health
-            .settle(build_wsjtx_server(true, "localhost:2237", "1.21.0", tempo_net::APP_ID))
+            .settle(build_wsjtx_server(
+                true,
+                "localhost:2237",
+                "1.21.0",
+                tempo_net::APP_ID
+            ))
             .is_none());
         let first = take();
         assert_eq!(first.len(), 1, "{first:?}");
@@ -24399,7 +24404,12 @@ mod tests {
             why.contains("\"localhost:2237\" is not an address to send to"),
             "{why}"
         );
-        health.settle(build_wsjtx_server(true, "localhost:2237", "1.21.0", tempo_net::APP_ID));
+        health.settle(build_wsjtx_server(
+            true,
+            "localhost:2237",
+            "1.21.0",
+            tempo_net::APP_ID,
+        ));
         assert!(take().is_empty(), "said once, not on every try");
 
         let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
