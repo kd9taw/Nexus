@@ -2612,15 +2612,71 @@ fn build_wsjtx_server(enabled: bool, addr: &str, app_version: &str) -> Option<Ws
     };
     match WsjtxServer::new_multi(bind.parse().unwrap(), targets) {
         Ok(s) => {
-            // The APP's version (`RadioConfig::app_version`), as WSJT-X sends its own:
-            // `env!("CARGO_PKG_VERSION")` here would be TEMPO-AUDIO's 0.2.0, never released.
-            let _ = s.send_heartbeat(3, app_version, "Nexus");
+            send_wsjtx_heartbeat(&s, app_version);
             Some(s)
         }
         Err(e) => {
             eprintln!("tempo: WSJT-X UDP disabled: {e}");
             None
         }
+    }
+}
+
+/// How often a WSJT-X client says it is still there: WSJT-X's `NetworkMessage::pulse`, 15 s, the
+/// interval its `MessageClient` sends a Heartbeat on for as long as it runs. A listener watches
+/// for it to tell a client that has gone quiet from one that has gone: Nexus sent its Heartbeat
+/// once, when the sink was built, so a listener that keys on it saw Nexus vanish while it was
+/// still sending Status and Decodes.
+const WSJTX_PULSE: Duration = Duration::from_secs(15);
+
+/// One Heartbeat as WSJT-X's `MessageClient::impl::heartbeat` writes it: the highest schema this
+/// client accepts (3, WSJT-X's `NetworkMessage::Builder::schema_number`), the version, then the
+/// revision. The version is the APP's (`RadioConfig::app_version`), as WSJT-X sends its own:
+/// `env!("CARGO_PKG_VERSION")` here would be TEMPO-AUDIO's 0.2.0, never released.
+fn send_wsjtx_heartbeat(server: &WsjtxServer, app_version: &str) {
+    let _ = server.send_heartbeat(3, app_version, "Nexus");
+}
+
+/// When the WSJT-X sink's next Heartbeat is due: [`WSJTX_PULSE`] after the last, the first of
+/// them sent when the sink is built ([`build_wsjtx_server`]). The clock is passed in, so a test
+/// can step it.
+struct WsjtxPulse {
+    last: Instant,
+}
+
+impl WsjtxPulse {
+    /// A pulse whose last Heartbeat went out at `sent` (the sink was just built).
+    fn sent_at(sent: Instant) -> Self {
+        Self { last: sent }
+    }
+
+    /// Send `server`'s Heartbeat if one is due at `now`.
+    fn tick(&mut self, server: &WsjtxServer, now: Instant, app_version: &str) {
+        if now.saturating_duration_since(self.last) >= WSJTX_PULSE {
+            send_wsjtx_heartbeat(server, app_version);
+            self.last = now;
+        }
+    }
+}
+
+/// The WSJT-X sink the radio loop holds, brought in line with `s` once per loop pass: rebuilt
+/// when the switch or the address changed (the build sends the opening Heartbeat and restarts the
+/// pulse), and otherwise sent its Heartbeat when one is due at `now`, every [`WSJTX_PULSE`] as
+/// WSJT-X's MessageClient does.
+fn hot_apply_wsjtx(
+    s: &tempo_app::settings::Settings,
+    app_version: &str,
+    now: Instant,
+    wsjtx: &mut Option<WsjtxServer>,
+    applied: &mut (bool, String),
+    pulse: &mut WsjtxPulse,
+) {
+    if (s.wsjtx_udp, s.wsjtx_udp_addr.as_str()) != (applied.0, applied.1.as_str()) {
+        *wsjtx = build_wsjtx_server(s.wsjtx_udp, &s.wsjtx_udp_addr, app_version);
+        *pulse = WsjtxPulse::sent_at(now);
+        *applied = (s.wsjtx_udp, s.wsjtx_udp_addr.clone());
+    } else if let Some(server) = wsjtx.as_ref() {
+        pulse.tick(server, now, app_version);
     }
 }
 
@@ -2831,6 +2887,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     // never connects (the reported "needs a Nexus restart" bug). `*_applied` tracks what
     // the current emitters were built for so the loop rebuilds only on a real change.
     let mut wsjtx = build_wsjtx_server(cfg.wsjtx_udp, &cfg.wsjtx_addr, &cfg.app_version);
+    let mut wsjtx_pulse = WsjtxPulse::sent_at(Instant::now());
     let mut wsjtx_applied = (cfg.wsjtx_udp, cfg.wsjtx_addr.clone());
     let mut psk = cfg.pskreporter.then(PskReporter::new);
     let mut psk_applied = cfg.pskreporter;
@@ -2961,13 +3018,14 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
         // The lock is released before state.step (which takes its own).
         {
             let e = engine_lock(&engine);
-            let s = e.settings();
-            if (s.wsjtx_udp, s.wsjtx_udp_addr.as_str())
-                != (wsjtx_applied.0, wsjtx_applied.1.as_str())
-            {
-                wsjtx = build_wsjtx_server(s.wsjtx_udp, &s.wsjtx_udp_addr, &cfg.app_version);
-                wsjtx_applied = (s.wsjtx_udp, s.wsjtx_udp_addr.clone());
-            }
+            hot_apply_wsjtx(
+                e.settings(),
+                &cfg.app_version,
+                Instant::now(),
+                &mut wsjtx,
+                &mut wsjtx_applied,
+                &mut wsjtx_pulse,
+            );
             // The EFFECTIVE upload: the setting, unless a contest that allows spotting only
             // over RF is running (Winter Field Day), when no reporter exists and nothing is
             // collected for one.
@@ -24074,6 +24132,122 @@ mod tests {
         assert_eq!(r.read_utf8(), Some(Some("1.21.0".to_string())), "version");
         assert_eq!(r.read_utf8(), Some(Some("Nexus".to_string())), "revision");
         assert_eq!(r.remaining(), 0);
+    }
+
+    /// ⭐ THE WSJT-X SINK SAYS IT IS STILL THERE EVERY 15 SECONDS, as WSJT-X's MessageClient does
+    /// (`NetworkMessage::pulse`): a Heartbeat when it is built, then one each 15 s, and none
+    /// between. It sent the first alone, so a listener that watches for the Heartbeat lost Nexus
+    /// while it was still sending. The clock is stepped by hand.
+    #[test]
+    fn the_wsjtx_sink_sends_a_heartbeat_every_15_seconds() {
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_millis(300)))
+            .unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let server = build_wsjtx_server(true, &addr, "1.21.0").expect("a bound emitter");
+        let built = Instant::now();
+        let mut pulse = WsjtxPulse::sent_at(built);
+        let mut buf = [0u8; 512];
+        let mut heartbeats = || {
+            let mut n = 0;
+            while let Ok((len, _)) = listener.recv_from(&mut buf) {
+                let mut r = tempo_net::qds::QdsReader::new(&buf[..len]);
+                assert_eq!(r.read_u32(), Some(0xADBC_CBDA), "magic");
+                r.read_u32().expect("schema");
+                assert_eq!(r.read_u32(), Some(0), "only Heartbeats are sent here");
+                r.read_utf8().expect("id");
+                assert_eq!(r.read_u32(), Some(3), "max schema");
+                assert_eq!(r.read_utf8(), Some(Some("1.21.0".to_string())), "version");
+                assert_eq!(r.read_utf8(), Some(Some("Nexus".to_string())), "revision");
+                n += 1;
+            }
+            n
+        };
+        assert_eq!(heartbeats(), 1, "the opening Heartbeat, at the build");
+        let at = |ms: u64| built + Duration::from_millis(ms);
+        for (ms, want) in [
+            (0, 0),
+            (14_999, 0),
+            (15_000, 1),
+            (15_001, 0),
+            (29_999, 0),
+            (30_000, 1),
+            (44_000, 0),
+            (45_000, 1),
+        ] {
+            pulse.tick(&server, at(ms), "1.21.0");
+            assert_eq!(heartbeats(), want, "Heartbeats sent at {ms} ms");
+        }
+    }
+
+    /// The radio loop's own pass over the sink (`hot_apply_wsjtx`, which `run_radio` calls each
+    /// pass: see the source check below) sends the Heartbeat on the pulse, and a rebuild for a new
+    /// address starts the pulse again from its opening Heartbeat.
+    #[test]
+    fn the_radio_loops_pass_over_the_wsjtx_sink_keeps_the_pulse() {
+        let bind = || {
+            let l = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+            l.set_read_timeout(Some(std::time::Duration::from_millis(300)))
+                .unwrap();
+            l
+        };
+        let count = |l: &std::net::UdpSocket| {
+            let mut buf = [0u8; 512];
+            let mut n = 0;
+            while l.recv_from(&mut buf).is_ok() {
+                n += 1;
+            }
+            n
+        };
+        let (first, second) = (bind(), bind());
+        let mut s = tempo_app::settings::Settings {
+            wsjtx_udp: true,
+            wsjtx_udp_addr: first.local_addr().unwrap().to_string(),
+            ..Default::default()
+        };
+        let t0 = Instant::now();
+        let mut wsjtx = None;
+        let mut applied = (false, String::new());
+        let mut pulse = WsjtxPulse::sent_at(t0);
+        let mut pass = |s: &tempo_app::settings::Settings, ms: u64| {
+            hot_apply_wsjtx(
+                s,
+                "1.21.0",
+                t0 + Duration::from_millis(ms),
+                &mut wsjtx,
+                &mut applied,
+                &mut pulse,
+            )
+        };
+        pass(&s, 0);
+        assert_eq!(count(&first), 1, "built, with its opening Heartbeat");
+        pass(&s, 14_000);
+        assert_eq!(count(&first), 0);
+        pass(&s, 15_000);
+        assert_eq!(count(&first), 1, "the pulse, from the loop's own pass");
+        s.wsjtx_udp_addr = second.local_addr().unwrap().to_string();
+        pass(&s, 20_000);
+        assert_eq!(count(&second), 1, "rebuilt for the new address");
+        pass(&s, 30_000);
+        assert_eq!(count(&second), 0, "the pulse starts again at the rebuild");
+        pass(&s, 35_000);
+        assert_eq!(count(&second), 1);
+        assert_eq!(count(&first), 0, "the old address hears nothing more");
+    }
+
+    /// `run_radio` (a thread that opens real devices, so it is source-scanned) gives the sink its
+    /// pass every loop: without it no Heartbeat follows the opening one.
+    #[test]
+    fn run_radio_gives_the_wsjtx_sink_its_pass() {
+        let src = include_str!("service.rs");
+        let rest = &src[src.find("\npub fn run_radio(").expect("run_radio") + 1..];
+        let body = &rest[..rest.find("\n}\n").expect("the end of run_radio")];
+        let at = body
+            .find("hot_apply_wsjtx(")
+            .expect("run_radio calls hot_apply_wsjtx");
+        let looped = body.find("    loop {").expect("the radio loop");
+        assert!(looped < at, "and calls it inside the loop, each pass");
     }
 
     #[test]
