@@ -85,10 +85,17 @@ describe('Stop TX above every overlay: the stop layer outranks them all', () => 
 // then every stop is hit-tested).
 describe('every full-window scrim is an overlay, or holds one', () => {
   const OVERLAY_ATTR = /\brole=["{]?["']?(dialog|alertdialog|menu)\b|\baria-modal=(["']true["']|\{true\})/
+  /** Every stylesheet under src (the app's two and any a component imports), relative to src. */
+  const allSheets = (dir: string): string[] =>
+    readdirSync(dir).flatMap((n) => {
+      const p = join(dir, n)
+      if (statSync(p).isDirectory()) return allSheets(p)
+      return n.endsWith('.css') ? [p.slice(SRC.length + 1)] : []
+    })
   /** The single-class selectors whose rules draw a fixed box over the whole window. */
   function scrims(): string[] {
     const decls = new Map<string, Map<string, string>>()
-    for (const name of SHEETS) {
+    for (const name of allSheets(SRC)) {
       const sheet = readFileSync(join(SRC, name), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
       for (const r of parseRules(sheet)) {
         const sel = r.selector.trim()
@@ -149,6 +156,11 @@ describe('every full-window scrim is an overlay, or holds one', () => {
           // A Radix dialog's Overlay is drawn only for a modal dialog, which locks the page's pointer events.
           if (/^<(RD|Dialog)\.Overlay\b/.test(tag)) {
             if (/modal=\{false\}/.test(src)) bad.push(`${where}: a Radix Overlay in a file with a non-modal dialog`)
+            continue
+          }
+          // A self-closing scrim holds nothing: an overlay after it is its sibling.
+          if (/\/>\s*$/.test(tag)) {
+            bad.push(`${where}: a self-closing scrim holds no overlay`)
             continue
           }
           // The first child: the next JSX opening tag, past whitespace and {/* comments */}.
