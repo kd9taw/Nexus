@@ -797,7 +797,7 @@ fn a_window_that_crashed_holding_the_base_file_never_blocks_a_rewrite() {
     Settings::default()
         .save(&d.settings())
         .expect("the base file");
-    let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+    let mut child = tempo_core::process::command(std::env::current_exe().expect("test binary"))
         .args([
             "--exact",
             "settings::writer::tests::rewrite_lock_child_holds_until_killed",
