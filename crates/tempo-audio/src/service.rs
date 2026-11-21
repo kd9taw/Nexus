@@ -2173,6 +2173,10 @@ struct DataWatch {
 /// budget into a bogus "no such mode" give-up.
 const MODE_SET_PASSBAND0_AFTER: u32 = 10;
 
+/// How the WSJT-X sink reaches the Connections log ([`RadioConfig::on_wsjtx_udp`]): `Err(line)`
+/// when it cannot send, `Ok(line)` when that has ended.
+pub type WsjtxUdpNote = Arc<dyn Fn(Result<String, String>) + Send + Sync>;
+
 /// Station configuration for the radio loop.
 ///
 /// Maps directly from `tempo_app::settings::Settings`: `ptt_method` selects how
@@ -2267,6 +2271,10 @@ pub struct RadioConfig {
     /// The sender id this window's WSJT-X messages carry (`tempo_net::sender_id` of its
     /// profile), so each window of a station is its own client to GridTracker and JTAlert.
     pub wsjtx_id: String,
+    /// Where the WSJT-X sink says, in the operator's Connections log, that it cannot send
+    /// (`Err`, a line that stands until it can) and that it has stopped failing (`Ok`). `None`
+    /// (tests, tools): the diagnostic log alone.
+    pub on_wsjtx_udp: Option<WsjtxUdpNote>,
     /// Upload heard stations to PSK Reporter.
     pub pskreporter: bool,
     /// The app's version (tauri.conf.json's, as the app reports it), which PSK Reporter shows
@@ -2324,6 +2332,7 @@ impl Default for RadioConfig {
             wsjtx_udp: false,
             wsjtx_addr: "127.0.0.1:2237".to_string(),
             wsjtx_id: tempo_net::APP_ID.to_string(),
+            on_wsjtx_udp: None,
             pskreporter: false,
             app_version: String::new(),
             audio_in: String::new(),
@@ -2599,19 +2608,26 @@ fn note_udp_request_refused(request: &WsjtxInbound, from: std::net::IpAddr) {
     );
 }
 
+/// Build the WSJT-X sink for `addr` (see the note above `parse_wsjtx_targets`): `Ok(None)` when
+/// the switch is off; `Err` with the operator's reason when it is on and the sink
+/// cannot be built (no address it can send to, or no socket), for [`WsjtxUdpHealth`] to report.
 fn build_wsjtx_server(
     enabled: bool,
     addr: &str,
     app_version: &str,
     id: &str,
-) -> Option<WsjtxServer> {
+) -> Result<Option<WsjtxServer>, String> {
     if !enabled {
-        return None;
+        return Ok(None);
     }
     let targets = parse_wsjtx_targets(addr);
     if targets.is_empty() {
-        eprintln!("tempo: WSJT-X UDP disabled: no valid target in {addr:?}");
-        return None;
+        return Err(format!(
+            "not sending to GridTracker or JTAlert: \"{}\" is not an address to send to. Enter \
+             it as address:port, such as 127.0.0.1:2237, in Settings ▸ Services ▸ Integrations \
+             & Feeds",
+            addr.trim()
+        ));
     }
     // A remote target needs a wildcard bind; all-loopback stays on loopback.
     let bind = if targets.iter().all(|t| t.ip().is_loopback()) {
@@ -2623,11 +2639,65 @@ fn build_wsjtx_server(
         Ok(s) => {
             let s = s.with_id(id.to_string());
             send_wsjtx_heartbeat(&s, app_version);
-            Some(s)
+            Ok(Some(s))
         }
-        Err(e) => {
-            eprintln!("tempo: WSJT-X UDP disabled: {e}");
-            None
+        Err(e) => Err(format!(
+            "not sending to GridTracker or JTAlert: the network socket could not be opened ({e})"
+        )),
+    }
+}
+
+/// Whether the WSJT-X sink is failing, told where the operator looks: the diagnostic log and the
+/// Connections log ([`RadioConfig::on_wsjtx_udp`]), as the other connectors report. A failure
+/// is said once and stands until a build succeeds or the switch is turned off, which ends it
+/// with a line of its own. A failed build used to reach stderr alone, which the operator never
+/// sees: GridTracker went quiet with nothing in Nexus to say why.
+struct WsjtxUdpHealth {
+    failing: Option<String>,
+    note: Option<WsjtxUdpNote>,
+}
+
+impl WsjtxUdpHealth {
+    fn new(note: Option<WsjtxUdpNote>) -> Self {
+        Self {
+            failing: None,
+            note,
+        }
+    }
+
+    /// The sink a build made, the failure reported or its end said.
+    fn settle(&mut self, built: Result<Option<WsjtxServer>, String>) -> Option<WsjtxServer> {
+        match built {
+            Err(why) => {
+                if self.failing.as_deref() != Some(why.as_str()) {
+                    tempo_core::applog::warn("wsjtx-udp", &why);
+                    if let Some(note) = &self.note {
+                        note(Err(why.clone()));
+                    }
+                    self.failing = Some(why);
+                }
+                None
+            }
+            Ok(server) => {
+                if self.failing.take().is_some() {
+                    let line = match &server {
+                        Some(s) => format!(
+                            "sending to {} again",
+                            s.targets()
+                                .iter()
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ),
+                        None => "turned off, so nothing is sent".to_string(),
+                    };
+                    tempo_core::applog::info("wsjtx-udp", &line);
+                    if let Some(note) = &self.note {
+                        note(Ok(line));
+                    }
+                }
+                server
+            }
         }
     }
 }
@@ -2681,9 +2751,15 @@ fn hot_apply_wsjtx(
     wsjtx: &mut Option<WsjtxServer>,
     applied: &mut (bool, String),
     pulse: &mut WsjtxPulse,
+    health: &mut WsjtxUdpHealth,
 ) {
     if (s.wsjtx_udp, s.wsjtx_udp_addr.as_str()) != (applied.0, applied.1.as_str()) {
-        *wsjtx = build_wsjtx_server(s.wsjtx_udp, &s.wsjtx_udp_addr, app_version, id);
+        *wsjtx = health.settle(build_wsjtx_server(
+            s.wsjtx_udp,
+            &s.wsjtx_udp_addr,
+            app_version,
+            id,
+        ));
         *pulse = WsjtxPulse::sent_at(now);
         *applied = (s.wsjtx_udp, s.wsjtx_udp_addr.clone());
     } else if let Some(server) = wsjtx.as_ref() {
@@ -2897,12 +2973,13 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     // retargets the WSJT-X address — otherwise a GridTracker/PSK setup done AFTER launch
     // never connects (the reported "needs a Nexus restart" bug). `*_applied` tracks what
     // the current emitters were built for so the loop rebuilds only on a real change.
-    let mut wsjtx = build_wsjtx_server(
+    let mut wsjtx_health = WsjtxUdpHealth::new(cfg.on_wsjtx_udp.clone());
+    let mut wsjtx = wsjtx_health.settle(build_wsjtx_server(
         cfg.wsjtx_udp,
         &cfg.wsjtx_addr,
         &cfg.app_version,
         &cfg.wsjtx_id,
-    );
+    ));
     let mut wsjtx_pulse = WsjtxPulse::sent_at(Instant::now());
     let mut wsjtx_applied = (cfg.wsjtx_udp, cfg.wsjtx_addr.clone());
     let mut psk = cfg.pskreporter.then(PskReporter::new);
@@ -3042,6 +3119,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
                 &mut wsjtx,
                 &mut wsjtx_applied,
                 &mut wsjtx_pulse,
+                &mut wsjtx_health,
             );
             // The EFFECTIVE upload: the setting, unless a contest that allows spotting only
             // over RF is running (Winter Field Day), when no reporter exists and nothing is
@@ -24137,8 +24215,9 @@ mod tests {
             .set_read_timeout(Some(std::time::Duration::from_secs(2)))
             .unwrap();
         let addr = listener.local_addr().unwrap().to_string();
-        let _server =
-            build_wsjtx_server(true, &addr, "1.21.0", tempo_net::APP_ID).expect("a bound emitter");
+        let _server = build_wsjtx_server(true, &addr, "1.21.0", tempo_net::APP_ID)
+            .unwrap()
+            .expect("a bound emitter");
         let mut buf = [0u8; 512];
         let (n, _) = listener.recv_from(&mut buf).unwrap();
         let mut r = tempo_net::qds::QdsReader::new(&buf[..n]);
@@ -24163,7 +24242,9 @@ mod tests {
             .set_read_timeout(Some(std::time::Duration::from_millis(300)))
             .unwrap();
         let addr = listener.local_addr().unwrap().to_string();
-        let server = build_wsjtx_server(true, &addr, "1.21.0", tempo_net::APP_ID).expect("a bound emitter");
+        let server = build_wsjtx_server(true, &addr, "1.21.0", tempo_net::APP_ID)
+            .unwrap()
+            .expect("a bound emitter");
         let built = Instant::now();
         let mut pulse = WsjtxPulse::sent_at(built);
         let mut buf = [0u8; 512];
@@ -24228,6 +24309,7 @@ mod tests {
         let mut wsjtx = None;
         let mut applied = (false, String::new());
         let mut pulse = WsjtxPulse::sent_at(t0);
+        let mut health = WsjtxUdpHealth::new(None);
         let mut pass = |s: &tempo_app::settings::Settings, ms: u64| {
             hot_apply_wsjtx(
                 s,
@@ -24237,6 +24319,7 @@ mod tests {
                 &mut wsjtx,
                 &mut applied,
                 &mut pulse,
+                &mut health,
             )
         };
         pass(&s, 0);
@@ -24272,13 +24355,65 @@ mod tests {
     #[test]
     fn build_wsjtx_server_gates_on_enable_and_valid_addr() {
         // Disabled → no socket regardless of address (the state before a toggle-on).
-        assert!(build_wsjtx_server(false, "127.0.0.1:2237", "1.21.0", tempo_net::APP_ID).is_none());
-        // Enabled but unparseable target → None, not a panic.
-        assert!(build_wsjtx_server(true, "not-an-address", "1.21.0", tempo_net::APP_ID).is_none());
-        assert!(build_wsjtx_server(true, "", "1.21.0", tempo_net::APP_ID).is_none());
+        assert!(matches!(
+            build_wsjtx_server(false, "127.0.0.1:2237", "1.21.0", tempo_net::APP_ID),
+            Ok(None)
+        ));
+        // Enabled but unparseable target → the reason, not a panic.
+        assert!(build_wsjtx_server(true, "not-an-address", "1.21.0", tempo_net::APP_ID).is_err());
+        assert!(build_wsjtx_server(true, "", "1.21.0", tempo_net::APP_ID).is_err());
         // Enabled + valid loopback target → a bound emitter (this is what a live
         // toggle-on rebuilds; the opening Heartbeat to :2237 is harmless if unheard).
-        assert!(build_wsjtx_server(true, "127.0.0.1:2237", "1.21.0", tempo_net::APP_ID).is_some());
+        assert!(matches!(
+            build_wsjtx_server(true, "127.0.0.1:2237", "1.21.0", tempo_net::APP_ID),
+            Ok(Some(_))
+        ));
+    }
+
+    /// ⭐ A WSJT-X SINK THAT CANNOT SEND SAYS SO WHERE THE OPERATOR LOOKS. Turned on with an
+    /// address it cannot send to (a host name, which it does not look up), the sink was not built
+    /// and the reason went to stderr alone: GridTracker went quiet and nothing in Nexus said why.
+    /// The Connections log now says it once, however many times the build is tried, and says when
+    /// it ends: the address fixed, or the switch turned off.
+    #[test]
+    fn a_wsjtx_sink_that_cannot_send_says_so_until_it_can() {
+        let said: Arc<Mutex<Vec<Result<String, String>>>> = Arc::default();
+        let into = said.clone();
+        let mut health = WsjtxUdpHealth::new(Some(Arc::new(move |line| {
+            into.lock().unwrap().push(line);
+        })));
+        let take = || std::mem::take(&mut *said.lock().unwrap());
+
+        assert!(health
+            .settle(build_wsjtx_server(true, "localhost:2237", "1.21.0", tempo_net::APP_ID))
+            .is_none());
+        let first = take();
+        assert_eq!(first.len(), 1, "{first:?}");
+        let why = first[0].clone().expect_err("a failure");
+        assert!(
+            why.contains("\"localhost:2237\" is not an address to send to"),
+            "{why}"
+        );
+        health.settle(build_wsjtx_server(true, "localhost:2237", "1.21.0", tempo_net::APP_ID));
+        assert!(take().is_empty(), "said once, not on every try");
+
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        assert!(health
+            .settle(build_wsjtx_server(true, &addr, "1.21.0", tempo_net::APP_ID))
+            .is_some());
+        assert_eq!(take(), vec![Ok(format!("sending to {addr} again"))]);
+        health.settle(build_wsjtx_server(true, &addr, "1.21.0", tempo_net::APP_ID));
+        assert!(take().is_empty(), "nothing to say while it works");
+
+        health.settle(build_wsjtx_server(true, "", "1.21.0", tempo_net::APP_ID));
+        assert!(take()[0].is_err());
+        health.settle(build_wsjtx_server(false, "", "1.21.0", tempo_net::APP_ID));
+        assert_eq!(
+            take(),
+            vec![Ok("turned off, so nothing is sent".to_string())],
+            "turning it off ends the failure too"
+        );
     }
 
     #[test]
