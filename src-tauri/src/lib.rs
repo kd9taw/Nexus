@@ -2989,6 +2989,23 @@ fn radio_profile_key(radio_id: u32) -> String {
     format!("r{radio_id}")
 }
 
+/// The WSJT-X sink's lines in the Connections log ([`tempo_audio::service::WsjtxUdpNote`]): why
+/// it cannot send, standing until it can, and then the line that says it has stopped failing.
+#[cfg(feature = "radio")]
+fn note_wsjtx_udp(line: Result<String, String>) {
+    match line {
+        Err(why) => conn_log_standing(WSJTX_UDP, "error", why),
+        Ok(line) => {
+            conn_log_standing_ends(WSJTX_UDP);
+            conn_log(WSJTX_UDP, "ok", line);
+        }
+    }
+}
+
+/// The WSJT-X sink's name in the Connections log: the switch's own label.
+#[cfg(feature = "radio")]
+const WSJTX_UDP: &str = "WSJT-X UDP API";
+
 /// The radio loop's startup config, from the launch settings and the three shared feeds `run`
 /// builds. A function rather than a literal inside `run` so the one field `run` cannot take from
 /// settings, the radio this process is bound to, is reachable by a test.
@@ -3073,6 +3090,7 @@ fn radio_config_for(
         mode: settings.rig_mode(), // DATA submode (PKTUSB/…) for FT8, not voice USB
         wsjtx_udp: settings.wsjtx_udp,
         wsjtx_addr: settings.wsjtx_udp_addr.clone(),
+        on_wsjtx_udp: Some(std::sync::Arc::new(note_wsjtx_udp)),
         pskreporter: settings.pskreporter,
         // The package's version, known once the app is built: `finish_launch` sets it.
         app_version: String::new(),
@@ -3852,6 +3870,41 @@ mod picker_radio_hold_tests {
         assert!(!gate.quit());
         gate.hold_or_start(|| false, 8, |i| started.lock().unwrap().push(i));
         assert_eq!(*started.lock().unwrap(), vec![8]);
+    }
+
+    /// The radio loop's WSJT-X sink reports to the Connections log: a failure stands as one line
+    /// until it ends, and the end is said.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn the_wsjtx_sink_reports_to_the_connections_log() {
+        let note = radio_config_for(
+            &tempo_app::settings::Settings::default(),
+            &tempo_app::engine::SpectrumFeed::default(),
+            &std::sync::Arc::new(tempo_audio::rxtap::RxTap::new()),
+            &tempo_app::engine::MeterFeed::default(),
+        )
+        .on_wsjtx_udp
+        .expect("the radio loop is told where to report");
+        let says = |message: &str| {
+            get_connection_log()
+                .iter()
+                .any(|e| e.connector == WSJTX_UDP && e.message == message)
+        };
+        let standing = || {
+            CONN_LOG
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|e| e.standing && e.connector == WSJTX_UDP)
+                .count()
+        };
+        note(Err("cannot send: first".into()));
+        note(Err("cannot send: second".into()));
+        assert!(says("cannot send: second"));
+        assert_eq!(standing(), 1, "one standing line, the latest");
+        note(Ok("sending to 127.0.0.1:2237 again".into()));
+        assert_eq!(standing(), 0, "the failure no longer stands");
+        assert!(says("sending to 127.0.0.1:2237 again"));
     }
 
     /// A window refused its launch radio (another window runs it) waits; switching it to a free
