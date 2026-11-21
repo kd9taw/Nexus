@@ -875,6 +875,58 @@ describe('a STRIP divider whose parent has no box, or whose DEFAULT is a share o
     expect(body.style.getPropertyValue('--h')).toBe('40%')
   })
 
+  // A re-fit skipped during a press is made up when the press ends, whether or not it commits: the header that
+  // loses a line under a held divider (16776d829's case) must still give the waterfall its room, or Stop TX
+  // stays off by the difference (FT at 1366×768: 525 → 516 px after a release without a move, measured).
+  function heldFt() {
+    localStorage.setItem('nexus.split.test.h', '40')
+    const shell = document.createElement('main')
+    const header = document.createElement('header')
+    const body = document.createElement('div')
+    body.style.display = 'contents'
+    const strip = document.createElement('section')
+    const lower = document.createElement('div')
+    body.append(strip, lower)
+    shell.append(header, body)
+    document.body.appendChild(shell)
+    const h = { head: 400 }
+    rectOf(shell, () => ({ height: 1000 }))
+    rectOf(body, () => ({ height: 0 }))
+    rectOf(header, () => ({ height: h.head }))
+    rectOf(strip, () => {
+      const v = body.style.getPropertyValue('--h')
+      const basis = v.endsWith('%') ? (parseFloat(v) / 100) * 1000 : parseFloat(v) || 0
+      return { height: Math.min(basis, 1000 - h.head - 300) }
+    })
+    const view = render(seam(strip))
+    const sep = view.getByRole('separator')
+    expect(sep.getAttribute('aria-valuenow'), 'control: the stored 400 px held to the 300 px the header leaves').toBe('300')
+    return { h, header, body, sep }
+  }
+
+  it('a header resize during a press RELEASED WITHOUT A MOVE is re-fitted when the press ends', () => {
+    const { h, header, body, sep } = heldFt()
+    fireEvent.pointerDown(sep, { clientY: 500, pointerId: 1, button: 0 })
+    h.head = 300
+    resized(header)
+    fireEvent.pointerUp(window, { clientY: 500, pointerId: 1 })
+    expect(body.style.getPropertyValue('--h')).toBe('40%')
+    expect(sep.getAttribute('aria-valuenow'), 'the skipped re-fit was lost: the strip kept its old ceiling').toBe('400')
+    expect(localStorage.getItem('nexus.split.test.h'), 'a press without a move stores nothing').toBe('40')
+  })
+
+  it('a header resize during a CANCELLED drag is re-fitted when the press ends', () => {
+    const { h, header, body, sep } = heldFt()
+    fireEvent.pointerDown(sep, { clientY: 500, pointerId: 1, button: 0 })
+    fireEvent.pointerMove(window, { clientY: 520, pointerId: 1 })
+    h.head = 300
+    resized(header)
+    fireEvent(window, new Event('pointercancel'))
+    expect(body.style.getPropertyValue('--h')).toBe('40%')
+    expect(sep.getAttribute('aria-valuenow'), 'the cancel put back the old ceiling').toBe('400')
+    expect(localStorage.getItem('nexus.split.test.h'), 'a cancel stores nothing').toBe('40')
+  })
+
   it('a NEW defaultOf function on every render does not rebuild its observer (a kept-alive cockpit re-renders all the time)', () => {
     const { shell, strip } = nest({ shell: 1000, stage: 800 })
     const view = render(seam(strip, () => shell))

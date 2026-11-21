@@ -342,8 +342,10 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
   // The % on the container now: the preference fitted into the live box, or a drag in flight;
   // null while the strip stands at the sheet's own size.
   const painted = useRef<number | null>(pref.current)
-  // A drag in flight: the box's observers do not re-fit the preference under it (below).
+  // A drag in flight: the box's observers do not re-fit the preference under it (below), and note
+  // that they skipped one, which the press's end makes up.
   const dragging = useRef(false)
+  const missed = useRef(false)
   const [view, setView] = useState<{ px: number; lo: number; hi: number } | null>(null)
   // A strip whose stock size is the sheet's own is MARKED while a size is painted: its sheet rule
   // keys the sized shape (grow 0, the variable as the basis) on `data-sized`.
@@ -452,11 +454,14 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
     const watched = new Set<Element>()
     // NOT DURING A DRAG. A neighbour that follows the strip (FT's lower region, under the waterfall) resizes on
     // every move of a drag, and its re-fit painted the stored preference back over the drag's: the divider stood
-    // still under the pointer and jumped only on release (1.24.0 to 1.25, real Chrome). The release commits
-    // through the same clamps, and the next resize re-fits as before.
+    // still under the pointer and jumped only on release (1.24.0 to 1.25, real Chrome). A re-fit skipped is
+    // MADE UP when the press ends (`end` in the drag below): a press released without a move, or cancelled,
+    // commits nothing, and a header that changed height under it left the strip at its old ceiling and Stop TX
+    // off by the difference (FT at 1366×768: 9 px, measured). A release after a move commits as well.
     const ro = new ResizeObserver(() => {
       watch(container())
-      if (!dragging.current) fitRef.current()
+      if (dragging.current) missed.current = true
+      else fitRef.current()
     })
     function watch(e: Element | null) {
       if (e && !watched.has(e)) {
@@ -525,21 +530,20 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
         // size that is its rendered size, so the first paint lands exactly where it stood.
         const start = current(b)
         const p0 = axis === 'y' ? e.clientY : e.clientX
-        const was = painted.current
         dragging.current = true
         return {
           end: () => {
             dragging.current = false
+            if (missed.current) {
+              missed.current = false
+              fitRef.current()
+            }
           },
           at: (ev) => clampIn(b, start + ((after ? -1 : 1) * ((axis === 'y' ? ev.clientY : ev.clientX) - p0)) / b.z),
           paint: (px) => write(b, px),
-          restore: () => {
-            if (was == null) {
-              b.host.style.removeProperty(varName)
-              mark(false)
-            } else b.host.style.setProperty(varName, `${was}%`)
-            painted.current = was
-          },
+          // A drag never changes the preference, so putting the strip back IS a re-fit of it, in the box as
+          // it is now (a header that changed height during the drag included).
+          restore: () => fitRef.current(),
         }
       }}
     />
