@@ -22,7 +22,8 @@ settings for each companion tool. Everything here is grounded in the shipping co
 WSJT-X broadcasts a stream of UDP datagrams that the whole ham ecosystem listens for
 — GridTracker plots them, JTAlert alerts on them, loggers file them. Nexus emits the
 **identical** datagrams (magic `0xADBCCBDA`, schema 3), announcing itself with the
-sender id **`Tempo`**.
+sender id **`Nexus`** — or **`Nexus - r1`**, **`Nexus - r2`**, … for each radio window, the way
+WSJT-X names an instance started with `--rig-name`.
 
 **Enable it:** Settings → Services ▸ Integrations & Feeds → turn on **WSJT-X UDP API** (`wsjtx_udp`, **off by default**). The target
 address defaults to **`127.0.0.1:2237`** (`wsjtx_udp_addr`) — WSJT-X's own default —
@@ -62,7 +63,7 @@ sender's address can be faked.
 1. In Nexus, enable the WSJT-X UDP output (target `127.0.0.1:2237`, or that machine's
    address if GridTracker is on another machine).
 2. In GridTracker, point its WSJT-X/UDP source at the same address/port.
-3. GridTracker will see station **`Tempo`** and plot decodes, log QSOs, and — because
+3. GridTracker will see station **`Nexus`** (each radio window as **`Nexus - r1`**, …) and plot decodes, log QSOs, and — because
    Nexus honors inbound **Reply** — you can double-click a spot in GridTracker to make
    Nexus call it. On another machine, or through a multicast target, that double-click
    is ignored until you turn on **Accept requests from other computers**.

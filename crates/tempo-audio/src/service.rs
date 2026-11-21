@@ -2264,6 +2264,9 @@ pub struct RadioConfig {
     pub wsjtx_udp: bool,
     /// UDP target for WSJT-X messages (WSJT-X default 127.0.0.1:2237).
     pub wsjtx_addr: String,
+    /// The sender id this window's WSJT-X messages carry (`tempo_net::sender_id` of its
+    /// profile), so each window of a station is its own client to GridTracker and JTAlert.
+    pub wsjtx_id: String,
     /// Upload heard stations to PSK Reporter.
     pub pskreporter: bool,
     /// The app's version (tauri.conf.json's, as the app reports it), which PSK Reporter shows
@@ -2320,6 +2323,7 @@ impl Default for RadioConfig {
             mode: "USB".to_string(),
             wsjtx_udp: false,
             wsjtx_addr: "127.0.0.1:2237".to_string(),
+            wsjtx_id: tempo_net::APP_ID.to_string(),
             pskreporter: false,
             app_version: String::new(),
             audio_in: String::new(),
@@ -2595,7 +2599,12 @@ fn note_udp_request_refused(request: &WsjtxInbound, from: std::net::IpAddr) {
     );
 }
 
-fn build_wsjtx_server(enabled: bool, addr: &str, app_version: &str) -> Option<WsjtxServer> {
+fn build_wsjtx_server(
+    enabled: bool,
+    addr: &str,
+    app_version: &str,
+    id: &str,
+) -> Option<WsjtxServer> {
     if !enabled {
         return None;
     }
@@ -2612,6 +2621,7 @@ fn build_wsjtx_server(enabled: bool, addr: &str, app_version: &str) -> Option<Ws
     };
     match WsjtxServer::new_multi(bind.parse().unwrap(), targets) {
         Ok(s) => {
+            let s = s.with_id(id.to_string());
             send_wsjtx_heartbeat(&s, app_version);
             Some(s)
         }
@@ -2666,13 +2676,14 @@ impl WsjtxPulse {
 fn hot_apply_wsjtx(
     s: &tempo_app::settings::Settings,
     app_version: &str,
+    id: &str,
     now: Instant,
     wsjtx: &mut Option<WsjtxServer>,
     applied: &mut (bool, String),
     pulse: &mut WsjtxPulse,
 ) {
     if (s.wsjtx_udp, s.wsjtx_udp_addr.as_str()) != (applied.0, applied.1.as_str()) {
-        *wsjtx = build_wsjtx_server(s.wsjtx_udp, &s.wsjtx_udp_addr, app_version);
+        *wsjtx = build_wsjtx_server(s.wsjtx_udp, &s.wsjtx_udp_addr, app_version, id);
         *pulse = WsjtxPulse::sent_at(now);
         *applied = (s.wsjtx_udp, s.wsjtx_udp_addr.clone());
     } else if let Some(server) = wsjtx.as_ref() {
@@ -2886,7 +2897,12 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     // retargets the WSJT-X address — otherwise a GridTracker/PSK setup done AFTER launch
     // never connects (the reported "needs a Nexus restart" bug). `*_applied` tracks what
     // the current emitters were built for so the loop rebuilds only on a real change.
-    let mut wsjtx = build_wsjtx_server(cfg.wsjtx_udp, &cfg.wsjtx_addr, &cfg.app_version);
+    let mut wsjtx = build_wsjtx_server(
+        cfg.wsjtx_udp,
+        &cfg.wsjtx_addr,
+        &cfg.app_version,
+        &cfg.wsjtx_id,
+    );
     let mut wsjtx_pulse = WsjtxPulse::sent_at(Instant::now());
     let mut wsjtx_applied = (cfg.wsjtx_udp, cfg.wsjtx_addr.clone());
     let mut psk = cfg.pskreporter.then(PskReporter::new);
@@ -3021,6 +3037,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
             hot_apply_wsjtx(
                 e.settings(),
                 &cfg.app_version,
+                &cfg.wsjtx_id,
                 Instant::now(),
                 &mut wsjtx,
                 &mut wsjtx_applied,
@@ -24120,7 +24137,8 @@ mod tests {
             .set_read_timeout(Some(std::time::Duration::from_secs(2)))
             .unwrap();
         let addr = listener.local_addr().unwrap().to_string();
-        let _server = build_wsjtx_server(true, &addr, "1.21.0").expect("a bound emitter");
+        let _server =
+            build_wsjtx_server(true, &addr, "1.21.0", tempo_net::APP_ID).expect("a bound emitter");
         let mut buf = [0u8; 512];
         let (n, _) = listener.recv_from(&mut buf).unwrap();
         let mut r = tempo_net::qds::QdsReader::new(&buf[..n]);
@@ -24145,7 +24163,7 @@ mod tests {
             .set_read_timeout(Some(std::time::Duration::from_millis(300)))
             .unwrap();
         let addr = listener.local_addr().unwrap().to_string();
-        let server = build_wsjtx_server(true, &addr, "1.21.0").expect("a bound emitter");
+        let server = build_wsjtx_server(true, &addr, "1.21.0", tempo_net::APP_ID).expect("a bound emitter");
         let built = Instant::now();
         let mut pulse = WsjtxPulse::sent_at(built);
         let mut buf = [0u8; 512];
@@ -24214,6 +24232,7 @@ mod tests {
             hot_apply_wsjtx(
                 s,
                 "1.21.0",
+                tempo_net::APP_ID,
                 t0 + Duration::from_millis(ms),
                 &mut wsjtx,
                 &mut applied,
@@ -24253,13 +24272,13 @@ mod tests {
     #[test]
     fn build_wsjtx_server_gates_on_enable_and_valid_addr() {
         // Disabled → no socket regardless of address (the state before a toggle-on).
-        assert!(build_wsjtx_server(false, "127.0.0.1:2237", "1.21.0").is_none());
+        assert!(build_wsjtx_server(false, "127.0.0.1:2237", "1.21.0", tempo_net::APP_ID).is_none());
         // Enabled but unparseable target → None, not a panic.
-        assert!(build_wsjtx_server(true, "not-an-address", "1.21.0").is_none());
-        assert!(build_wsjtx_server(true, "", "1.21.0").is_none());
+        assert!(build_wsjtx_server(true, "not-an-address", "1.21.0", tempo_net::APP_ID).is_none());
+        assert!(build_wsjtx_server(true, "", "1.21.0", tempo_net::APP_ID).is_none());
         // Enabled + valid loopback target → a bound emitter (this is what a live
         // toggle-on rebuilds; the opening Heartbeat to :2237 is harmless if unheard).
-        assert!(build_wsjtx_server(true, "127.0.0.1:2237", "1.21.0").is_some());
+        assert!(build_wsjtx_server(true, "127.0.0.1:2237", "1.21.0", tempo_net::APP_ID).is_some());
     }
 
     #[test]

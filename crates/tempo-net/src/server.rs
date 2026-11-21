@@ -5,7 +5,8 @@
 //! group also works for several consumers at once). It also polls the socket
 //! non-blocking for inbound control datagrams (Reply / HaltTx / FreeText).
 //!
-//! All datagrams carry the sender id `"Tempo"`.
+//! Every datagram carries the window's sender id ([`sender_id`]): `"Nexus"` for the station's
+//! one window, `"Nexus - <profile>"` for each radio window.
 
 use crate::wsjtx::{self, Decode, Inbound, QsoLogged, Status};
 use std::io;
@@ -15,8 +16,37 @@ use std::net::{IpAddr, SocketAddr, UdpSocket};
 #[cfg(all(feature = "udp-source-sim", not(debug_assertions)))]
 compile_error!("`udp-source-sim` is test support: a release build must not turn it on");
 
-/// The sender id ("key") Tempo announces itself with.
-pub const APP_ID: &str = "Tempo";
+/// The sender id ("key") Nexus announces itself with: the whole id of the station's one window,
+/// and the start of every radio window's ([`sender_id`]).
+pub const APP_ID: &str = "Nexus";
+
+/// What separates [`APP_ID`] from a radio window's profile, as WSJT-X separates its name from its
+/// `--rig-name` (`main.cpp`: `applicationName () + " - " + rig_name`, the id its MessageClient
+/// sends). GridTracker splits an id on it and shows the part after it as the rig's name.
+const PROFILE_SEPARATOR: &str = " - ";
+
+/// The sender id of the window running `profile` (`None`: the default profile, the station's one
+/// window). Each window of a station is its own WSJT-X client, as each `wsjtx --rig-name` instance
+/// is: under one id GridTracker and JTAlert took two windows' Status for one station flipping
+/// between two bands. Stable for a profile, so a listener keeps one entry per window across
+/// launches. `profile` is the sanitized profile name (`[A-Za-z0-9_-]`, at most 32 characters),
+/// which holds none of the characters WSJT-X refuses in a rig name (`\`, `/`, `,`).
+pub fn sender_id(profile: Option<&str>) -> String {
+    match profile {
+        Some(p) => format!("{APP_ID}{PROFILE_SEPARATOR}{p}"),
+        None => APP_ID.to_string(),
+    }
+}
+
+/// Whether `id` is one of this station's own windows ([`sender_id`] of any profile): a datagram
+/// under it is Nexus heard back, from this window or another, never another program.
+pub fn is_nexus_id(id: &str) -> bool {
+    id == APP_ID
+        || id
+            .strip_prefix(APP_ID)
+            .and_then(|rest| rest.strip_prefix(PROFILE_SEPARATOR))
+            .is_some_and(|p| !p.is_empty())
+}
 
 /// A bound UDP socket that speaks the WSJT-X protocol to a target address.
 pub struct WsjtxServer {
@@ -120,6 +150,12 @@ impl WsjtxServer {
     #[cfg(any(test, feature = "udp-source-sim"))]
     pub fn read_sources_as(&mut self, source: IpAddr) {
         self.sim_source = Some(source);
+    }
+
+    /// Send under `id` ([`sender_id`]) instead of [`APP_ID`].
+    pub fn with_id(mut self, id: String) -> Self {
+        self.id = id;
+        self
     }
 
     /// The local address the socket is bound to (useful in tests to learn the
@@ -452,6 +488,54 @@ mod tests {
             }
             other => panic!("expected a LoggedAdif datagram, got: {other:?}"),
         }
+    }
+
+    /// Each window of a station is its own WSJT-X client: the station's one window is "Nexus",
+    /// a radio window "Nexus - <profile>", the shape WSJT-X gives `--rig-name` instances. Every
+    /// one of them reads as Nexus's own, and nothing else does.
+    #[test]
+    fn each_window_has_its_own_sender_id_and_all_are_nexus() {
+        assert_eq!(sender_id(None), "Nexus");
+        assert_eq!(sender_id(Some("r1")), "Nexus - r1");
+        assert_ne!(sender_id(Some("r1")), sender_id(Some("r2")));
+        for id in [
+            sender_id(None),
+            sender_id(Some("r1")),
+            sender_id(Some("hf_2")),
+        ] {
+            assert!(is_nexus_id(&id), "{id}");
+        }
+        for id in [
+            "WSJT-X",
+            "WSJT-X - r1",
+            "JTDX",
+            "Nexus - ",
+            "Nexus-r1",
+            "NexusX",
+            "",
+        ] {
+            assert!(!is_nexus_id(id), "{id:?}");
+        }
+    }
+
+    /// A server built with a window's id sends under it.
+    #[test]
+    fn a_server_sends_under_its_windows_id() {
+        let listener = UdpSocket::bind(loopback(0)).unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .unwrap();
+        let server = WsjtxServer::new(loopback(0), listener.local_addr().unwrap())
+            .unwrap()
+            .with_id(sender_id(Some("r1")));
+        server.send_heartbeat(3, "1.0", "Nexus").unwrap();
+        let mut buf = [0u8; 512];
+        let (n, _) = listener.recv_from(&mut buf).unwrap();
+        let mut r = crate::qds::QdsReader::new(&buf[..n]);
+        r.read_u32().expect("magic");
+        r.read_u32().expect("schema");
+        assert_eq!(r.read_u32(), Some(0), "a Heartbeat");
+        assert_eq!(r.read_utf8(), Some(Some("Nexus - r1".to_string())));
     }
 
     #[test]
