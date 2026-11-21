@@ -10652,6 +10652,19 @@ impl Engine {
     /// mirrors the knob. Updates the band from the frequency; leaves the operating mode +
     /// sideband to the rig-mode policy (the radio loop still owns what it commands).
     pub fn observe_rig_freq(&mut self, hz: u64) {
+        self.observe_rig_freq_as(hz, false);
+    }
+
+    /// [`Self::observe_rig_freq`] for the first dial read after the radio loop selected VFO A or
+    /// B: the radio now receives on the other VFO, whose frequency this is. The dial follows it,
+    /// but it is no knob QSY, so the split stands. Treated as one, it turned split off (`S 0 VFOA`),
+    /// which on an Icom behind Hamlib also selects VFO A: pressing B with split on snapped the
+    /// radio back to A.
+    pub fn observe_rig_freq_after_vfo_select(&mut self, hz: u64) {
+        self.observe_rig_freq_as(hz, true);
+    }
+
+    fn observe_rig_freq_as(&mut self, hz: u64, vfo_select: bool) {
         let mhz = hz as f64 / 1_000_000.0;
         // Is this the first thing the CAT link has ever said? Then it is not a knob move at
         // all: it is the link reporting where the rig ALREADY was, which is the boot seed's
@@ -10699,11 +10712,14 @@ impl Engine {
         // A knob QSY returns the rig to simplex, exactly like an app-commanded retune
         // (set_frequency): otherwise a manual split's TX VFO would be left on the OLD dial —
         // transmitting off-frequency — and the SPLIT badge would lie about the offset.
-        self.tx_split_confirmed_hz = None; // the radio moved — the confirmation is void
-        self.split_qsy_gen = self.split_qsy_gen.wrapping_add(1);
-        self.observed_split = None; // …and what the rig said about the OLD dial says nothing here
-        if self.split_tx_mhz.take().is_some() || self.split_unknown {
-            self.split_dirty = true;
+        // A VFO select is not one: the radio's split is as it was.
+        if !vfo_select {
+            self.tx_split_confirmed_hz = None; // the radio moved — the confirmation is void
+            self.split_qsy_gen = self.split_qsy_gen.wrapping_add(1);
+            self.observed_split = None; // …and what the rig said about the OLD dial says nothing here
+            if self.split_tx_mhz.take().is_some() || self.split_unknown {
+                self.split_dirty = true;
+            }
         }
         // A cross-band knob QSY is a leave-event for the per-(band, mode) dial memory
         // too — bank the residency being left before adopting the knob's dial. An
@@ -12452,6 +12468,18 @@ impl Engine {
     /// later.
     pub fn observe_rig_vfo(&mut self, vfo_b: bool) {
         self.observed_vfo = Some((vfo_b, now_unix_secs()));
+    }
+
+    /// The radio loop's report that a split command put the radio back on VFO A by itself: on an
+    /// Icom behind Hamlib every `S` selects the receive VFO first (`07 00`). The belief and the
+    /// reading both become A, as the radio now is: an IC-7300, IC-705 or IC-905 cannot be asked
+    /// which VFO it is on, so nothing else would correct the indicator. An A/B press not yet
+    /// written is newer than the split and keeps its own answer ([`Self::active_vfo_b_effective`]).
+    pub fn rig_reselected_vfo_a(&mut self) {
+        if !self.vfo_dirty {
+            self.active_vfo_b = false;
+        }
+        self.observe_rig_vfo(false);
     }
 
     /// WHICH VFO TO REPORT — the rig's answer when we have a fresh one, the commanded value

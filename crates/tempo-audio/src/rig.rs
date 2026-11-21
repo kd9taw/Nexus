@@ -760,6 +760,10 @@ pub struct Rig {
     /// How many times the connection has been dropped ([`Self::drop_connection`]), so an over can
     /// tell its split writes went out on the connection it took [`Self::split_confirmed`] from.
     connection_drops: u64,
+    /// How many `S` (split) lines this rig has been sent. On an Icom behind Hamlib each one also
+    /// selects VFO A (`icom_set_split_vfo` switches to the receive VFO first, `07 00`), which the
+    /// radio loop has to know to keep its A/B indicator true ([`Self::split_writes`]).
+    split_writes: u64,
     /// The (verb, token) pairs never sent on this link, because the radio's Hamlib driver turns
     /// them into a different command than the radio's own manual defines — see
     /// [`crate::rigmodels::hamlib_never_send`]. Empty by default.
@@ -1040,6 +1044,7 @@ impl Rig {
             key_watch: false,
             owed_bound: OWED_ANSWER_BOUND,
             connection_drops: 0,
+            split_writes: 0,
             never_send: &[],
             hamlib_model: 0,
             #[cfg(test)]
@@ -2533,7 +2538,17 @@ impl Rig {
 
     /// Set split on/off and which VFO transmits (DX pileups). `tx_vfo` e.g. "VFOB".
     pub fn set_split(&mut self, on: bool, tx_vfo: &str) -> std::io::Result<()> {
+        if self.control.is_some() {
+            self.split_writes += 1;
+        }
         self.cat(&split_line(on, tx_vfo))
+    }
+    /// How many `S` lines have been sent on this rig, answered or not: Hamlib's Icom backend
+    /// selects the receive VFO before it sends the split command, so even a refused `S` may
+    /// have moved the radio to VFO A.
+    #[cfg_attr(not(feature = "device"), allow(dead_code))] // the radio loop (service.rs, device)
+    pub(crate) fn split_writes(&self) -> u64 {
+        self.split_writes
     }
     /// Split on for Split Operation's over, through [`Self::set_split`], noting in
     /// [`Self::tx_split_held`] that the radio has Nexus's split. An answer that is not `RPRT 0` is an
@@ -2548,6 +2563,7 @@ impl Rig {
         }
         let line = split_line(true, tx_vfo);
         self.split_confirmed = None;
+        self.split_writes += 1;
         let (sent, refused) = match self.command(&line) {
             Ok(reply) => (
                 Self::cat_reply(&line, &reply),
@@ -2574,6 +2590,7 @@ impl Rig {
         }
         let line = split_line(on, tx_vfo);
         self.split_confirmed = None;
+        self.split_writes += 1;
         let reply = self.command(&line)?;
         if matches!(rprt_code(&reply), Some(-11 | -4)) {
             return Ok(false);
