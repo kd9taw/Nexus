@@ -12790,7 +12790,10 @@ impl Engine {
         // this one yet, so between here and the ack there is nothing confirmed to judge. TX
         // locks for that gap, which is the correct direction.
         self.tx_split_confirmed_hz = None;
-        self.split_tx_on_vfo_a_hz = None; // …and a reversed split with it
+        // ⛔ NOT the reversed split's VFO A: a request is not a write, and a request refused
+        // under a held PTT puts the standing split back (`split_refused_while_keyed`), still
+        // reversed on the radio. Inert while nothing is acknowledged; an acknowledged write
+        // clears it (`rig_split_applied_on`).
     }
 
     /// Set (`Some("USB"|"LSB"|"FM")`) or clear (`None` = AUTO) the transient Phone mode override

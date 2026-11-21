@@ -309,3 +309,55 @@ fn a_split_request_under_ptt_while_reversed_is_judged_at_the_request() {
         "an Extra-only split never reaches the keyed radio: {lines:?}"
     );
 }
+
+/// ⛔ A REFUSED SPLIT REQUEST UNDER A HELD PTT LEAVES THE REVERSED SPLIT AS IT IS. A General at
+/// 14.250 USB, split 14.300, VFO B selected (the radio keys VFO A), PTT held, then a request for
+/// 14.200 (Extra-only phone) that nothing checked at the press (a spot's "UP n"). The loop refuses
+/// it and nothing is sent; the radio is still on B, keyed, transmitting on VFO A, and the gate and
+/// the TX readout must still say 14.250. The request used to drop VFO A, so after the refusal they
+/// said 14.300.
+#[test]
+fn a_refused_split_request_under_ptt_keeps_the_reversed_split() {
+    let (addr, log, vfos) = icom_rigctld();
+    let engine = station(3073);
+    {
+        let mut e = engine.lock().unwrap();
+        e.set_license_class("general");
+        e.set_frequency(14.250, "20m", "USB");
+    }
+    let mut rig = Rig::rigctld(&addr);
+    run(
+        &engine,
+        &mut rig,
+        vec![
+            idle,
+            |e| e.request_split(Some(14.300)),
+            idle,
+            |e| e.request_vfo(true),
+            idle,
+            idle,
+            |e| {
+                e.set_tx_enabled(true);
+                e.set_ptt(true);
+                assert!(e.manual_ptt(), "precondition: PTT held in privileges");
+            },
+            |e| e.request_split(Some(14.200)),
+            idle,
+            idle,
+        ],
+    );
+    let lines = log.lock().unwrap().clone();
+    assert!(
+        lines.iter().any(|l| l == "T 1"),
+        "precondition: keyed: {lines:?}"
+    );
+    assert!(!lines.iter().any(|l| l == "T 0"), "still keyed: {lines:?}");
+    assert!(!lines.iter().any(|l| l == "I 14200000"), "{lines:?}");
+    assert!(
+        vfos.lock().unwrap().on_b,
+        "the radio is still on B: {lines:?}"
+    );
+    let e = engine.lock().unwrap();
+    let tx = e.snapshot().radio.tx_emission_mhz.unwrap();
+    assert!((tx - 14.250).abs() < 1e-9, "judged at {tx}, not VFO A");
+}
