@@ -2743,6 +2743,7 @@ impl WsjtxPulse {
 /// when the switch or the address changed (the build sends the opening Heartbeat and restarts the
 /// pulse), and otherwise sent its Heartbeat when one is due at `now`, every [`WSJTX_PULSE`] as
 /// WSJT-X's MessageClient does.
+#[allow(clippy::too_many_arguments)]
 fn hot_apply_wsjtx(
     s: &tempo_app::settings::Settings,
     app_version: &str,
