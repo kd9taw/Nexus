@@ -11,7 +11,7 @@
 //! quint32 magic   = 0xADBCCBDA
 //! quint32 schema  = 3            (WSJT-X negotiable schema; 3 is widely used)
 //! quint32 type    (message id)
-//! QString id      (the sender's "key" — Tempo uses "Tempo")
+//! QString id      (the sender's "key" — Nexus uses "Nexus" / "Nexus - <profile>")
 //! ... per-message payload ...
 //! ```
 //!
