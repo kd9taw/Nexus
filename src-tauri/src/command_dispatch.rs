@@ -271,7 +271,12 @@ pub(crate) fn keep_the_shacks_transmit_settings(
     save.swr_stop_enabled = shack.swr_stop_enabled;
     save.swr_stop_threshold = shack.swr_stop_threshold;
     // The power ceilings.
-    keep_the_radios!(max_power_phone, max_power_cw, max_power_digital, max_power_am);
+    keep_the_radios!(
+        max_power_phone,
+        max_power_cw,
+        max_power_digital,
+        max_power_am
+    );
     // The licence privileges.
     save.license_class = shack.license_class;
     // The line that keys the transmitter: the serial lines' states, held for the whole session.

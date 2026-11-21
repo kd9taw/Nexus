@@ -19589,7 +19589,10 @@ mod contest_session_tests {
         let e = engine_lock(engine);
         let s = e.settings();
         (
-            s.radios.iter().map(|r| (r.id, r.max_power_digital)).collect(),
+            s.radios
+                .iter()
+                .map(|r| (r.id, r.max_power_digital))
+                .collect(),
             s.max_power_digital,
         )
     }
@@ -19609,9 +19612,19 @@ mod contest_session_tests {
             r["maxPowerDigital"] = serde_json::json!(1.0);
             r["maxPowerPhone"] = serde_json::json!(1.0);
         }
-        restore_settings_bundle(&engine, v.to_string(), || station_ui.clone(), |_| true, no_key_change)
-            .unwrap();
-        assert_eq!(engine_lock(&engine).settings().mycall, "W9NEW", "the rest lands");
+        restore_settings_bundle(
+            &engine,
+            v.to_string(),
+            || station_ui.clone(),
+            |_| true,
+            no_key_change,
+        )
+        .unwrap();
+        assert_eq!(
+            engine_lock(&engine).settings().mycall,
+            "W9NEW",
+            "the rest lands"
+        );
         assert_eq!(
             digital_caps(&engine),
             (vec![(0, Some(0.3)), (1, Some(0.2))], Some(0.3)),
@@ -19630,7 +19643,8 @@ mod contest_session_tests {
     /// lands at 10 % where 20 % is in force, and one at 50 % at the 20 % in force.
     #[test]
     fn a_restored_radio_the_station_lacks_takes_the_stricter_cap() {
-        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-new-radio-caps", 0);
+        let (dir, engine) =
+            super::durable_command_tests::engine_on_store("restore-new-radio-caps", 0);
         let station_ui = with_station_paths_set(&engine, "C:\\Shack");
         two_capped_radios(&engine, Some(0.2));
         engine_lock(&engine).set_active_radio(1);
@@ -19646,11 +19660,20 @@ mod contest_session_tests {
             r["maxPowerDigital"] = serde_json::json!(cap);
             v["settings"]["radios"].as_array_mut().unwrap().push(r);
         }
-        restore_settings_bundle(&engine, v.to_string(), || station_ui.clone(), |_| true, no_key_change)
-            .unwrap();
+        restore_settings_bundle(
+            &engine,
+            v.to_string(),
+            || station_ui.clone(),
+            |_| true,
+            no_key_change,
+        )
+        .unwrap();
         let caps = digital_caps(&engine).0;
         assert_eq!(
-            caps.iter().filter(|(id, _)| *id >= 7).copied().collect::<Vec<_>>(),
+            caps.iter()
+                .filter(|(id, _)| *id >= 7)
+                .copied()
+                .collect::<Vec<_>>(),
             vec![(7, Some(0.1)), (8, Some(0.2))],
             "the stricter of the file's cap and the one in force"
         );
@@ -19662,14 +19685,21 @@ mod contest_session_tests {
     /// restore lands on the backup's radio, A: A keeps 30 %, never B's "no cap", and B keeps none.
     #[test]
     fn a_restore_while_another_radio_is_in_use_keeps_each_radios_cap() {
-        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-switched-caps", 0);
+        let (dir, engine) =
+            super::durable_command_tests::engine_on_store("restore-switched-caps", 0);
         let station_ui = with_station_paths_set(&engine, "C:\\Shack");
         two_capped_radios(&engine, None);
         let text = settings_bundle(&engine, station_ui.clone(), None).unwrap();
         engine_lock(&engine).set_active_radio(1);
         assert_eq!(digital_caps(&engine).1, None, "premise: on B, uncapped");
-        restore_settings_bundle(&engine, text, || station_ui.clone(), |_| true, no_key_change)
-            .unwrap();
+        restore_settings_bundle(
+            &engine,
+            text,
+            || station_ui.clone(),
+            |_| true,
+            no_key_change,
+        )
+        .unwrap();
         assert_eq!(
             digital_caps(&engine),
             (vec![(0, Some(0.3)), (1, None)], Some(0.3)),
@@ -23416,7 +23446,11 @@ fn keep_the_stations_power_caps(
             r.max_power_am,
         ) = caps;
     }
-    if let Some(r) = settings.radios.iter().find(|r| r.id == settings.active_radio) {
+    if let Some(r) = settings
+        .radios
+        .iter()
+        .find(|r| r.id == settings.active_radio)
+    {
         (
             settings.max_power_phone,
             settings.max_power_cw,

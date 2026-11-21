@@ -1145,7 +1145,10 @@ fn radio_keying(p: &tempo_app::settings::RadioProfile) -> serde_json::Value {
         "maxPowerDigital",
         "maxPowerAm",
     ];
-    keys.iter().map(|k| (k.to_string(), all[*k].clone())).collect::<serde_json::Map<_, _>>().into()
+    keys.iter()
+        .map(|k| (k.to_string(), all[*k].clone()))
+        .collect::<serde_json::Map<_, _>>()
+        .into()
 }
 
 /// ⛔ The per-radio edit from afar (`update_radio_profile`) keeps that radio's PTT method and port;
