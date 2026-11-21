@@ -1,7 +1,16 @@
 // The pure half of the ONE divider (features/paneSeam.ts): what a key does, and the strip clamps
 // that moved here from Splitter.tsx unchanged.
 import { describe, expect, it } from 'vitest'
-import { clampSplitPct, parseSplitPct, seamKey, type SeamKeys } from './paneSeam'
+import {
+  clampSplitPct,
+  parseSplitPct,
+  resolveClamp,
+  seamKey,
+  TEMPO_PANES_SPLIT_MIN,
+  TEMPO_WATERFALL_SPLIT_MAX,
+  WATERFALL_SPLIT_MAX,
+  type SeamKeys,
+} from './paneSeam'
 
 const plain = { shiftKey: false, altKey: false, ctrlKey: false, metaKey: false }
 const press = (key: string, mods: Partial<typeof plain> = {}) => ({ key, ...plain, ...mods })
@@ -96,6 +105,32 @@ describe('parseSplitPct — a split stored by any earlier build', () => {
   it('reads junk, nothing, and the impossible ends as "never set"', () => {
     for (const raw of [null, '', 'abc', 'NaN', '0', '100', '-4', '140', 'Infinity']) {
       expect(parseSplitPct(raw), String(raw)).toBeNull()
+    }
+  })
+})
+
+// Tempo's waterfall strip (#549): an operator could not drag it past 45 % of the window. Its ceiling is 65 %, and the
+// panes under it keep a floor of their own, which is what stops the strip on a window too short for both (the grid
+// honours the floor; cockpit-shells.test.ts holds the sheet to these clamps, the desktop probes the result).
+describe("Tempo's waterfall ceiling and the panes' floor under it", () => {
+  const SCREENS = [438, 674, 768, 900, 1080, 1440, 2160]
+  it('reaches 65 % of the effective window, past the 45 % the other waterfall strips stop at', () => {
+    for (const vhEff of SCREENS) {
+      const g = { fontPx: 14, vhEff }
+      expect(resolveClamp(TEMPO_WATERFALL_SPLIT_MAX, g)).toBeCloseTo(0.65 * vhEff, 6)
+      expect(resolveClamp(TEMPO_WATERFALL_SPLIT_MAX, g)).toBeGreaterThan(resolveClamp(WATERFALL_SPLIT_MAX, g))
+    }
+  })
+  it('keeps 21em under the strip, yielding to 35 % of a short window', () => {
+    expect(resolveClamp(TEMPO_PANES_SPLIT_MIN, { fontPx: 14, vhEff: 1080 })).toBe(294)
+    expect(resolveClamp(TEMPO_PANES_SPLIT_MIN, { fontPx: 16, vhEff: 1080 })).toBe(336)
+    // The floor screen, 1366×768 at 175 % fitted to 65 %: 35 % of its 674 px, so its 25 % default strip still fits.
+    expect(resolveClamp(TEMPO_PANES_SPLIT_MIN, { fontPx: 14, vhEff: 674 })).toBeCloseTo(0.35 * 674, 6)
+  })
+  it('never asks for more of the window than the strip leaves it at its ceiling', () => {
+    for (const vhEff of SCREENS) {
+      const g = { fontPx: 14, vhEff }
+      expect(resolveClamp(TEMPO_WATERFALL_SPLIT_MAX, g) + resolveClamp(TEMPO_PANES_SPLIT_MIN, g)).toBeLessThanOrEqual(vhEff + 1e-9)
     }
   })
 })

@@ -6966,11 +6966,23 @@ h2 {
    THE WATERFALL STRIP (2026-10-26, "width and height to be consistent"): every mode's waterfall
    starts at the same full width and 25 % of its shell, so Tempo's is a row of this grid (`wf`)
    across all five tracks, sized by its divider (App `--tempo-wf-h`, written on this element,
-   stored per surface as `nexus.split.tempo.waterfall`) between the yielding floor and the
-   ceiling every waterfall strip has (features/paneSeam WATERFALL_SPLIT_MIN/MAX, the JS8/RTTY
-   rule's own numbers). A track, not the item's height: a percentage resolves against this grid's
-   content height, as a shell child's basis does against its shell. The right rail (`waterfall`,
-   the area's old name) now holds Band Activity and the link pill. */
+   stored per surface as `nexus.split.tempo.waterfall`) between the yielding floor every waterfall
+   strip has (features/paneSeam WATERFALL_SPLIT_MIN) and Tempo's own ceiling of 65 % of the window
+   (TEMPO_WATERFALL_SPLIT_MAX; #549: the 45 % every other strip stops at left the strip blocked
+   half-way down a tall window). A track, not the item's height: a percentage resolves against
+   this grid's content height, as a shell child's basis does against its shell. The right rail
+   (`waterfall`, the area's old name) now holds Band Activity and the link pill.
+   THE PANES UNDER THE STRIP KEEP THEIR FLOOR (TEMPO_PANES_SPLIT_MIN): the row under it is
+   minmax(floor, 1fr), and the strip's row is minmax(its floor, the divider's size), so the strip
+   grows only into room the panes do not need (grid sizing: the strip's row takes free space up to
+   the divider's size, then the 1fr row takes what is left). 21em shows the conversation's whole
+   Call CQ launchpad, or its message box under a line or two, and Band Activity's link pill under
+   a few decode rows. It yields to 35 % of a short window, so the floor screen (1366×768 at 175 %)
+   keeps its 25 % default strip and a short wide window does not overflow.
+   So the ceiling is size-dependent: about 65 % on a tall window, less on a short one (on the
+   smallest screens the strip cannot grow past its default at all), and the divider stops where
+   the panes' floor does (PaneSeam measures that range). The TX controls are in the header row,
+   which sizes first and is not touched. */
 .layout[data-three-pane] {
   grid-template-columns:
     minmax(var(--rail-min, 200px), var(--left-rail-w))
@@ -6979,8 +6991,11 @@ h2 {
     auto
     var(--right-rail-w);
   grid-template-rows:
-    clamp(min(8em, calc(0.28 * var(--vh-eff, 100vh))), var(--tempo-wf-h, 25%), calc(0.45 * var(--vh-eff, 100vh)))
-    minmax(0, 1fr);
+    minmax(
+      min(8em, calc(0.28 * var(--vh-eff, 100vh))),
+      clamp(min(8em, calc(0.28 * var(--vh-eff, 100vh))), var(--tempo-wf-h, 25%), calc(0.65 * var(--vh-eff, 100vh)))
+    )
+    minmax(min(21em, calc(0.35 * var(--vh-eff, 100vh))), 1fr);
   grid-template-areas:
     'wf wf wf wf wf'
     'stations split-left center split waterfall';
@@ -6991,8 +7006,11 @@ h2 {
 .layout[data-three-pane].has-tempo-header {
   grid-template-rows:
     auto
-    clamp(min(8em, calc(0.28 * var(--vh-eff, 100vh))), var(--tempo-wf-h, 25%), calc(0.45 * var(--vh-eff, 100vh)))
-    minmax(0, 1fr);
+    minmax(
+      min(8em, calc(0.28 * var(--vh-eff, 100vh))),
+      clamp(min(8em, calc(0.28 * var(--vh-eff, 100vh))), var(--tempo-wf-h, 25%), calc(0.65 * var(--vh-eff, 100vh)))
+    )
+    minmax(min(21em, calc(0.35 * var(--vh-eff, 100vh))), 1fr);
   grid-template-areas:
     'header header header header header'
     'wf wf wf wf wf'
