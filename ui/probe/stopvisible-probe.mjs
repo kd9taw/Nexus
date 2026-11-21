@@ -29,7 +29,8 @@
 //
 // AND THE TAB WALK (FT, plain, 150/175 % up to 1366×768): real Tab through the shell; no focused control may have its
 // centre behind the QSO strip's parked line (it covered 36 Tab stops at 900×600 / 175 % before the shell's scroll
-// padding read the parked line's height).
+// padding read the parked line's height), and on the supported screens (probe/sizes.mjs, not the off-matrix windows)
+// none may have it outside the window: a control Tab focuses is one the operator cannot see.
 //
 // AND THE HEADER-CHANGE GUARD (FT at 100 % and fit, the floor (1366×768 at 175 %) and 1366×768, en/ru, CAT lost and the alarms): Stop TX stands
 // where a fresh layout (the window resized away and back) puts it, so the waterfall's divider re-fit to the header.
@@ -263,11 +264,13 @@ async function apply(p, st, route) {
 }
 
 /** THE TAB WALK (FT, plain state, sizes where its strip parks): real Tab from the start of the shell, and every control it
- *  focuses in the shell must not have its centre behind the parked QSO-strip line. Parked at the foot, the line covered
- *  36 Tab stops at 900×600 / 175 % (measured) until the shell's scroll padding read its height. Returns the names hidden. */
+ *  focuses in the shell must not have its centre behind the parked QSO-strip line, nor outside the window. Parked at the
+ *  foot, the line covered 36 Tab stops at 900×600 / 175 % (measured) until the shell's scroll padding read its height.
+ *  Returns the names hidden behind the line and the names focused outside the window. */
 async function tabWalk(p) {
   await p.evaluate(`(() => { document.activeElement?.blur?.(); const m = document.querySelector('main.operate-cockpit'); m.scrollTop = 0; m.querySelector('button, input, select')?.focus({ preventScroll: true }); m.scrollTop = 0; return 1 })()`)
   const hidden = []
+  const off = []
   let first = null
   for (let i = 0; i < 160; i++) {
     await p.call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 })
@@ -276,7 +279,8 @@ async function tabWalk(p) {
     const f = await p.evaluate(`(() => { const e = document.activeElement; if (!e || !e.closest('main.operate-cockpit')) return { out: true }
       const r = e.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2
       const name = ((e.getAttribute('aria-label') || e.textContent || e.tagName) + '').replace(/\\s+/g, ' ').trim().slice(0, 20) + '@' + Math.round(y)
-      if (!r.width || !r.height || x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return { name }
+      if (!r.width || !r.height) return { name }
+      if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return { name, off: true }
       const lift = document.createElement('style'); lift.textContent = ${JSON.stringify(LIFT_CSS)}; document.head.appendChild(lift)
       const t = document.elementFromPoint(x, y); lift.remove()
       return { name, behind: !(t === e || e.contains(t)) && !!t?.closest('.cockpit-ftstrip') && !e.closest('.cockpit-ftstrip') } })()`).catch(() => null)
@@ -285,9 +289,10 @@ async function tabWalk(p) {
     if (f.name === first) break
     first ??= f.name
     if (f.behind) hidden.push(f.name)
+    if (f.off) off.push(f.name)
   }
   await p.evaluate(`(() => { document.activeElement?.blur?.(); document.querySelector('main.operate-cockpit').scrollTop = 0; return 1 })()`)
-  return hidden
+  return { hidden, off }
 }
 const TAB_SIZES = (W, H) => W <= 1366 && H <= 800
 
@@ -324,11 +329,17 @@ for (const [label, route] of VIEWS.filter(([l]) => wantViews.includes(l))) {
             // screen reads as such, and a page that never drew it anywhere is a red below.
             if (state === 'firstRun') { row.nudge = !!m?.nudge; nudgeRows.push(row) }
             if (route === 'operate' && state === 'plain' && scale !== 'auto' && Number(scale) >= 150 && TAB_SIZES(W, H)) {
-              const hidden = await tabWalk(p)
+              const { hidden, off } = await tabWalk(p)
               if (hidden.length) {
                 reds.push(`${label} ${sz} ${scale} ${loc} plain: Tab focuses ${hidden.length} controls behind the parked QSO-strip line (${hidden.slice(0, 8).join(', ')})`)
                 console.log('RED ' + reds[reds.length - 1])
               }
+              // Off the window only on the supported screens: the off-matrix windows (dragged below any of them) hold
+              // the xs layout's stops, and a control that runs past the side there is a matter for those layouts.
+              if (off.length && !OFF.some(([w, h]) => w === W && h === H)) {
+                reds.push(`${label} ${sz} ${scale} ${loc} plain: Tab focuses ${off.length} controls outside the window (${off.slice(0, 8).join(', ')})`)
+                console.log('RED ' + reds[reds.length - 1])
+              } else if (off.length) console.log(`note (off the matrix, not a red): ${label} ${sz} ${scale} ${loc} plain: Tab focuses ${off.length} controls outside the window (${off.slice(0, 8).join(', ')})`)
             }
             if (!row.stops.length && !p.told) { p.told = true; console.log(`${label} ${sz} ${scale} ${loc} ${state}: NO STOP TX — page errors: ${JSON.stringify(await p.evaluate('(window.__errs || []).slice(-4)').catch((e) => String(e)))}; page: ${await p.evaluate(`JSON.stringify({ hash: location.hash, mains: [...document.querySelectorAll('main')].map((m) => m.className.slice(0, 40) + (m.closest('[hidden]') ? ' [hidden]' : '') + ' ' + Math.round(m.getBoundingClientRect().height)), stops: [...document.querySelectorAll('.op-btn.stop')].map((b) => Math.round(b.getBoundingClientRect().width) + (b.closest('[hidden]') ? 'H' : '')), text: document.body.innerText.slice(-500) })`).catch((e) => String(e))}`) }
             if (!ok) {
@@ -423,8 +434,10 @@ let control = null
   }
 }
 
-// THE TAB CONTROL: the shell's scroll padding taken away must leave a Tab stop behind FT's parked line.
+// THE TAB CONTROLS: the shell's scroll padding taken away must leave a Tab stop behind FT's parked line, and a control
+// planted in the shell below the window must be read as focused outside it.
 let tabControl = null
+let offControl = null
 {
   const p = await openPage('operate', [900, 600], '175', 'en')
   try {
@@ -432,10 +445,14 @@ let tabControl = null
     for (let i = 0; i < 160 && !m?.stops.length; i++) { await sleep(250); m = await p.evaluate(MEASURE).catch(() => null) }
     await apply(p, PLAIN, 'operate')
     await settle(p)
-    await p.evaluate(`(() => { const s = document.createElement('style'); s.textContent = '.layout.single { scroll-padding-bottom: 0 !important }'; document.head.appendChild(s); return 1 })()`)
-    const hidden = await tabWalk(p)
+    await p.evaluate(`(() => { const s = document.createElement('style'); s.textContent = '.layout.single { scroll-padding-bottom: 0 !important }'; document.head.appendChild(s)
+      const b = document.createElement('button'); b.setAttribute('aria-label', 'off-window plant'); b.style.cssText = 'position: fixed; left: 10px; top: calc(100vh + 200px)'
+      document.querySelector('main.operate-cockpit').appendChild(b); return 1 })()`)
+    const { hidden, off } = await tabWalk(p)
     tabControl = hidden.length > 0
+    offControl = off.some((n) => n.startsWith('off-window plant'))
     console.log(`CONTROL — FT 900×600 175 % with the shell's scroll padding taken away: ${hidden.length} Tab stops behind the parked line${hidden.length ? ' (caught)' : ''}`)
+    console.log(`CONTROL — FT 900×600 175 % with a control planted below the window: ${offControl ? 'focused outside the window (caught)' : 'not read as outside the window'}`)
   } finally {
     await p.close()
   }
@@ -681,6 +698,7 @@ if (errors) { console.log(`stopvisible: ${errors} screens never drew`); process.
   }
 }
 if (tabControl !== true) console.log('CONTROL FAILED: with the scroll padding taken away, no Tab stop landed behind FT’s parked line: the Tab check cannot fail')
+if (offControl !== true) console.log('CONTROL FAILED: a control planted below the window was not read as focused outside it: the off-window Tab check cannot fail')
 if (mirrorControl === false) console.log('CONTROL FAILED: with the stop layer taken away the click still stopped: the stop layer check cannot fail')
 if (freshControl === false) console.log('CONTROL FAILED: a stale divider value was not caught: the fresh-layout guard cannot fail')
 if (freshReds.length) console.log(`stopvisible: RED — ${freshReds.length} rows where Stop TX stood off a fresh layout`)
@@ -688,6 +706,6 @@ if (logControl === false) console.log('CONTROL FAILED: the prompt to log over th
 if (moveControl === false) console.log('CONTROL FAILED: the prompt to log held where it opened met no stop after the change: the moving-stop check cannot fail')
 if (moveReds.length) console.log(`stopvisible: RED — ${moveReds.length} rows where the prompt to log met a stop that moved while it was open:\n  ${moveReds.join('\n  ')}`)
 if (logReds.length) console.log(`stopvisible: RED — ${logReds.length} rows where the prompt to log met a stop control or hid Stop TX:\n  ${logReds.join('\n  ')}`)
-if (reds.length || freshReds.length || mirrorReds.length || logReds.length || moveReds.length || logControl === false || moveControl === false || mirrorControl === false || freshControl === false || control !== true || tabControl !== true) { console.log(`stopvisible: RED — ${reds.length} rows with no Stop TX on screen and topmost`); process.exit(1) }
+if (reds.length || freshReds.length || mirrorReds.length || logReds.length || moveReds.length || logControl === false || moveControl === false || mirrorControl === false || freshControl === false || control !== true || tabControl !== true || offControl !== true) { console.log(`stopvisible: RED — ${reds.length} rows with no Stop TX on screen and topmost`); process.exit(1) }
 console.log('stopvisible: PASS — a Stop TX fully on screen and topmost in every row, no Tab stop behind FT’s parked line, FT’s Stop TX where a fresh layout puts it after a header change, one click through the stop layer stops once over a parked strip and a squeezed bar, the prompt to log meets no stop control and leaves Stop TX reachable, also after a stop moves while it is open; every control was caught')
 process.exit(0)
