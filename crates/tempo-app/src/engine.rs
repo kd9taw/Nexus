@@ -13961,6 +13961,12 @@ impl Engine {
             "serial" => CwKeyerBackend::Serial,
             _ => CwKeyerBackend::Cat,
         };
+        // The keyer is the radio's own: the radio in use's profile takes it too, or the next
+        // settings read (which re-mirrors the profile) would hand the form the old keyer to save.
+        let (active, keyer) = (self.settings.active_radio, self.settings.cw_keyer);
+        if let Some(p) = self.settings.radios.iter_mut().find(|p| p.id == active) {
+            p.cw_keyer = keyer;
+        }
         if pitch_hz > 0.0 {
             self.settings.cw_pitch_hz = pitch_hz.clamp(300.0, 1200.0);
         }

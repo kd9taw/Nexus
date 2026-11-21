@@ -348,3 +348,32 @@ fn the_tx_power_ceiling_is_the_bound_radios_own_cap() {
         "radio A's 80 % is never commanded to radio B"
     );
 }
+
+/// ★ A KEYER PICKED IN THE CW COCKPIT SURVIVES THE NEXT SAVE. The cockpit's keyer pick writes the
+/// radio in use's keyer; the Settings form reads the radio's own (the read re-mirrors the active
+/// profile) and saves it back with whatever else it changed. Written to the flat field alone, the
+/// pick was in force until that save put the radio's old keyer back.
+#[test]
+fn a_keyer_picked_in_the_cockpit_survives_the_next_save() {
+    let mut e = Engine::new("KD9TAW", "EN52", 0);
+    e.settings.ensure_radio_profiles();
+    e.settings.sync_active_from_flat();
+    assert_eq!(e.settings.cw_keyer, CwKeyerBackend::Cat, "premise: CAT");
+    e.set_cw_keyer("winkeyer", 0.0);
+    // The form, as a settings read hands it over, saved with another change.
+    let mut form = e.settings().clone();
+    form.sync_flat_from_active();
+    form.cw_wpm = 22;
+    e.apply_settings(form);
+    assert_eq!(e.settings.cw_wpm, 22, "the save landed");
+    assert_eq!(
+        e.settings.cw_keyer,
+        CwKeyerBackend::WinKeyer,
+        "the cockpit's keyer pick is still in force"
+    );
+    assert_eq!(
+        e.settings.active_profile().map(|p| p.cw_keyer),
+        Some(CwKeyerBackend::WinKeyer),
+        "and is the radio's own"
+    );
+}
