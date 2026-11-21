@@ -443,3 +443,105 @@ fn a_refused_request_is_one_line_in_the_diagnostic_log() {
         assert!(lines[0].contains(word), "{word} in: {}", lines[0]);
     }
 }
+
+/// A Reply (WSJT-X UDP message type 4) for the window named `to`, as GridTracker addresses one to
+/// the instance whose decode was clicked.
+fn reply_for(to: &str, message: &str) -> Vec<u8> {
+    let mut w = tempo_net::qds::QdsWriter::new();
+    w.put_u32(tempo_net::wsjtx::MAGIC)
+        .put_u32(tempo_net::wsjtx::SCHEMA)
+        .put_u32(tempo_net::wsjtx::msg_type::REPLY)
+        .put_utf8(Some(to))
+        .put_u32(0)
+        .put_i32(-5)
+        .put_f64(0.1)
+        .put_u32(1500)
+        .put_utf8(Some("~"))
+        .put_utf8(Some(message))
+        .put_bool(false)
+        .put_u8(0);
+    w.into_bytes()
+}
+
+/// A HaltTx for the window named `to`, auto-TX-only off.
+fn halt_for(to: &str) -> Vec<u8> {
+    let mut w = tempo_net::qds::QdsWriter::new();
+    w.put_u32(tempo_net::wsjtx::MAGIC)
+        .put_u32(tempo_net::wsjtx::SCHEMA)
+        .put_u32(tempo_net::wsjtx::msg_type::HALT_TX)
+        .put_utf8(Some(to))
+        .put_bool(false);
+    w.into_bytes()
+}
+
+/// [`deliver`] to the window whose sender id is `own`.
+fn deliver_to_window(engine: &Arc<Mutex<Engine>>, own: &str, datagrams: &[Vec<u8>]) {
+    let logger = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let server = WsjtxServer::new("127.0.0.1:0".parse().unwrap(), logger.local_addr().unwrap())
+        .unwrap()
+        .with_id(own.to_string());
+    deliver_through(engine, &logger, server, datagrams);
+}
+
+/// ⛔ A Reply GridTracker addressed to another window of this station (two radio windows on one
+/// multicast group, or one listener that reaches both) works nothing and arms nothing here: it
+/// starts that window's contact, never this one's too.
+#[test]
+fn a_reply_for_another_window_is_left_to_it() {
+    let engine = station();
+    let (r1, r2) = (
+        tempo_net::sender_id(Some("r1")),
+        tempo_net::sender_id(Some("r2")),
+    );
+    deliver_to_window(&engine, &r1, &[reply_for(&r2, "CQ W1AW FN31")]);
+    assert_eq!(
+        answered(&engine),
+        (None, false),
+        "(station worked, TX armed)"
+    );
+}
+
+/// A Reply addressed to this window works the station and arms, as before.
+#[test]
+fn a_reply_for_this_window_works_the_station() {
+    let engine = station();
+    let r1 = tempo_net::sender_id(Some("r1"));
+    deliver_to_window(&engine, &r1, &[reply_for(&r1, "CQ W1AW FN31")]);
+    assert_eq!(answered(&engine), (Some("W1AW".to_string()), true));
+}
+
+/// A single-window station keeps WSJT-X's behaviour: its window, "Nexus", takes a Reply addressed
+/// to it, and leaves one addressed to a radio window.
+#[test]
+fn the_base_window_takes_a_reply_addressed_to_it() {
+    let engine = station();
+    deliver_to_window(
+        &engine,
+        tempo_net::APP_ID,
+        &[reply_for(&tempo_net::sender_id(Some("r2")), "CQ W1AW FN31")],
+    );
+    assert_eq!(answered(&engine), (None, false), "a radio window's Reply");
+    deliver_to_window(
+        &engine,
+        tempo_net::APP_ID,
+        &[reply_for(tempo_net::APP_ID, "CQ W1AW FN31")],
+    );
+    assert_eq!(answered(&engine), (Some("W1AW".to_string()), true));
+}
+
+/// ⛔ A HaltTx stops this window whatever window it names: a halt that stops more than was asked
+/// is safe, one that is missed is not.
+#[test]
+fn a_halt_for_another_window_still_halts_this_one() {
+    let engine = station();
+    engine.lock().unwrap().set_tx_enabled_by_operator(true);
+    deliver_to_window(
+        &engine,
+        &tempo_net::sender_id(Some("r1")),
+        &[halt_for(&tempo_net::sender_id(Some("r2")))],
+    );
+    assert!(
+        !engine.lock().unwrap().tx_enabled(),
+        "r1 still armed after a halt for r2"
+    );
+}

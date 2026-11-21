@@ -39,7 +39,8 @@ pub const MAX_RECORDS: usize = 5;
 pub const MAX_FIELDS: usize = 100;
 /// The most characters one field's value keeps.
 pub const MAX_VALUE: usize = 256;
-/// The sender id Nexus puts on its own WSJT-X datagrams ([`crate::server::APP_ID`]).
+/// The sender id Nexus puts on its own WSJT-X datagrams ([`crate::server::APP_ID`]); a radio
+/// window's adds its profile ([`crate::server::is_nexus_id`] knows every one).
 pub const NEXUS_WSJTX_ID: &str = crate::server::APP_ID;
 /// The `PROGRAMID` Nexus writes in its own ADIF (its HRD push, its type 12).
 pub const NEXUS_PROGRAM_ID: &str = "Nexus";
@@ -186,7 +187,7 @@ pub fn read_logged_adif(text: &str, program: Option<&str>) -> Intake {
 fn read_wsjtx(bytes: &[u8]) -> Intake {
     match parse_inbound(bytes) {
         Some(Inbound::QsoLogged { id, .. } | Inbound::LoggedAdif { id, .. })
-            if id == NEXUS_WSJTX_ID =>
+            if crate::server::is_nexus_id(&id) =>
         {
             Intake::Own
         }
@@ -200,7 +201,7 @@ fn read_wsjtx(bytes: &[u8]) -> Intake {
         }
         Some(_) => Intake::Ignored,
         None => match contact_header(bytes) {
-            Some(id) if id == NEXUS_WSJTX_ID => Intake::Own,
+            Some(id) if crate::server::is_nexus_id(&id) => Intake::Own,
             Some(id) => Intake::Unreadable {
                 program: program_name(&id),
             },

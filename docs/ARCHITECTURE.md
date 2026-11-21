@@ -565,7 +565,7 @@ understands, so JTAlert / GridTracker / N1MM+ / loggers interoperate unmodified.
 
 **WSJT-X `NetworkMessage` UDP** (`wsjtx.rs` / `server.rs`, framed with the Qt
 `QDataStream` big-endian codec in `qds.rs`): magic `0xADBCCBDA`, schema `3`,
-sender id `"Tempo"`. Tempo **emits** Heartbeat / Status / Decode / QSOLogged /
+sender id `"Nexus"` (a radio window's `"Nexus - <profile>"`, `server::sender_id`). Tempo **emits** Heartbeat / Status / Decode / QSOLogged /
 Close to a target (WSJT-X default `127.0.0.1:2237`) and **parses inbound** Reply /
 HaltTx / FreeText control datagrams. The service loop wires these to the engine:
 `HaltTx` → `engine.halt_tx()` + drop PTT; `FreeText { send: true }` →

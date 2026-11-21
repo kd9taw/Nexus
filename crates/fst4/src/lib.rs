@@ -500,9 +500,14 @@ mod tests {
         // another one this test says so and stops instead of going red. Ubuntu 26.04 (gfortran
         // 15.2, glibc 2.43) moves FST4-120 alone. CI never skips: a runner whose toolchain has
         // moved must fail here, so the pins are re-recorded as a deliberate step.
+        //
+        // "CI" here is GitHub Actions itself (`GITHUB_ACTIONS`), deliberately not the `CI`
+        // variable: `scripts/gates` sets `CI=true` on developer boxes too, and keyed on that the
+        // test went red on every local gate run of a 26.04 box, the same FST4-120 digest each
+        // time, which read as a flaky pin when nothing about the samples had changed.
         let (gfortran, glibc) = toolchain();
         if (gfortran.as_str(), glibc.as_str()) != PINNED_TOOLCHAIN
-            && std::env::var_os("CI").is_none()
+            && std::env::var_os("GITHUB_ACTIONS").is_none_or(|v| v.is_empty())
         {
             eprintln!(
                 "SKIP the_transmitted_samples_are_pinned_at_every_period: pinned on gfortran {} / \

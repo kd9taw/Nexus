@@ -434,12 +434,12 @@ fn wsjtx_mode_to_kind(m: &str) -> Option<ModeKind> {
 /// among them: a `LoggedAdif` (type 12) from this computer is kept too, for
 /// [`take_logged_adif`](SignalSource::take_logged_adif), so the contact reaches the
 /// log. Loopback only — WSJT-X's own trust model, and the sink socket's for any
-/// sender it was not pointed at — and never one under Nexus's own id
-/// ([`tempo_net::APP_ID`]): with the stock addresses Nexus's sink sends its own
-/// logged contacts to this very port. Its `QsoLogged` (type 5) twin stays
-/// ignored, so a contact is imported once.
+/// sender it was not pointed at — and never one under an id of Nexus's own
+/// ([`tempo_net::is_nexus_id`], this window's or another's): with the stock
+/// addresses Nexus's sink sends its own logged contacts to this very port. Its
+/// `QsoLogged` (type 5) twin stays ignored, so a contact is imported once.
 ///
-/// A `Decode` under Nexus's own id is dropped by the same rule: the sink re-sends
+/// A `Decode` under an id of Nexus's own is dropped by the same rule: the sink re-sends
 /// every decode it folds (the WSJT-X → Nexus → GridTracker relay), and aimed at
 /// this socket that came back each period as a new decode, every period's piling
 /// up on the next. Any other sender's — WSJT-X, JTDX, MSHV — decodes as before.
@@ -510,7 +510,7 @@ impl WsjtxUdpSource {
                 message,
                 low_confidence,
                 ..
-            }) if id != tempo_net::APP_ID => {
+            }) if !tempo_net::is_nexus_id(&id) => {
                 self.queue.push_back(Decode {
                     message,
                     sync: 0.0,
@@ -533,7 +533,7 @@ impl WsjtxUdpSource {
                 true
             }
             Some(tempo_net::wsjtx::Inbound::LoggedAdif { id, adif })
-                if from.is_some_and(|f| f.ip().is_loopback()) && id != tempo_net::APP_ID =>
+                if from.is_some_and(|f| f.ip().is_loopback()) && !tempo_net::is_nexus_id(&id) =>
             {
                 self.logged.push_back(adif);
                 false
