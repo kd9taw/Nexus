@@ -10183,6 +10183,7 @@ export const IT: PartialCatalog = {
   "settings.confirmations.clublog.apiKey.notSavedAtStation": "Nessuna salvata in stazione",
   "settings.confirmations.clublog.apiKey.watched": "Nascosta mentre uno streaming è in visione",
   "settings.stationOnly.hint": "Impostato alla stazione",
+  "settings.thisRadio.hint": "Di questa radio ({{name}}): ogni radio conserva qui la propria impostazione.",
   "settings.confirmations.clublog.apiKey.hint": "Questa è la credenziale dell'<b>applicazione</b>, non la tua: le versioni ufficiali dell'installer ne includono una, e ti servono solo email + password per app qui sopra. Compili dai sorgenti? Richiedi una chiave gratuita su clublog.org/requestapikey.php e incollala qui (il software open source non può includerne una: ClubLog revoca automaticamente le chiavi pubblicate).",
   "settings.confirmations.clublog.upload.label": "Carica automaticamente i QSO su ClubLog",
   "settings.confirmations.clublog.upload.hint": "Invia in tempo reale ogni QSO registrato a ClubLog (richiede email + password per app qui sopra; le versioni ufficiali includono la chiave API).",

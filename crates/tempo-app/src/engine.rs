@@ -224,6 +224,9 @@ mod experience_level_tests;
 mod ft4_jtdx_tests;
 #[cfg(test)]
 mod jtdx_calls_tests;
+/// Each radio's own keying lines, keyers, devices, ports and power caps.
+#[cfg(test)]
+mod per_radio_station_tests;
 /// The radio switch notice's record and the switch policy's one writer.
 #[cfg(test)]
 mod radio_switch_notice_tests;
@@ -14375,9 +14378,18 @@ impl Engine {
     /// the loop to command it down now. This is why the earlier version "only worked once": it
     /// clamped the commanded value but never re-asserted against the rig's actual level. Enforcement
     /// only ever LOWERS power, so it is safe-direction. Called each radio-loop tick.
+    ///
+    /// A commanded level above the ceiling is brought down to it too, whatever the rig reads:
+    /// the ceiling is the radio in use's own caps, so a switch onto a radio capped lower, or a
+    /// cap lowered in Settings, would otherwise leave the last radio's level to be commanded
+    /// until something was read back from this one.
     pub fn rf_power_to_command(&mut self) -> Option<(f32, bool)> {
         let ceiling = self.active_power_ceiling();
         let mut force = false;
+        if self.rf_power.is_some_and(|p| p > ceiling) {
+            self.rf_power = Some(ceiling);
+            force = true;
+        }
         if ceiling < 1.0 {
             // 0.02 epsilon absorbs rig readback rounding so a settled cap doesn't re-command.
             if self

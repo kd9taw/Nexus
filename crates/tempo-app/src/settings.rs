@@ -2185,9 +2185,9 @@ pub struct Settings {
     /// WSJT-X ("Force Control Lines: DTR/RTS = High | Low | blank") and fldigi both expose the
     /// same per-line three-way; they default to leave-alone, Nexus defaults to low.
     ///
-    /// ⚠️ Global, not per-radio, and that is a compromise rather than a finding: this is a
-    /// property of the CABLE on a given radio's CAT port, so a two-radio station with a
-    /// line-powered accessory on only one of them cannot express that yet.
+    /// Per radio (the active radio's, through [`RadioProfile::cat_rts_state`]): it is a property
+    /// of the CABLE on a given radio's CAT port, so a two-radio station can have a line-powered
+    /// accessory on only one of them.
     ///
     /// Neither value can key a line Hamlib is using: `rig_open` refuses `rts_state`/`dtr_state`
     /// on the keying line and on a hardware-handshake RTS, and Nexus asks the daemon which
@@ -2410,9 +2410,8 @@ pub struct Settings {
     pub cw_pitch_hz: f32,
     /// Operator CW sending speed in WPM. Persisted so it survives a restart — an operator
     /// who works at 15 shouldn't be reset to the 25 default every launch (SF ticket #2).
-    /// Global, not per-radio: WPM is a property of the OPERATOR's fist, and the two sibling
-    /// CW controls (`cw_keyer`, `cw_pitch_hz`) are already global, so scoping this one
-    /// per-radio would split a single toolbar across two persistence scopes.
+    /// Global, not per-radio: WPM is a property of the OPERATOR's fist, as the pitch
+    /// (`cw_pitch_hz`) is. The keyer (`cw_keyer`) is per radio: it is wired to a radio.
     #[serde(default = "default_cw_wpm")]
     pub cw_wpm: u32,
     /// Command the rig's REVERSE CW mode (Hamlib `CWR`) instead of plain `CW`, on every band.
@@ -2735,7 +2734,8 @@ pub struct Settings {
     /// panadapter as today (the default), or `"sdrconnect"`, an SDRplay receiver through SDRplay's
     /// SDRconnect program, fed from the rig's RX OUT or a protected splitter. Stored as a word and
     /// read by [`ScopeSource::from_setting`], so a word this build does not know is the radio's.
-    /// The station's, like the TCI server's: the SDR follows whichever radio is in use.
+    /// The radio in use's own ([`RadioProfile::scope_source`]): an SDR fed from one rig's RX OUT
+    /// is that rig's.
     #[serde(default = "default_scope_source")]
     pub scope_source: String,
     /// The computer SDRconnect runs on, for its WebSocket API: this one unless the operator says.
@@ -5070,6 +5070,12 @@ const FILE_CHOICES: &[(&str, KnowsValue)] = &[
     ("splitMode", knows::<SplitMode>),
 ];
 
+/// The choices a radio profile in a settings file holds ([`FILE_CHOICES`], one radio at a time).
+const RADIO_CHOICES: &[(&str, KnowsValue)] = &[
+    ("cwKeyer", knows::<CwKeyerBackend>),
+    ("splitMode", knows::<SplitMode>),
+];
+
 /// Whether a choice reads a value as one of its own ([`knows`]).
 type KnowsValue = fn(&serde_json::Value) -> bool;
 
@@ -5109,6 +5115,18 @@ fn forget_unknown_choices(doc: &mut serde_json::Value) -> Forgotten {
         if file.get(*key).is_some_and(|v| unknown(v, *known)) {
             if let Some(serde_json::Value::String(v)) = file.remove(*key) {
                 forgot.choices.push((*key, v));
+            }
+        }
+    }
+    // The choices each radio keeps for itself (`RadioProfile`'s per-radio station fields).
+    if let Some(serde_json::Value::Array(radios)) = file.get_mut("radios") {
+        for radio in radios.iter_mut().filter_map(|r| r.as_object_mut()) {
+            for (key, known) in RADIO_CHOICES {
+                if radio.get(*key).is_some_and(|v| unknown(v, *known)) {
+                    if let Some(serde_json::Value::String(v)) = radio.remove(*key) {
+                        forgot.choices.push((*key, v));
+                    }
+                }
             }
         }
     }
@@ -5813,6 +5831,63 @@ pub struct RadioProfile {
     pub tci_pan: bool,
     #[serde(default)]
     pub tci_spots: bool,
+    // --- this radio's cable, keyers, devices, split, scope, service ports and power caps ---
+    //
+    // PER-RADIO since the unified-config work: each was a flat-only `Settings` field, so a radio
+    // switch kept the previous radio's keying lines, keyer ports and power caps, and a merge of
+    // two radios' settings could hand one radio the other's cable. Each mirrors the flat field of
+    // the same name (`sync_flat_from_active` / `sync_active_from_flat`), and the flat field's doc
+    // says what it does. The flat field is still what every reader, the transmit gates included,
+    // reads: it is the active radio's.
+    //
+    // A profile written before these existed carries none of them (`per_radio_seeded` false):
+    // `ensure_radio_profiles` fills them, from the flat fields for the active radio and with
+    // [`Settings::fields_for_another_radio`] for any other, so one radio never takes another's
+    // keying lines or keyers and no radio's power caps come out higher than they were. (The TCI
+    // server stays the station's, by the operator's ruling: one server, whichever radio.)
+    pub cat_rts_state: String,
+    pub cat_dtr_state: String,
+    pub cat_rts_keys_ptt: bool,
+    pub cat_serial_handshake: String,
+    pub cat_ptt_line_state: String,
+    pub cw_keyer: CwKeyerBackend,
+    pub winkeyer_port: String,
+    pub cw_key_port: String,
+    pub cw_key_line: String,
+    pub rtty_backend: String,
+    pub rtty_fsk_port: String,
+    pub rtty_fsk_line: String,
+    pub voice_mic_device: String,
+    pub monitor_enabled: bool,
+    pub monitor_device: String,
+    pub monitor_level: f32,
+    pub split_mode: SplitMode,
+    pub split_detect_enabled: bool,
+    pub scope_source: String,
+    pub sdrconnect_host: String,
+    pub sdrconnect_port: u16,
+    pub sdrconnect_follow: String,
+    pub cat_broker: bool,
+    pub cat_broker_port: u16,
+    pub cat_broker_ptt: bool,
+    pub js8_api_tcp_port: u16,
+    pub js8_api_udp_port: u16,
+    /// ⛔ This radio's per-mode power caps, fractions of the radio's full power as the flat
+    /// `max_power_*` are, and its tune and SSTV percentages. Fractions, not watts, on purpose: a
+    /// cap kept in watts would be turned back into a fraction through `rated_watts`, so an
+    /// operator correcting the rating downwards would raise the real cap. A fraction cannot move
+    /// when the rating is edited.
+    pub max_power_phone: Option<f32>,
+    pub max_power_cw: Option<f32>,
+    pub max_power_digital: Option<f32>,
+    pub max_power_am: Option<f32>,
+    pub tune_power_pct: Option<u8>,
+    pub sstv_tx_power_pct: Option<u8>,
+    /// The fields above are this radio's own. `false` only in a profile read from a file (or a
+    /// payload) written before they were per radio, which has none of them: serde's own `false`
+    /// for a missing key, while [`RadioProfile::default`] says `true`. Never shown, never edited.
+    #[serde(default)]
+    pub per_radio_seeded: bool,
 }
 
 /// The editable CAT/audio/PTT/rotator/native subset of a [`RadioProfile`], sent from the Settings
@@ -6176,6 +6251,80 @@ fn default_true() -> bool {
     true
 }
 
+/// Every field that became per radio with the unified configuration (see the block at the end
+/// of [`RadioProfile`]), named ONCE: `$each!(field, …)`. Both directions of the flat mirror copy
+/// through it ([`station_fields_to_flat`], [`station_fields_from_flat`]), so a field added here is
+/// carried both ways, and `the_flat_mirror_round_trips_every_per_radio_field_both_ways` checks the
+/// values arrive.
+macro_rules! per_radio_station_fields {
+    ($each:ident) => {
+        $each!(
+            cat_rts_state,
+            cat_dtr_state,
+            cat_rts_keys_ptt,
+            cat_serial_handshake,
+            cat_ptt_line_state,
+            cw_keyer,
+            winkeyer_port,
+            cw_key_port,
+            cw_key_line,
+            rtty_backend,
+            rtty_fsk_port,
+            rtty_fsk_line,
+            voice_mic_device,
+            monitor_enabled,
+            monitor_device,
+            monitor_level,
+            split_mode,
+            split_detect_enabled,
+            scope_source,
+            sdrconnect_host,
+            sdrconnect_port,
+            sdrconnect_follow,
+            cat_broker,
+            cat_broker_port,
+            cat_broker_ptt,
+            js8_api_tcp_port,
+            js8_api_udp_port,
+            max_power_phone,
+            max_power_cw,
+            max_power_digital,
+            max_power_am,
+            tune_power_pct,
+            sstv_tx_power_pct
+        )
+    };
+}
+
+/// The active radio's per-radio station fields into the flat mirror.
+#[allow(clippy::clone_on_copy)] // one list for Strings and Copy fields alike
+fn station_fields_to_flat(flat: &mut Settings, p: &RadioProfile) {
+    macro_rules! copy {
+        ($($f:ident),* $(,)?) => { $( flat.$f = p.$f.clone(); )* };
+    }
+    per_radio_station_fields!(copy);
+}
+
+/// The flat mirror's per-radio station fields into a radio's profile, which then has its own.
+#[allow(clippy::clone_on_copy)] // one list for Strings and Copy fields alike
+fn station_fields_from_flat(p: &mut RadioProfile, flat: &Settings) {
+    macro_rules! copy {
+        ($($f:ident),* $(,)?) => { $( p.$f = flat.$f.clone(); )* };
+    }
+    per_radio_station_fields!(copy);
+    p.per_radio_seeded = true;
+}
+
+/// Another profile's per-radio station fields into `p` ([`Settings::fields_for_another_radio`]).
+#[allow(clippy::clone_on_copy)] // one list for Strings and Copy fields alike
+fn station_fields_from_profile(p: &mut RadioProfile, from: &RadioProfile) {
+    macro_rules! copy {
+        ($($f:ident),* $(,)?) => { $( p.$f = from.$f.clone(); )* };
+    }
+    per_radio_station_fields!(copy);
+    p.per_radio_seeded = true;
+}
+
 impl Default for RadioProfile {
     fn default() -> Self {
         RadioProfile {
@@ -6244,6 +6393,41 @@ impl Default for RadioProfile {
             tci_audio: true,
             tci_pan: false,
             tci_spots: false,
+            // The flat fields' own defaults (`Settings::default`), every one.
+            cat_rts_state: "low".to_string(),
+            cat_dtr_state: "low".to_string(),
+            cat_rts_keys_ptt: false,
+            cat_serial_handshake: default_cat_auto(),
+            cat_ptt_line_state: default_cat_auto(),
+            cw_keyer: CwKeyerBackend::Cat,
+            winkeyer_port: String::new(),
+            cw_key_port: String::new(),
+            cw_key_line: default_cw_key_line(),
+            rtty_backend: default_rtty_backend(),
+            rtty_fsk_port: String::new(),
+            rtty_fsk_line: default_rtty_fsk_line(),
+            voice_mic_device: String::new(),
+            monitor_enabled: false,
+            monitor_device: String::new(),
+            monitor_level: default_monitor_level(),
+            split_mode: SplitMode::None,
+            split_detect_enabled: false,
+            scope_source: default_scope_source(),
+            sdrconnect_host: default_sdrconnect_host(),
+            sdrconnect_port: SDRCONNECT_DEFAULT_PORT,
+            sdrconnect_follow: default_sdrconnect_follow(),
+            cat_broker: true,
+            cat_broker_port: 4532,
+            cat_broker_ptt: true,
+            js8_api_tcp_port: default_js8_api_tcp_port(),
+            js8_api_udp_port: default_js8_api_udp_port(),
+            max_power_phone: None,
+            max_power_cw: None,
+            max_power_digital: None,
+            max_power_am: default_max_power_am(),
+            tune_power_pct: None,
+            sstv_tx_power_pct: None,
+            per_radio_seeded: true,
         }
     }
 }
@@ -7711,7 +7895,7 @@ impl Settings {
     /// Build a RadioProfile mirroring the current flat rig/audio fields — the migration seed for a
     /// single-radio station's profile 0.
     fn radio_profile_from_flat(&self, id: u32) -> RadioProfile {
-        RadioProfile {
+        let mut p = RadioProfile {
             id,
             name: if self.rig_model_name.trim().is_empty() || self.rig_model_name == "None / VOX" {
                 format!("Radio {}", id + 1)
@@ -7785,7 +7969,46 @@ impl Settings {
             tci_audio: self.tci_audio,
             tci_pan: self.tci_pan,
             tci_spots: self.tci_spots,
+            ..RadioProfile::default()
+        };
+        station_fields_from_flat(&mut p, self);
+        p
+    }
+
+    /// The per-radio station fields a radio takes when it has none of its own and is NOT the one
+    /// the flat fields describe: a radio added to the roster, or one in a file written before
+    /// these fields were per radio. Until then one set applied to whichever radio was in use, so
+    /// it takes the station's as they are now (its power caps included: a fresh default would be
+    /// no cap at all, so no radio comes out able to transmit more than before), EXCEPT its cable:
+    ///
+    /// ⛔ the PTT keying lines (RTS/DTR states, "RTS keys PTT", the handshake, the keying line's
+    /// idle state) and the keyers (CW keyer and its WinKeyer or keyline port and line, the RTTY
+    /// backend and its FSK port and line) are as a fresh profile has them. Those describe the
+    /// other radio's wiring: a line held wrongly keys a transmitter, and a keyer port is the
+    /// other radio's KEY or FSK jack.
+    #[allow(clippy::clone_on_copy)] // one list for Strings and Copy fields alike
+    pub fn fields_for_another_radio(&self) -> RadioProfile {
+        let fresh = RadioProfile::default();
+        let mut p = RadioProfile::default();
+        station_fields_from_flat(&mut p, self);
+        macro_rules! fresh {
+            ($($f:ident),* $(,)?) => { $( p.$f = fresh.$f.clone(); )* };
         }
+        fresh!(
+            cat_rts_state,
+            cat_dtr_state,
+            cat_rts_keys_ptt,
+            cat_serial_handshake,
+            cat_ptt_line_state,
+            cw_keyer,
+            winkeyer_port,
+            cw_key_port,
+            cw_key_line,
+            rtty_backend,
+            rtty_fsk_port,
+            rtty_fsk_line,
+        );
+        p
     }
 
     /// Ensure at least one radio profile exists (migrate the flat fields to profile 0 for older
@@ -7798,6 +8021,25 @@ impl Settings {
         }
         if !self.radios.iter().any(|p| p.id == self.active_radio) {
             self.active_radio = self.radios[0].id;
+        }
+        // A profile with none of the per-radio station fields (a file from before they were per
+        // radio): the active radio's are the flat fields, which always described it; any other
+        // radio's are `fields_for_another_radio`, never the active radio's cable.
+        if self.radios.iter().any(|p| !p.per_radio_seeded) {
+            let active = self.active_radio;
+            let other = self.fields_for_another_radio();
+            for i in 0..self.radios.len() {
+                if self.radios[i].per_radio_seeded {
+                    continue;
+                }
+                let mut p = std::mem::take(&mut self.radios[i]);
+                if p.id == active {
+                    station_fields_from_flat(&mut p, self);
+                } else {
+                    station_fields_from_profile(&mut p, &other);
+                }
+                self.radios[i] = p;
+            }
         }
     }
 
@@ -8089,7 +8331,9 @@ impl Settings {
             name,
             rigctld_port,
             rotctld_port,
-            ..RadioProfile::default()
+            // Never the radio in use's cable; its power caps, which applied to every radio until
+            // they were per radio.
+            ..self.fields_for_another_radio()
         });
         next_id
     }
@@ -8225,6 +8469,7 @@ impl Settings {
         let Some(p) = self.active_profile().cloned() else {
             return;
         };
+        station_fields_to_flat(self, &p);
         self.ptt_method = p.ptt_method;
         self.rig_model = p.rig_model;
         self.rig_model_name = p.rig_model_name;
@@ -8448,6 +8693,11 @@ impl Settings {
             p.tci_audio = tci_audio;
             p.tci_pan = tci_pan;
             p.tci_spots = tci_spots;
+        }
+        if let Some(i) = self.radios.iter().position(|p| p.id == active) {
+            let mut p = std::mem::take(&mut self.radios[i]);
+            station_fields_from_flat(&mut p, self);
+            self.radios[i] = p;
         }
     }
 
@@ -10326,6 +10576,46 @@ mod tests {
         );
     }
 
+    /// The fields that became per radio with the unified configuration. The flat mirror's
+    /// round-trip must probe EVERY one both ways, never skip one as a probe its type refused (two
+    /// are enums, whose probe is another of their words, and several are `Option`s at `None`,
+    /// whose probe is a number); the radio Edit's patch carries none of them.
+    const PER_RADIO_STATION_FIELDS: [&str; 33] = [
+        "catRtsState",
+        "catDtrState",
+        "catRtsKeysPtt",
+        "catSerialHandshake",
+        "catPttLineState",
+        "cwKeyer",
+        "winkeyerPort",
+        "cwKeyPort",
+        "cwKeyLine",
+        "rttyBackend",
+        "rttyFskPort",
+        "rttyFskLine",
+        "voiceMicDevice",
+        "monitorEnabled",
+        "monitorDevice",
+        "monitorLevel",
+        "splitMode",
+        "splitDetectEnabled",
+        "scopeSource",
+        "sdrconnectHost",
+        "sdrconnectPort",
+        "sdrconnectFollow",
+        "catBroker",
+        "catBrokerPort",
+        "catBrokerPtt",
+        "js8ApiTcpPort",
+        "js8ApiUdpPort",
+        "maxPowerPhone",
+        "maxPowerCw",
+        "maxPowerDigital",
+        "maxPowerAm",
+        "tunePowerPct",
+        "sstvTxPowerPct",
+    ];
+
     /// ⛔ **THE FLAT MIRROR CARRIES EVERY FIELD IN BOTH DIRECTIONS.**
     ///
     /// The sibling of [`every_per_radio_field_is_reachable_through_the_patch`], for the OTHER
@@ -10405,21 +10695,40 @@ mod tests {
             mirrored.len()
         );
 
+        let probes = |key: &str, v: &serde_json::Value| -> Vec<serde_json::Value> {
+            match key {
+                "cwKeyer" => vec![serde_json::json!("winkeyer")],
+                "splitMode" => vec![serde_json::json!("fakeit")],
+                _ if v.is_null() => vec![
+                    serde_json::json!(0.5),
+                    serde_json::json!(37),
+                    serde_json::json!(true),
+                ],
+                _ => perturb(v).into_iter().collect(),
+            }
+        };
+        let mut probed: Vec<String> = Vec::new();
+
         let mut missing_outbound: Vec<String> = Vec::new();
         let mut missing_inbound: Vec<String> = Vec::new();
         for key in &mirrored {
             let base = serde_json::to_value(RadioProfile::default()).expect("profile");
-            let Some(probe) = perturb(&base[key.as_str()]) else {
-                continue;
+            // The first probe this field's type takes.
+            let Some((probe, p)) = probes(key, &base[key.as_str()])
+                .into_iter()
+                .find_map(|probe| {
+                    let mut obj = base.as_object().expect("an object").clone();
+                    obj.insert((*key).clone(), probe.clone());
+                    serde_json::from_value::<RadioProfile>(serde_json::Value::Object(obj))
+                        .ok()
+                        .map(|p| (probe, p))
+                })
+            else {
+                continue; // no probe is a legal value for this field's type
             };
+            probed.push((*key).clone());
 
             // ── profile → flat (`sync_flat_from_active`) ────────────────────────────────
-            let mut obj = base.as_object().expect("an object").clone();
-            obj.insert((*key).clone(), probe.clone());
-            let Ok(p) = serde_json::from_value::<RadioProfile>(serde_json::Value::Object(obj))
-            else {
-                continue; // the probe is not a legal value for this field's type
-            };
             let mut s = Settings {
                 radios: vec![RadioProfile { id: 0, ..p }],
                 active_radio: 0,
@@ -10456,6 +10765,17 @@ mod tests {
             let _ = &mut s;
         }
 
+        let unprobed: Vec<&str> = PER_RADIO_STATION_FIELDS
+            .iter()
+            .copied()
+            .filter(|k| !probed.iter().any(|p| p == k))
+            .collect();
+        assert!(
+            unprobed.is_empty(),
+            "these per-radio fields were never carried both ways (not in the profile, or no \
+             probe their type takes): {unprobed:?}"
+        );
+
         // ⚠️ ONE assertion covering BOTH directions, deliberately. Two asserts would report
         // only the first, and the second list would never be printed — which is how a
         // half-diagnosed seam gets "fixed" one direction at a time.
@@ -10480,7 +10800,7 @@ mod tests {
 
     #[test]
     fn every_per_radio_field_is_reachable_through_the_patch() {
-        const NOT_EDITABLE: [&str; 8] = [
+        const NOT_EDITABLE: [&str; 9] = [
             "id",
             "name",
             "enabled",
@@ -10492,7 +10812,17 @@ mod tests {
             // a form. The patch applies onto the stored profile, so an Edit leaves it as it is
             // (`a_radio_edit_keeps_the_ft_drive_memory`).
             "ftDrive",
+            // Never shown, never edited: says the per-radio station fields are the radio's own.
+            "perRadioSeeded",
         ];
+        // The per-radio station fields are edited through the radio in use's own form (the flat
+        // mirror), as they were before they were per radio. The patch applies onto the stored
+        // profile, so an Edit of another radio leaves them as they are.
+        let not_editable: Vec<&str> = NOT_EDITABLE
+            .iter()
+            .chain(PER_RADIO_STATION_FIELDS.iter())
+            .copied()
+            .collect();
         let profile = serde_json::to_value(RadioProfile::default()).expect("profile serializes");
         let patch = serde_json::to_value(RadioProfilePatch {
             ptt_method: String::new(),
@@ -10560,7 +10890,7 @@ mod tests {
             .expect("profile is an object")
             .keys()
             .map(String::as_str)
-            .filter(|k| !NOT_EDITABLE.contains(k) && !patch_keys.contains(k))
+            .filter(|k| !not_editable.contains(k) && !patch_keys.contains(k))
             .collect();
         assert!(
             unreachable.is_empty(),

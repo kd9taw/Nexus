@@ -1423,6 +1423,15 @@ export function SettingsPanel({
     stationOnly(key) ? (
       <span className="settings-hint" data-set-at-station={key}>{t('settings.stationOnly.hint')}</span>
     ) : null
+  // The settings each radio keeps for itself (its PTT lines, keyers, devices, split, scope,
+  // service ports and power caps): with more than one radio, say whose they are. They edit the
+  // radio in use, as the Rig & CAT form does; a switch brings the other radio's own.
+  const thisRadio = () => {
+    const radios = form?.radios ?? []
+    if (radios.length < 2) return null
+    const name = radios.find((r) => r.id === form?.activeRadio)?.name ?? ''
+    return <span className="settings-hint" data-this-radio="">{t('settings.thisRadio.hint', { name })}</span>
+  }
   // #165: where sharing really is — the station's answer while it serves, else the setting.
   const sharePort = radio?.catSharePort ?? (form?.catBrokerPort || 4532)
   // #289 — the data + log folder. Read once when Settings opens; a change applies at the next
@@ -6516,6 +6525,7 @@ export function SettingsPanel({
                   />
                 </span>
                 {setAtStation('catRtsKeysPtt')}
+                {thisRadio()}
                 <span className="settings-hint">
                   <T k="settings.rigControl.catRts.hint" tags={{ b: <strong /> }} />
                 </span>
@@ -7234,6 +7244,7 @@ export function SettingsPanel({
                   </button>
                 </label>
                 <span className="settings-hint">{t('settings.rigControl.splitDetect.hint')}</span>
+                {thisRadio()}
               </div>
 
               <label className="settings-field">
@@ -7734,6 +7745,7 @@ export function SettingsPanel({
                   <option value="high">{t('settings.rigControl.pttLineState.high')}</option>
                 </select>
                 {setAtStation('catPttLineState')}
+                {thisRadio()}
                 <span className="settings-hint">
                   {t('settings.rigControl.pttLineState.hint')}
                 </span>
@@ -8122,6 +8134,7 @@ export function SettingsPanel({
                   <option value="sdrconnect">{t('settings.scopeSource.source.sdrconnect')}</option>
                 </select>
                 <span className="settings-hint">{t('settings.scopeSource.source.hint')}</span>
+                {thisRadio()}
               </label>
               {scopeFromSdrconnect && (
                 <>
@@ -8954,6 +8967,7 @@ export function SettingsPanel({
                 ))}
               </div>
               {setAtStation('maxPowerPhone')}
+              {thisRadio()}
               <span className="settings-hint">{t('settings.transmit.powerCaps.hint')}</span>
             </div>
 
@@ -9207,6 +9221,7 @@ export function SettingsPanel({
                   />
                 </span>
               )}
+              {thisRadio()}
               {form.catBroker && (
                 <div className="settings-field">
                   <span className="settings-label">{t('settings.transmit.foreignPtt.label')}</span>
@@ -10419,6 +10434,7 @@ export function SettingsPanel({
                   <option value="soundcard">{t('settings.cw.keyer.soundcard')}</option>
                 </select>
                 {setAtStation('cwKeyer')}
+                {thisRadio()}
                 <span className="settings-hint">
                   <T k="settings.cw.keyer.hint" tags={{ b: <strong /> }} />
                 </span>
@@ -10762,6 +10778,7 @@ export function SettingsPanel({
                   <option value="fsk">{t('settings.rtty.backend.fsk')}</option>
                 </select>
                 {setAtStation('rttyBackend')}
+                {thisRadio()}
                 <span className="settings-hint">
                   <T k="settings.rtty.backend.hint" tags={{ b: <strong /> }} />
                 </span>

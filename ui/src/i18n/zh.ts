@@ -9730,6 +9730,7 @@ export const ZH: PartialCatalog = {
   "settings.confirmations.clublog.apiKey.notSavedAtStation": "台站端没有保存",
   "settings.confirmations.clublog.apiKey.watched": "有串流监视时隐藏",
   "settings.stationOnly.hint": "在台站端设置",
+  "settings.thisRadio.hint": "此电台专用（{{name}}）：每台电台在此各有自己的设置。",
   "settings.confirmations.clublog.apiKey.hint": "这是<b>应用</b>凭据，不是你的个人凭据 — 官方安装版本会内置一个，你只需上方的邮箱 + 应用密码。从源码构建？请到 clublog.org/requestapikey.php 申请免费密钥并粘贴在此（开源项目无法自带 — ClubLog 会自动吊销已公开的密钥）。",
   "settings.confirmations.clublog.upload.label": "自动上传 QSO 到 ClubLog",
   "settings.confirmations.clublog.upload.hint": "实时把每次记录的 QSO 推送到 ClubLog（需要上方的邮箱 + 应用密码；官方版本内置 API 密钥）。",
