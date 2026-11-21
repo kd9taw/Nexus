@@ -110,7 +110,7 @@ import type { BoxSource, RailLink } from './components/panes/CockpitBox'
 import { publishDashRailSwitch, type DashRailSwitch } from './components/dashRailSwitch'
 import { usePaneWidths, LEFT_MIN, RIGHT_MIN } from './usePaneWidths'
 import { PaneSeam } from './components/PaneSeam'
-import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from './features/paneSeam'
+import { TEMPO_WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from './features/paneSeam'
 import { TopBar } from './components/TopBar'
 import { StationList, type StationFilter } from './components/StationList'
 import { Conversation } from './components/Conversation'
@@ -3544,7 +3544,7 @@ function App() {
         className="tempo-wf-seam"
         storageKey="nexus.split.tempo.waterfall"
         min={WATERFALL_SPLIT_MIN}
-        max={WATERFALL_SPLIT_MAX}
+        max={TEMPO_WATERFALL_SPLIT_MAX}
         defaultPct={25}
         label={t('shell.waterfall.splitter.label')}
       />

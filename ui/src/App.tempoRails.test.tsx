@@ -259,7 +259,9 @@ describe('Tempo’s waterfall is a full-width strip with a height divider', () =
   it('starts at 25 % of the workspace, the common default, and a step is stored as the operator’s', async () => {
     layOut(1000)
     await mountTempo()
-    expect(aria(wfSep())).toEqual(['250', '128', '346'])
+    // jsdom lays out nothing, so the range is the declared clamps at its 768 px window: the 8em floor and Tempo's
+    // 65 % ceiling (#549; it was the other strips' 45 %, 346). In Chrome the panes' floor under it stops it sooner.
+    expect(aria(wfSep())).toEqual(['250', '128', '499'])
     expect(grid().style.getPropertyValue('--tempo-wf-h')).toBe('25%')
     expect(localStorage.getItem('nexus.split.tempo.waterfall'), 'an untouched default writes nothing').toBeNull()
     fireEvent.keyDown(wfSep(), { key: 'ArrowDown' })

@@ -7,6 +7,8 @@ import {
   SCOPE_SPLIT_MIN,
   SSTV_STAGE_SPLIT_MAX,
   SSTV_STAGE_SPLIT_MIN,
+  TEMPO_PANES_SPLIT_MIN,
+  TEMPO_WATERFALL_SPLIT_MAX,
   TX_SPLIT_MIN,
   WATERFALL_SPLIT_MAX,
   WATERFALL_SPLIT_MIN,
@@ -1690,6 +1692,75 @@ describe("FT's waterfall has the keyboard cockpits' yielding floor, and its divi
       expect(want, `\`${sheet!.value}\` (${sheet!.selector}) is unreadable as a length`).not.toBeNull()
       expect(want!, `FT's waterfall floor at font ${g.fontPx}px / --vh-eff ${g.vhEff}px`).toBeCloseTo(resolveClamp(WATERFALL_SPLIT_MIN, g), 6)
     }
+  })
+})
+
+describe("Tempo's waterfall row: its divider's clamps are the sheet's, and the panes under it keep a floor (#549)", () => {
+  // Tempo's strip is a ROW of the workspace grid (styles.css `.layout[data-three-pane]`), not a flex child, so its
+  // clamps are in `grid-template-rows`: the strip's row is minmax(floor, clamp(floor, the divider's size, ceiling))
+  // and the row under it minmax(the panes' floor, 1fr). Its ceiling is 65 % of the window, above the 45 % every
+  // other strip stops at (an operator could not drag it further down a tall window), and that is only safe because
+  // the panes under it keep a floor the grid honours: with the row under it at minmax(0, 1fr), the strip at its
+  // ceiling left the conversation 76 px on the floor screen and its Call CQ button off-screen. Each length is
+  // computed at four geometries and compared with the divider's own clamp, so a sheet and a divider that disagree
+  // (dead travel at one end of the drag) or a floor that went missing fail here.
+  const GEOMS: Geom[] = [
+    { fontPx: 14, vhEff: 768 },
+    { fontPx: 14, vhEff: 1440 },
+    { fontPx: 16, vhEff: 768 },
+    { fontPx: 14, vhEff: 384 },
+  ]
+  /** The top-level tracks of a track list (parens-aware). */
+  const tracks = (v: string) => {
+    const out: string[] = []
+    let depth = 0
+    let cur = ''
+    for (const c of v.trim()) {
+      if (c === '(') depth++
+      else if (c === ')') depth--
+      if (/\s/.test(c) && depth === 0) {
+        if (cur) out.push(cur)
+        cur = ''
+      } else cur += c
+    }
+    if (cur) out.push(cur)
+    return out
+  }
+  const args = (fn: string, v: string) => {
+    const m = new RegExp(`^${fn}\\(([^]*)\\)$`).exec(v.trim())
+    expect(m, `\`${v}\` is not ${fn}(…)`).not.toBeNull()
+    return splitTop(m![1]).map((a) => a.trim())
+  }
+  for (const header of [false, true]) {
+    const chain = [new Set(['app']), new Set(['shell']), new Set(['layout', '[data-three-pane]', ...(header ? ['has-tempo-header'] : [])])]
+    it(`${header ? "with Tempo's header" : 'without a header'}: the strip's floor and ceiling and the panes' floor at every geometry`, () => {
+      const rows = winningValue(chain, blockLonghand('grid-template-rows'))
+      expect(rows, '.layout[data-three-pane]: nothing declares grid-template-rows').not.toBeNull()
+      const all = tracks(rows!.value)
+      const [strip, panes] = header ? (expect(all[0]).toBe('auto'), all.slice(1)) : all
+      expect(all, `\`${rows!.selector} { grid-template-rows: ${rows!.value} }\``).toHaveLength(header ? 3 : 2)
+      const [stripMin, stripSize] = args('minmax', strip)
+      const [lo, size, hi] = args('clamp', stripSize)
+      expect(size, "the strip's row is not the divider's variable").toBe('var(--tempo-wf-h, 25%)')
+      const [panesMin, panesMax] = args('minmax', panes)
+      expect(panesMax, 'the panes under the strip do not take the rest of the workspace').toBe('1fr')
+      for (const g of GEOMS) {
+        const at = `at font ${g.fontPx}px / --vh-eff ${g.vhEff}px`
+        for (const [name, v] of [['row minimum', stripMin], ['clamp floor', lo]]) {
+          expect(lengthPx(v, g), `the strip's ${name} \`${v}\` ${at}`).toBeCloseTo(resolveClamp(WATERFALL_SPLIT_MIN, g), 6)
+        }
+        expect(lengthPx(hi, g), `the strip's ceiling \`${hi}\` ${at}`).toBeCloseTo(resolveClamp(TEMPO_WATERFALL_SPLIT_MAX, g), 6)
+        expect(lengthPx(panesMin, g), `the panes' floor \`${panesMin}\` ${at}`).toBeCloseTo(resolveClamp(TEMPO_PANES_SPLIT_MIN, g), 6)
+      }
+    })
+  }
+  it("App's Tempo divider declares the same clamps", () => {
+    const src = readFileSync(fileURLToPath(new URL('./App.tsx', import.meta.url)), 'utf8')
+    const at = src.indexOf('varName="--tempo-wf-h"')
+    expect(at, 'no <PaneSeam varName="--tempo-wf-h" …> in App').toBeGreaterThan(-1)
+    const seam = src.slice(src.lastIndexOf('<PaneSeam', at), src.indexOf('/>', at))
+    expect(/\bmin=\{([^}]*)\}/.exec(seam)?.[1]).toBe('WATERFALL_SPLIT_MIN')
+    expect(/\bmax=\{([^}]*)\}/.exec(seam)?.[1]).toBe('TEMPO_WATERFALL_SPLIT_MAX')
   })
 })
 
