@@ -11997,6 +11997,7 @@ impl Engine {
             && self.sat_dial_owner.is_none()
         {
             self.split_tx_mhz = None;
+            self.split_tx_on_vfo_a_hz = None; // …and a reversed split with it
             self.split_dirty = true;
             self.tx_split_confirmed_hz = None;
         }
