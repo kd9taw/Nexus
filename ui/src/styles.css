@@ -33790,10 +33790,17 @@ tr.sel .aprs-sym {
   grid-template-columns: minmax(260px, var(--aprs-rail-w, 420px)) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   gap: var(--space-3);
-  /* flex:1 + min-height:0 only mean anything because the `.layout.single:has()` rule above
-     makes the parent a flex column. In the default block+scroll `.single` they are inert and
-     the map has no height to resolve against. */
-  min-height: 0;
+  /* flex:1 only means anything because the `.layout.single:has()` rule above makes the parent a
+     flex column. In the default block+scroll `.single` it is inert and the map has no height to
+     resolve against.
+     A FLOOR, 10em, a pane's (`--cockpit-fill-min` elsewhere). It was 0, and where the header and the
+     TX strip took the whole shell the body was crushed to 0 px: the map and the rail with the
+     beacon's fields were gone, clipped where the strip stands (900×600 at 175 %, and the matrix's
+     1366×768 / 1440×900 / 1536×864 at the OS's 150–175 % with Nexus at 150–175 %, measured). With
+     the floor the shell's deficit valve (`.layout.single.needed-panel.aprs-cockpit`) scrolls to it.
+     Where the body is taller, nothing moves. A definite floor, not content: the map's canvas still
+     resolves against the body's own height, so the growth loop stays closed. */
+  min-height: 10em;
   flex: 1;
   /* The containing block of the rail's width divider (`.aprs-railseam` below), and of nothing
      else: every other positioned box in the body has its own (`.aprs-map`, `.aprs-sym`). */

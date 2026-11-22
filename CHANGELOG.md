@@ -5,6 +5,11 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **APRS: the map and the station list no longer disappear with Nexus at 150 % or 175 %.** On a small window or a scaled screen (for example a 1366×768 laptop at 150 % display scaling with Nexus at 150 %), the APRS screen's header and TX strip took the whole height, and the map and the list beside it, with the beacon's fields, were squeezed to nothing. They now keep a minimum height and the screen scrolls to them. Where they had room, nothing changes.
+
 ## [1.25.0] — 2026-11-22
 
 ### Added
