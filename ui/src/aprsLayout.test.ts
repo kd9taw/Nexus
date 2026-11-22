@@ -42,12 +42,19 @@ describe('APRS layout invariants', () => {
     expect(rule![2]).toMatch(/display:\s*contents/)
   })
 
-  it('the map cell can shrink: bounded row track and no hard min-height floor', () => {
+  it('the map cell shrinks to a fixed 10em floor, never to content, and the shell scrolls to it', () => {
     const body = /\.aprs-body\s*\{([^}]*)\}/.exec(css)
     expect(body, '.aprs-body rule must exist').not.toBeNull()
     // A bare `1fr` row keeps a min-content floor, which is the other way this overflows.
     expect(body![1]).toMatch(/grid-template-rows:\s*minmax\(0, 1fr\)/)
-    expect(body![1]).toMatch(/min-height:\s*0/)
+    // A FIXED floor (a pane's 10em), never `auto`/content: a content floor re-arms the growth loop above. It was 0,
+    // and where the header and the TX strip took the whole shell the body was crushed to 0 px (the map and the
+    // beacon's fields gone, 900×600 at 175 %, measured).
+    expect(body![1]).toMatch(/min-height:\s*10em/)
+    // …which is safe only because the shell scrolls rather than clips: the deficit valve (0,4,0).
+    const valve = /\.layout\.single\.needed-panel\.aprs-cockpit\s*\{([^}]*)\}/.exec(css)
+    expect(valve, 'the APRS deficit valve rule must exist').not.toBeNull()
+    expect(valve![1]).toMatch(/overflow-y:\s*auto/)
 
     // A hard px floor on the map would push the grid past its parent on a short window —
     // the additive-floor clipping this codebase has already been bitten by (see
