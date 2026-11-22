@@ -1449,6 +1449,7 @@ export const DE: PartialCatalog = {
   "settings.confirmations.clublog.apiKey.notSavedAtStation": "An der Station keiner gespeichert",
   "settings.confirmations.clublog.apiKey.watched": "Ausgeblendet, solange ein Stream zusieht",
   "settings.stationOnly.hint": "An der Station eingestellt",
+  "settings.thisRadio.hint": "Gilt für dieses Funkgerät ({{name}}): Jedes Funkgerät hat hier seine eigene Einstellung.",
   "settings.confirmations.clublog.apiKey.hint": "Das sind die Zugangsdaten der <b>Anwendung</b>, nicht Ihre — offizielle Installer-Builds bringen einen mit, dann genügen E-Mail + App-Passwort oben. Selbst aus dem Quellcode gebaut? Unter clublog.org/requestapikey.php einen kostenlosen Schlüssel anfordern und hier einfügen (Open Source darf keinen mitliefern — ClubLog sperrt veröffentlichte Schlüssel automatisch).",
   "settings.confirmations.clublog.upload.label": "QSOs automatisch zu ClubLog hochladen",
   "settings.confirmations.clublog.upload.hint": "Schiebt jedes geloggte QSO in Echtzeit zu ClubLog (braucht E-Mail + App-Passwort oben; offizielle Builds bringen den API-Schlüssel mit).",

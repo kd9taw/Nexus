@@ -9732,6 +9732,7 @@ export const ZH_HANT: PartialCatalog = {
   "settings.confirmations.clublog.apiKey.notSavedAtStation": "台站端沒有儲存",
   "settings.confirmations.clublog.apiKey.watched": "有串流監視時隱藏",
   "settings.stationOnly.hint": "在台站端設定",
+  "settings.thisRadio.hint": "此電台專用（{{name}}）：每台電台在此各有自己的設定。",
   "settings.confirmations.clublog.apiKey.hint": "這是<b>應用</b>憑據，不是你的個人憑據 — 官方安裝版本會內建一個，你只需上方的信箱 + 應用密碼。從原始碼構建？請到 clublog.org/requestapikey.php 申請免費金鑰並貼上在此（開源專案無法自帶 — ClubLog 會自動吊銷已公開的金鑰）。",
   "settings.confirmations.clublog.upload.label": "自動上傳 QSO 到 ClubLog",
   "settings.confirmations.clublog.upload.hint": "即時把每次記錄的 QSO 推送到 ClubLog（需要上方的信箱 + 應用密碼；官方版本內建 API 金鑰）。",

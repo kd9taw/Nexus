@@ -1029,6 +1029,128 @@ fn a_save_from_afar_keeps_the_ptt_of_the_radio_its_form_edited() {
     );
 }
 
+/// A shack of two radios cabled and capped differently, the live one radio 1 (B): radio 0 (A)
+/// keys on RTS through a WinKeyer and FSK, capped at 30 % digital; radio 1 keys over CAT with the
+/// defaults, capped at 80 %. The CAT broker's PTT, the station's, is off.
+fn two_radios_cabled_apart() -> tempo_app::settings::Settings {
+    use tempo_app::settings::{CwKeyerBackend, RadioProfile, Settings};
+    let a = RadioProfile {
+        id: 0,
+        name: "A".into(),
+        ptt_method: "rts".into(),
+        cat_rts_keys_ptt: true,
+        cat_ptt_line_state: "low".into(),
+        cat_rts_state: "high".into(),
+        cat_dtr_state: "untouched".into(),
+        cat_serial_handshake: "none".into(),
+        cw_keyer: CwKeyerBackend::WinKeyer,
+        winkeyer_port: "COM6".into(),
+        cw_key_port: "COM7".into(),
+        cw_key_line: "rts".into(),
+        rtty_backend: "fsk".into(),
+        rtty_fsk_port: "COM8".into(),
+        rtty_fsk_line: "rts".into(),
+        max_power_phone: Some(0.5),
+        max_power_cw: Some(0.4),
+        max_power_digital: Some(0.3),
+        max_power_am: Some(0.2),
+        ..RadioProfile::default()
+    };
+    let b = RadioProfile {
+        id: 1,
+        name: "B".into(),
+        ptt_method: "cat".into(),
+        rigctld_port: 4535,
+        max_power_phone: Some(0.9),
+        max_power_cw: Some(0.9),
+        max_power_digital: Some(0.8),
+        max_power_am: Some(0.25),
+        ..RadioProfile::default()
+    };
+    let mut shack = Settings {
+        radios: vec![a, b],
+        active_radio: 1,
+        ..Settings::default()
+    };
+    shack.sync_flat_from_active();
+    shack.cat_broker_ptt = false;
+    shack
+}
+
+/// ⛔ A SAVE FROM AFAR NEVER WRITES THE LIVE RADIO'S KEYING LINES OR CAPS INTO ANOTHER RADIO. The
+/// remote form opened on radio A; the shack has switched to radio B since. The save's flat fields
+/// describe A and `Engine::apply_settings` folds them into A's profile, so its PTT lines, keyers
+/// and caps must come back as the shack has them FOR A (not B's, the live flat ones), whatever the
+/// form says: A's profile is unchanged and B's untouched. The CAT broker's PTT, the station's,
+/// stays as the shack has it.
+#[test]
+fn a_save_from_afar_after_a_switch_keeps_each_radios_own_lines_and_caps() {
+    let shack = two_radios_cabled_apart();
+    let afar = Afar {
+        stand_down: 3,
+        starts_voided: 0,
+    };
+    // The form, opened on A: its flat fields as B has them now (the worst case), and an attempt
+    // to raise A's cap and turn its broker PTT on.
+    let mut save = shack.clone();
+    save.active_radio = 0;
+    save.max_power_digital = Some(1.0);
+    save.cat_broker_ptt = true;
+    keep_the_shacks_transmit_settings(&shack, &mut save, Some(&afar));
+    let mut e = tempo_app::engine::Engine::with_settings(shack.clone());
+    e.apply_settings(save);
+    let after = e.settings();
+    assert_eq!(after.active_radio, 1, "the shack stays on B");
+    assert!(!after.cat_broker_ptt, "the station's broker PTT stays off");
+    for (i, who) in [(0, "radio A's"), (1, "radio B's")] {
+        assert_eq!(
+            radio_keying(&after.radios[i]),
+            radio_keying(&shack.radios[i]),
+            "{who} PTT, keyers and caps are as the shack had them"
+        );
+    }
+    // CONTROL: the same save at the shack is taken, and A takes the form's cap.
+    let mut save = shack.clone();
+    save.active_radio = 0;
+    save.max_power_digital = Some(0.6);
+    keep_the_shacks_transmit_settings(&shack, &mut save, None);
+    let mut e = tempo_app::engine::Engine::with_settings(shack.clone());
+    e.apply_settings(save);
+    assert_eq!(
+        e.settings().radios[0].max_power_digital,
+        Some(0.6),
+        "CONTROL: at the shack, the form's cap reaches the radio it edited"
+    );
+}
+
+/// A radio's PTT method, keying lines, keyers and power caps, by their wire keys.
+fn radio_keying(p: &tempo_app::settings::RadioProfile) -> serde_json::Value {
+    let all = serde_json::to_value(p).expect("a profile serializes");
+    let keys = [
+        "pttMethod",
+        "catRtsState",
+        "catDtrState",
+        "catRtsKeysPtt",
+        "catSerialHandshake",
+        "catPttLineState",
+        "cwKeyer",
+        "winkeyerPort",
+        "cwKeyPort",
+        "cwKeyLine",
+        "rttyBackend",
+        "rttyFskPort",
+        "rttyFskLine",
+        "maxPowerPhone",
+        "maxPowerCw",
+        "maxPowerDigital",
+        "maxPowerAm",
+    ];
+    keys.iter()
+        .map(|k| (k.to_string(), all[*k].clone()))
+        .collect::<serde_json::Map<_, _>>()
+        .into()
+}
+
 /// ⛔ The per-radio edit from afar (`update_radio_profile`) keeps that radio's PTT method and port;
 /// the rest of its patch is taken, and the shack's own edit takes them.
 #[test]

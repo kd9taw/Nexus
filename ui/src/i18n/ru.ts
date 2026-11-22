@@ -10238,6 +10238,7 @@ export const RU: PartialCatalog = {
   "settings.confirmations.clublog.apiKey.notSavedAtStation": "На станции не сохранён",
   "settings.confirmations.clublog.apiKey.watched": "Скрыт, пока идёт трансляция",
   "settings.stationOnly.hint": "Задаётся на станции",
+  "settings.thisRadio.hint": "Настройка этой радиостанции ({{name}}): у каждой радиостанции здесь своя.",
   "settings.confirmations.clublog.apiKey.hint": "Это учётные данные <b>приложения</b>, а не ваши — официальные сборки установщика включают их, и вам нужны только email и пароль приложения выше. Собираете из исходников? Запросите бесплатный ключ на clublog.org/requestapikey.php и вставьте его сюда (открытый код не может поставляться с ключом — ClubLog автоматически отзывает опубликованные ключи).",
   "settings.confirmations.clublog.upload.label": "Автоотправка QSO в ClubLog",
   "settings.confirmations.clublog.upload.hint": "Отправлять каждое записанное QSO в ClubLog в реальном времени (нужны email и пароль приложения выше; официальные сборки включают API-ключ).",
