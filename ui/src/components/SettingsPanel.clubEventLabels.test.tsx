@@ -87,13 +87,12 @@ beforeEach(() => {
 afterEach(cleanup)
 
 /** The field's name starts with its label's words (a wrapping label names it with its hint after them). */
-const named = (key: keyof typeof EN) => new RegExp('^' + EN[key].replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+const named = (key: keyof typeof EN) => new RegExp('^' + String(EN[key]).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
 
 describe('the club event fields have accessible names', () => {
   it('Event name, Host port and Join event at are each named by their label', async () => {
     renderPanel()
-    fireEvent.click(await screen.findByRole('tab', { name: /contesting/i }))
-    await waitFor(() => expect(document.getElementById('settings-field-day-club')).toBeTruthy())
+    await openContesting()
     const club = within(document.getElementById('settings-field-day-club')!)
     expect(club.getByRole('textbox', { name: named('settings.fdClub.eventName.label') })).toBeTruthy()
     expect(club.getByRole('spinbutton', { name: named('settings.fdClub.hostPort.label') })).toBeTruthy()
