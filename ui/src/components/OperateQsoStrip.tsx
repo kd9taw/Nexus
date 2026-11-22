@@ -189,6 +189,78 @@ function useParkLine(ref: RefObject<HTMLElement | null>) {
   }, [ref])
 }
 
+/** A CONTROL OF THE STRIP'S LOWER LINES, REVEALED IN ONE JUMP, IS SHOWN WHERE IT REALLY IS. Parked (`useParkLine`), the
+ *  strip is a sticky box held up at the scrollport's foot, and a scroll of the shell does not move it until the strip's own
+ *  place comes up to meet it. The browser reveals a control (`focus()`, and the layout contract's `focus({ preventScroll })`
+ *  + `scrollIntoView({ block: 'nearest' })`) by measuring it where the parked strip draws it and scrolling by that much,
+ *  which falls short by however far the strip is held up: at the floor (1366×768 at 175 %) the larger-meters button stayed
+ *  at y 454–478 of a 438 px window after a reveal from the top (measured in Chrome). A wheel or Tab walking down the strip
+ *  is not affected: it brings the strip's place up a step at a time.
+ *  So when a control of the strip takes the focus and the browser then scrolls the shell to reveal it, the frame after
+ *  (before anything is drawn) checks it is inside the shell; if not, it is revealed again with the strip measured in its own
+ *  place — `position: static` for that one call, undone at once (a sticky box's own place is its static one). A focus with
+ *  no reveal (the shell did not scroll: `preventScroll` alone, as a dialog gives the focus back) is left where it is, and a
+ *  control already in view moves nothing. The shell's scroll padding (the parked line) is kept clear as the browser keeps it.
+ *  WHERE THE SHELL STOOD BEFORE THE FOCUS is the last scroll position its scroll events reported: a plain `focus()` scrolls
+ *  before the focus event is dispatched, and its scroll event comes only with the next frame.
+ *  Revealing a lower line scrolls the shell to the strip's own place, which takes the parked first line (Stop TX's) up
+ *  off the foot with it, exactly as a wheel scrolled that far does.
+ *  NEVER UNDER A PRESS: while a pointer is down on the strip nothing is re-revealed, so a press made while the shell is
+ *  still scrolling (a smooth wheel, momentum) is never moved out from under the pointer between down and up, and its
+ *  click, Stop TX's included, lands where it was pressed. And the strip is parked again in a `finally`: a reveal that
+ *  throws (a webview without `behavior: 'instant'`) can never leave it unparked with Stop TX's line off the foot. */
+function useRevealFocus(ref: RefObject<HTMLElement | null>) {
+  useEffect(() => {
+    const strip = ref.current
+    const shell = strip?.closest<HTMLElement>('main')
+    if (!strip || !shell) return
+    let frame = 0
+    let pressed = false
+    let seen = shell.scrollTop
+    const onDown = () => {
+      pressed = true
+    }
+    const onUp = () => {
+      pressed = false
+    }
+    const onScroll = () => {
+      seen = shell.scrollTop
+    }
+    const onFocus = (e: FocusEvent) => {
+      const el = e.target as HTMLElement
+      const from = seen
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => {
+        if (pressed || document.activeElement !== el || shell.scrollTop === from) return
+        const s = shell.getBoundingClientRect()
+        const q = el.getBoundingClientRect()
+        if (q.top >= s.top && q.bottom <= s.bottom) return
+        const was = strip.style.position
+        strip.style.position = 'static'
+        try {
+          el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' })
+        } finally {
+          strip.style.position = was
+        }
+      })
+    }
+    shell.addEventListener('scroll', onScroll, { passive: true })
+    strip.addEventListener('focusin', onFocus)
+    strip.addEventListener('pointerdown', onDown)
+    // Released anywhere: the pointer can leave the strip before it is let go.
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+    return () => {
+      cancelAnimationFrame(frame)
+      shell.removeEventListener('scroll', onScroll)
+      strip.removeEventListener('focusin', onFocus)
+      strip.removeEventListener('pointerdown', onDown)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+    }
+  }, [ref])
+}
+
 function reportLabel(rx: number | null | undefined): string | null {
   if (rx === null || rx === undefined) return null
   return `${rx > 0 ? '+' : ''}${rx} dB`
@@ -238,6 +310,7 @@ export function OperateQsoStrip({
   const meterStyle = useTxMeterStyle()
   const stripRef = useRef<HTMLElement>(null)
   useParkLine(stripRef)
+  useRevealFocus(stripRef)
   // ⚠️ cqRunning, NOT qso.running. `running` is also true through a directed S&P call (the
   // engine's own comment at call_station_ctx says so) and nothing clears it after the QSO —
   // so this strip lit Call CQ solid through every S&P contact and forever after, and the
