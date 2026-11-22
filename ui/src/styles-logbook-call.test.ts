@@ -42,7 +42,7 @@ describe('the Logbook edit form fits a whole callsign in CALL', () => {
 
   it('lets the CALL row wrap instead of squeezing the input', () => {
     // WRAP, not a min-width floor: a floor would overflow the 140px track this grid most
-    // often produces (the `.logbook-when` idiom works only because that control is rare).
+    // often produces (the date box's old 190px floor did exactly that at 1366×768).
     expect(declFor('.logbook-field-call .settings-input-row', 'flex-wrap')).toBe('wrap')
   })
 

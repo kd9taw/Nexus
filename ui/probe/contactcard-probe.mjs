@@ -18,8 +18,8 @@
 //
 // THE FILLED IOTA BOX (`?iota=1`): the Logbook's Add form opened with a real click, a call typed, and the
 // form's IOTA box filled by the station (EU-901, "from the spot") under a very long group name, at
-// 1366×768 and 1920×1080 (the OS at 100 %) at the app's smallest (65 %) and largest (175 %) UI scale, and
-// 900×600 at 175 % (xs). Asserted: the box holds
+// 1366×768 and 1920×1080 (the OS at 100 %) at the app's smallest (65 %) and largest (175 %) UI scale, 1366×768 at
+// 100 % (where the date box's old 190 px floor scrolled the form sideways), and 900×600 at 175 % (xs). Asserted: the box holds
 // the reference and is the topmost thing at its centre, the group name is drawn whole inside the form
 // and covers the centre of no control, the source is shown, nothing scrolls sideways (page or form), and
 // Log is topmost once scrolled to. Its CONTROL (`&iotacontrol=1`, 1366×768 at 175 %): the name may not
@@ -243,9 +243,11 @@ async function measureIota(size, zoom, control, islandControl = false) {
   return last
 }
 
-// The app's own UI zoom at its two ends, on the floor screen and on 1080p, both unscaled by the OS.
+// The app's own UI zoom at its two ends, on the floor screen and on 1080p, both unscaled by the OS, and the floor screen
+// at 100 %: the date box's 190 px floor pushed it past the form's 140 px grid track there, and the form scrolled sideways.
 const IOTA_SIZES = [
   { ...LAPTOP, zoom: 0.65 },
+  { ...LAPTOP, zoom: 1 },
   { ...LAPTOP, zoom: 1.75 },
   { ...FHD, zoom: 0.65 },
   { ...FHD, zoom: 1.75 },
