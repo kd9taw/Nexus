@@ -19,8 +19,9 @@
 // AND THE PICTURE (screens of the matrix, the app at the fit and at 125–175 %): the waterfall's picture is at least 40
 // layout px tall (its canvas over the UI zoom). The row's floor was the ROW's: where the header wrapped onto 2–6 lines it
 // took most or all of it, and the picture was 0 px at 1920×1080 at the OS's 175 % with the app at 175 % and 17 more
-// sizes of the matrix (measured). ITS CONTROL: the header's measured height taken away from the row's floor
-// (`--rtty-wf-head-h: 0px`) at 1366×768 / 175 % must leave a picture under 40.
+// sizes of the matrix (measured). The row's floor is bounded as well: exactly max(the shared floor, the header + 40),
+// within 1 px. ITS CONTROLS: the header's measured height taken away from the row's floor (`--rtty-wf-head-h: 0px`) at
+// 1366×768 / 175 % must leave a picture under 40, and a floor of header + 80 must not read as that bound.
 // AND THE OBSERVER SETTLES (four sizes, two of them where the header wraps once more as the row grows): the header's
 // height is written on the row at most twice a page. ITS CONTROL: a header that grows a line with every write (a
 // planted feedback that never settles) must be written more often.
@@ -202,10 +203,19 @@ const TOOLBAR = `(async () => {
 })()`
 /** The waterfall's picture, in layout px (its canvas's rendered height over the UI zoom). */
 const PICTURE = `(() => {
-  const shell = document.querySelector('main.rtty-cockpit'), c = shell?.querySelector('.rtty-wf-row .waterfall-canvas')
+  const shell = document.querySelector('main.rtty-cockpit'), row = shell?.querySelector('.rtty-wf-row'), c = row?.querySelector('.waterfall-canvas')
   if (!c) return null
   const z = shell.getBoundingClientRect().height / shell.offsetHeight
-  return Math.round(c.getBoundingClientRect().height / z * 10) / 10
+  const head = row.querySelector(':scope > .waterfall-wrap > .panel-header')
+  // The floor the row's rule computes to, and its shared term alone (the header's term pushed far under it): a style
+  // read, no layout, restored at once.
+  const floor = parseFloat(getComputedStyle(row).minHeight)
+  const was = row.style.getPropertyValue('--rtty-wf-head-h')
+  row.style.setProperty('--rtty-wf-head-h', '-100000px')
+  const shared = parseFloat(getComputedStyle(row).minHeight)
+  row.style.setProperty('--rtty-wf-head-h', was)
+  return { pic: Math.round(c.getBoundingClientRect().height / z * 10) / 10, floor, shared,
+    head: Math.round(head.getBoundingClientRect().height / z * 100) / 100, row: Math.round(row.getBoundingClientRect().height / z * 10) / 10 }
 })()`
 const PICTURE_MIN = 40
 /** Every value the page writes for the header's height on the row, from the document's start (a mutation observer). */
@@ -273,14 +283,21 @@ try {
   if (caught.length === 0) red(`CONTROL FAILED — a planted 120 px margin under the strip passed check 1 (cockpit scrolls ${m?.valve}); the check cannot fail`)
   else console.log(`rttyfit-probe: CONTROL — ${caught[0]} (caught)`)
   for (const size of PICTURE_SIZES) {
-    const pic = (await measure(size, {}, null, PICTURE))?.after
-    if (pic == null) red(`RTTY at ${tagOf(size)}: the waterfall's picture never drew`)
-    else if (pic < PICTURE_MIN) red(`RTTY at ${tagOf(size)}: the waterfall's picture is ${pic} layout px, under ${PICTURE_MIN}`)
-    else console.log(`rttyfit-probe: ${tagOf(size).padEnd(22)} waterfall picture ${pic} layout px`)
+    const p = (await measure(size, {}, null, PICTURE))?.after
+    if (p == null) { red(`RTTY at ${tagOf(size)}: the waterfall's picture never drew`); continue }
+    const want = Math.max(p.shared, p.head + PICTURE_MIN)
+    if (p.pic < PICTURE_MIN) red(`RTTY at ${tagOf(size)}: the waterfall's picture is ${p.pic} layout px, under ${PICTURE_MIN}`)
+    // THE OPERATOR'S PICTURE GUARANTEE, bounded: the row's floor is exactly max(shared floor, header + 40), within 1 px.
+    else if (Math.abs(p.floor - want) > 1) red(`RTTY at ${tagOf(size)}: the row's floor is ${p.floor} layout px, not max(shared ${p.shared}, header ${p.head} + ${PICTURE_MIN}) = ${want}`)
+    else console.log(`rttyfit-probe: ${tagOf(size).padEnd(22)} waterfall picture ${p.pic} layout px; row floor ${p.floor} = max(shared ${p.shared}, header ${p.head} + ${PICTURE_MIN})`)
   }
   const pc = (await measure([LAPTOP, '175'], {}, '.rtty-wf-row { --rtty-wf-head-h: 0px !important }', PICTURE))?.after
-  if (pc == null || pc >= PICTURE_MIN) red(`CONTROL FAILED — with the header's height taken from the row's floor, the picture at 1366×768 / 175 % is ${pc}; the picture check cannot fail`)
-  else console.log(`rttyfit-probe: CONTROL — the header's height taken from the row's floor at 1366×768 / 175 %: a ${pc} px picture (caught)`)
+  if (pc == null || pc.pic >= PICTURE_MIN) red(`CONTROL FAILED — with the header's height taken from the row's floor, the picture at 1366×768 / 175 % is ${pc?.pic}; the picture check cannot fail`)
+  else console.log(`rttyfit-probe: CONTROL — the header's height taken from the row's floor at 1366×768 / 175 %: a ${pc.pic} px picture (caught)`)
+  const fc = (await measure([LAPTOP, '175'], {}, '.rtty-wf-row { min-height: calc(var(--rtty-wf-head-h, 0px) + 80px) !important }', PICTURE))?.after
+  const fwant = fc && Math.max(fc.shared, fc.head + PICTURE_MIN)
+  if (!fc || Math.abs(fc.floor - fwant) <= 1) red(`CONTROL FAILED — a row floor of header + 80 px read as max(shared, header + ${PICTURE_MIN}) at 1366×768 / 175 %; the floor's bound cannot fail`)
+  else console.log(`rttyfit-probe: CONTROL — a row floor of header + 80 px: ${fc.floor}, not ${fwant} (caught)`)
   for (const size of SETTLE_SIZES) {
     const w = (await measure(size, {}, null, 'window.__headWrites', HEAD_WRITES))?.after
     if (!w) red(`RTTY at ${tagOf(size)}: the header's height was never written on the row`)
