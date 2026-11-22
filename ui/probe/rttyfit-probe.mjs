@@ -16,14 +16,20 @@
 //      does not scroll.
 // THE CONTROL, run every time: a planted 120 px margin under the waterfall strip at 1920×1080 / 150 % must
 // make check 1 fail. If it passes, the check cannot fail and the probe says so instead of passing.
+// AND THE PICTURE (screens of the matrix, the app at the fit and at 125–175 %): the waterfall's picture is at least 40
+// layout px tall (its canvas over the UI zoom). The row's floor was the ROW's: where the header wrapped onto 2–6 lines it
+// took most or all of it, and the picture was 0 px at 1920×1080 at the OS's 175 % with the app at 175 % and 17 more
+// sizes of the matrix (measured). ITS CONTROL: the header's measured height taken away from the row's floor
+// (`--rtty-wf-head-h: 0px`) at 1366×768 / 175 % must leave a picture under 40.
 // AND THE WATERFALL TOOLBAR (the matrix's tightest RTTY, 1366×768 at 175 %, and the windows dragged below the matrix
 // at 150–175 %, where the toolbar wraps onto more lines than its row is tall): every control of the waterfall's header,
 // focused and revealed the layout contract's way (`focus({ preventScroll })` + `scrollIntoView({ block: 'nearest' })`),
 // is drawn inside the waterfall's row (`.rtty-wf-row`). Wrapped past the row, its last lines were drawn where the TX
 // strip stands, and five of them stayed under the strip at every scroll position (700×800 at 175 %, measured). Inside the
 // row is what it can own: what covers the row (a parked strip or dock) is the shells' scroll padding's to clear, which
-// stopvisible's Tab walk holds. ITS CONTROL: the waterfall's box let overflow again (`overflow: visible`) at 700×800 /
-// 175 % must leave a control outside the row.
+// stopvisible's Tab walk holds. ITS CONTROL: the waterfall's box let overflow again (`overflow: visible`, and the
+// picture's floor taken away, which alone now gives the header its room) at 700×800 / 175 % must leave a control
+// outside the row.
 //
 // exit: 0 every check held · 1 a red, or a control that could not fail · 2 the page never drew RTTY
 import { createServer } from 'vite'
@@ -32,7 +38,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
-import { FHD, FHD_125, FHD_150, FLOOR, LAPTOP, MID_1536, QHD, UHD_200, metrics, offMatrix } from './sizes.mjs'
+import { FHD, FHD_125, FHD_150, FHD_175, FLOOR, FLOOR_125, LAPTOP, MID_1536, QHD, UHD_200, metrics, offMatrix } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 const REAL_API = join(UI, 'src', 'api.ts')
@@ -187,6 +193,16 @@ const TOOLBAR = `(async () => {
   document.activeElement?.blur?.()
   return { n: ctl.length, bad }
 })()`
+/** The waterfall's picture, in layout px (its canvas's rendered height over the UI zoom). */
+const PICTURE = `(() => {
+  const shell = document.querySelector('main.rtty-cockpit'), c = shell?.querySelector('.rtty-wf-row .waterfall-canvas')
+  if (!c) return null
+  const z = shell.getBoundingClientRect().height / shell.offsetHeight
+  return Math.round(c.getBoundingClientRect().height / z * 10) / 10
+})()`
+const PICTURE_MIN = 40
+const PICTURE_SIZES = [[FLOOR, null], [LAPTOP, null], [FHD, null], [LAPTOP, '125'], [LAPTOP, '150'], [LAPTOP, '175'], [FHD, '175'],
+  [FLOOR_125, '125'], [FLOOR_125, '175'], [FHD_175, '150'], [FHD_175, '175'], [FLOOR, '100']]
 const TOOLBAR_SIZES = [[LAPTOP, '175'], [offMatrix(700, 800), '175'], [offMatrix(900, 600), '175'], [offMatrix(900, 600), '150']]
 const tagOf = ([size, s]) => `${size.name} ${s ? `${s} %` : 'fit'}`
 /** Checks 1-3 for one page; `which` 0 = scope shown, 1 = hidden. */
@@ -233,16 +249,25 @@ try {
   const caught = m ? reds(tagOf(size), 0, m).filter((r) => r.includes('cockpit scrolls')) : []
   if (caught.length === 0) red(`CONTROL FAILED — a planted 120 px margin under the strip passed check 1 (cockpit scrolls ${m?.valve}); the check cannot fail`)
   else console.log(`rttyfit-probe: CONTROL — ${caught[0]} (caught)`)
+  for (const size of PICTURE_SIZES) {
+    const pic = (await measure(size, {}, null, PICTURE))?.after
+    if (pic == null) red(`RTTY at ${tagOf(size)}: the waterfall's picture never drew`)
+    else if (pic < PICTURE_MIN) red(`RTTY at ${tagOf(size)}: the waterfall's picture is ${pic} layout px, under ${PICTURE_MIN}`)
+    else console.log(`rttyfit-probe: ${tagOf(size).padEnd(22)} waterfall picture ${pic} layout px`)
+  }
+  const pc = (await measure([LAPTOP, '175'], {}, '.rtty-wf-row { --rtty-wf-head-h: 0px !important }', PICTURE))?.after
+  if (pc == null || pc >= PICTURE_MIN) red(`CONTROL FAILED — with the header's height taken from the row's floor, the picture at 1366×768 / 175 % is ${pc}; the picture check cannot fail`)
+  else console.log(`rttyfit-probe: CONTROL — the header's height taken from the row's floor at 1366×768 / 175 %: a ${pc} px picture (caught)`)
   for (const size of TOOLBAR_SIZES) {
     const t = (await measure(size, {}, null, TOOLBAR))?.after
     if (!t) red(`RTTY at ${tagOf(size)}: the waterfall's header never drew`)
     else if (t.bad.length) red(`RTTY at ${tagOf(size)}: ${t.bad.length} of the waterfall header's ${t.n} controls are drawn outside the waterfall's row once revealed (${t.bad.slice(0, 6).join(', ')})`)
     else console.log(`rttyfit-probe: ${tagOf(size).padEnd(22)} waterfall header: ${t.n} controls, each inside the waterfall's row once revealed`)
   }
-  const tc = (await measure([offMatrix(700, 800), '175'], {}, '.rtty-wf-row > .waterfall-wrap { overflow: visible !important }', TOOLBAR))?.after
+  const tc = (await measure([offMatrix(700, 800), '175'], {}, '.rtty-wf-row > .waterfall-wrap { overflow: visible !important } .rtty-wf-row { --rtty-wf-head-h: 0px !important }', TOOLBAR))?.after
   if (!tc?.bad.length) red(`CONTROL FAILED — with the waterfall's box letting its toolbar overflow, no header control was drawn outside the row at 700×800 / 175 %; the toolbar check cannot fail`)
   else console.log(`rttyfit-probe: CONTROL — the toolbar let overflow at 700×800 / 175 %: ${tc.bad.length} outside the row (caught)`)
-  if (code === 0) console.log('rttyfit-probe: PASS — RTTY scrolls no more than 1.21.0 did, at every size, its stop controls on screen wherever it does not scroll, every waterfall header control inside its row once revealed, and the controls were caught')
+  if (code === 0) console.log('rttyfit-probe: PASS — RTTY scrolls no more than 1.21.0 did, at every size, its stop controls on screen wherever it does not scroll, every waterfall header control inside its row once revealed, a waterfall picture of at least 40 layout px, and the controls were caught')
   process.exitCode = process.exitCode || code
 } catch (e) {
   if (!process.exitCode) {

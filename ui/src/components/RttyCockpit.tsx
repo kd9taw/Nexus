@@ -8,7 +8,8 @@
 // plates are invariant tokens and stay in the code. The F-key macro sets (their texts are
 // invariant too) live in `features/rttyMacros.ts`, and their buttons and editor in the migrated
 // `RttyMacroEditor.tsx`.
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { RefObject } from 'react'
 import type { AppSnapshot, BandChannel, KeyboardMacroProfile, RttyState, Settings } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip, keepInSight, revealAfterPress } from './CockpitTxStrip'
@@ -374,6 +375,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   const logFrameRef = useRef<HTMLElement>(null)
   // The waterfall strip (the row holding the waterfall and the tuning scope), for the divider under it.
   const wfRef = useRef<HTMLDivElement>(null)
+  useWaterfallHeadHeight(wfRef)
   const streamLogPair = panels != null && snap != null && shown('stream')
   const streamShare = streamLogPair ? panels?.layout.share.stream : undefined
   // Live decoder state — polled at 2 Hz while this is the visible view. The
@@ -1820,3 +1822,40 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     </main>
   )
 }
+
+/** THE WATERFALL'S PICTURE HAS A FLOOR, not only its row. The row (`.rtty-wf-row`) is a size container, so its content
+ *  never sizes it, and its floor was the row's: where the waterfall's header wrapped onto 2–6 lines it took most or all
+ *  of that floor and the picture was 0 px (1920×1080 at the OS's 175 % with the app at 175 %, measured). The header's
+ *  height is written on the row (`--rtty-wf-head-h`, layout px), and the row's floor is that plus the picture's floor
+ *  (styles.css `.rtty-wf-row`). Observed on the header alone and written only when it changed: the write sizes the row,
+ *  never the header's width, unless the row's growth widens the tuning scope's square beside it (`100cqh`), which the
+ *  observer then reads once more; the square is capped (cockpit-panes.css `.rtty-tuning-box`), so that settles. */
+function useWaterfallHeadHeight(row: RefObject<HTMLDivElement | null>) {
+  const seen = useRef<{ head: HTMLElement; observer: ResizeObserver } | null>(null)
+  useLayoutEffect(() => {
+    const strip = row.current
+    const head = strip?.querySelector<HTMLElement>(':scope > .waterfall-wrap > .panel-header') ?? null
+    if (seen.current?.head === head) return
+    seen.current?.observer.disconnect()
+    seen.current = null
+    if (!strip || !head || typeof ResizeObserver === 'undefined') {
+      strip?.style.removeProperty('--rtty-wf-head-h')
+      return
+    }
+    const write = () => {
+      // Unrounded, in layout px (its rendered height over the UI zoom): `offsetHeight` rounds down, and the picture came
+      // out half a pixel under its floor.
+      const q = head.getBoundingClientRect().height
+      const z = head.offsetHeight > 0 ? q / head.offsetHeight : 1
+      const zoom = (head as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom
+      const h = `${Math.ceil((q / (typeof zoom === 'number' && zoom > 0 ? zoom : z)) * 100) / 100}px`
+      if (strip.style.getPropertyValue('--rtty-wf-head-h') !== h) strip.style.setProperty('--rtty-wf-head-h', h)
+    }
+    const observer = new ResizeObserver(write)
+    observer.observe(head)
+    write()
+    seen.current = { head, observer }
+  })
+  useEffect(() => () => seen.current?.observer.disconnect(), [])
+}
+
