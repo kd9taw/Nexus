@@ -106,18 +106,13 @@ export function RotorStrip({ active = true, targetCall, onPointAt, onOpenSetting
       .catch(() => {})
     // One single-flight poll (#335): `read_rotator` and `get_sat_transponder` take the engine
     // mutex, so a tick skips while any of the last set is still out.
-    //
-    // Each answer is taken only in the shape the strip can read out: a bearing that is not a
-    // finite number is no bearing, and a track or hold with no bird name is none. Anything else
-    // reached the header as "NaN°T" and a raw `{{bird}}` (the layout probes answer `{}` to every
-    // read they do not model); an empty answer must read as nothing there, never a broken readout.
     const stop = pollSingleFlight('rotor', 2_000, (owns) =>
       Promise.allSettled([
         readRotator()
-          .then((v) => owns() && setAz(typeof v === 'number' && Number.isFinite(v) ? v : null))
+          .then((v) => owns() && setAz(v))
           .catch(() => owns() && setAz(null)),
-        getSatTrackStatus().then((t) => owns() && setSatTrack(t?.name ? t : null)),
-        getSatTransponder().then((h) => owns() && setHeld(h?.name ? h : null)),
+        getSatTrackStatus().then((t) => owns() && setSatTrack(t)),
+        getSatTransponder().then((h) => owns() && setHeld(h)),
       ]),
     )
     getDeclination()
