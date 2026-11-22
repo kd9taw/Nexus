@@ -7,7 +7,7 @@
 //
 // THE RULE, once, for every overlay present and future: while any overlay is open (anything drawn with role dialog,
 // alertdialog or menu, anything aria-modal, or a page whose pointer events are locked), every stop control
-// on screen that the overlay keeps from being clicked gets a MIRROR in this layer — the one layer above every other
+// on screen that the overlay covers ANY PART of gets a MIRROR in this layer — the one layer above every other
 // (`.stop-layer`, the top z-index of the app; `stop-layer.test.ts` computes that it wins over every overlay's). The
 // mirror is a copy of the button, drawn at the button's own place and size (Stop TX does not move), and a click on it
 // is the button's own click: `original.click()`, so the stop runs through exactly the handler and the wire it always
@@ -48,7 +48,17 @@
 // Screen readers see only the button: the layer and every mirror are aria-hidden, and the mirror has no id. The
 // button stays the accessible control (under a Radix dialog it is hidden from them with the rest of the page, as it
 // always was).
-// A stop control the overlay does NOT cover keeps no mirror and is clicked as it is (a menu beside Stop TX closes and
+// ANY PART COVERED IS COVERED. A press lands wherever the operator's pointer is, not at the button's centre, so a stop
+// control is clear only when its centre AND every point of a 9 × 5 grid across its visible part are the button itself,
+// topmost. A menu over part of Stop TX — the band menu over 78 % of it on FT at 1366×768 @175 %, a few of its points
+// still its own — gets it a mirror. (The shell probes call a stop control covered when its centre is lost or under
+// 90 % of its points are its own; every point is the stricter rule, so a stop the layer leaves alone passes theirs.)
+// WHAT AN OVERLAY IS, FOR THIS LAYER: the element with the role (or aria-modal), everything inside it and everything it
+// sits in. A stop control no part of that meets is not hit-tested at all, so A SCRIM MUST BE THE OVERLAY OR ITS
+// ANCESTOR (a scrim beside the dialog it dims, or a pop-up portaled away from its overlay, is invisible to this layer),
+// unless it is a Radix modal's own overlay, which locks the page's pointer events and so puts every stop in question.
+// stop-layer.test.ts walks every full-window scrim the stylesheets declare and every place the app draws one.
+// A stop control the overlay covers NONE of keeps no mirror and is clicked as it is (a menu beside Stop TX closes and
 // lets the click through, MenuParts.tsx). With no overlay open there is no mirror at all, so nothing here can hide a
 // layout fault the shell probes exist to catch.
 //
@@ -59,9 +69,9 @@ export const STOP_CONTROL = '[data-stop-control]'
 /** What counts as an overlay, once it is drawn. A page whose pointer events are locked (a Radix modal) is one too.
  *  Not `listbox`: Operate's decode list is one, on screen all the time. */
 const OVERLAY = '[role="dialog"], [role="alertdialog"], [role="menu"], [aria-modal="true"]'
-/** The points of a stop control tested for being the topmost thing there: 5 across, 3 down. */
-const COLS = 5
-const ROWS = 3
+/** The points of a stop control tested for being the topmost thing there: 9 across, 5 down, and the centre. */
+const COLS = 9
+const ROWS = 5
 
 interface Box {
   left: number
@@ -77,6 +87,27 @@ function overlayOpen(): boolean {
   for (const el of document.querySelectorAll(OVERLAY)) {
     const r = el.getBoundingClientRect()
     if (r.width > 0 && r.height > 0) return true
+  }
+  return false
+}
+
+/** Whether any part of an open overlay is drawn over `box`: the overlay's own box, the box of everything it sits in
+ *  (a scrim that holds a dialog, a popper's wrapper), up to <body>, and the box of everything in it (a part drawn
+ *  outside the overlay's own box, placed absolutely or overflowing it). An overlay whose own box is empty counts too:
+ *  its parts may still be drawn. Always true while the page's pointer events are locked: then nothing under the overlay
+ *  can be pressed, wherever it is drawn. A stop control no part of any overlay meets cannot be covered by one, so it
+ *  needs no hit test (the grid below costs 46 of them, on every frame while an overlay is open). */
+function overlayMeets(box: Box): boolean {
+  if (document.body.style.pointerEvents === 'none') return true
+  const meets = (n: Element) => {
+    const r = n.getBoundingClientRect()
+    return r.left < box.right && r.right > box.left && r.top < box.bottom && r.bottom > box.top
+  }
+  for (const el of document.querySelectorAll(OVERLAY)) {
+    for (let n: Element | null = el; n && n !== document.body && n !== document.documentElement; n = n.parentElement) {
+      if (meets(n)) return true
+    }
+    for (const n of el.querySelectorAll('*')) if (meets(n)) return true
   }
   return false
 }
@@ -98,17 +129,20 @@ function visibleBox(el: HTMLElement): Box | null {
   return box.right > box.left && box.bottom > box.top ? box : null
 }
 
-/** Whether some point of `el`'s visible part is `el` itself, topmost, not counting this layer's own mirrors. */
-function reachable(el: HTMLElement, box: Box, layer: HTMLElement): boolean {
+/** Whether every point of `el`'s visible part (the grid and the centre) is `el` itself, topmost, not counting this
+ *  layer's own mirrors: false as soon as anything else stands over any of them. */
+function uncovered(el: HTMLElement, box: Box, layer: HTMLElement): boolean {
+  const own = (x: number, y: number) => {
+    const top = document.elementsFromPoint(x, y).find((e) => !layer.contains(e))
+    return top != null && (top === el || el.contains(top))
+  }
+  if (!own((box.left + box.right) / 2, (box.top + box.bottom) / 2)) return false
   for (let j = 1; j <= ROWS; j++) {
     for (let i = 1; i <= COLS; i++) {
-      const x = box.left + ((box.right - box.left) * i) / (COLS + 1)
-      const y = box.top + ((box.bottom - box.top) * j) / (ROWS + 1)
-      const top = document.elementsFromPoint(x, y).find((e) => !layer.contains(e))
-      if (top && (top === el || el.contains(top))) return true
+      if (!own(box.left + ((box.right - box.left) * i) / (COLS + 1), box.top + ((box.bottom - box.top) * j) / (ROWS + 1))) return false
     }
   }
-  return false
+  return true
 }
 
 /** Every computed style of `from` (and of each descendant) written inline onto its copy `to`: the mirror is drawn
@@ -162,6 +196,23 @@ export function StopLayer() {
     // While a press on a mirror is in progress the layer holds still: the press may close what covered the button,
     // and the mirror must still be there for the click that ends it.
     let pressed: { el: HTMLElement; x: number; y: number } | null = null
+    // While the pointer is down on a stop control ITSELF, no new mirror is drawn: an overlay that opens on its own over
+    // the button in that moment would put a mirror under the pointer, and the press — begun on the button, ended on
+    // the mirror — would click neither. The press ends on the button and stops; the mirror follows it. Only the
+    // primary pointer's main-button press holds, only that pointer's own release or cancel ends the hold, and every
+    // primary press decides afresh (as does the window losing focus), so a release the page never heard cannot leave
+    // the layer held.
+    let holding = false
+    let holdId = 0
+    const onPointerDown = (e: PointerEvent) => {
+      if (!e.isPrimary) return
+      const t = e.target as Element | null
+      holding = e.button === 0 && !!(t && !layer.contains(t) && t.closest?.(STOP_CONTROL))
+      holdId = e.pointerId
+    }
+    const onBlur = () => {
+      holding = false
+    }
 
     const drop = (el: HTMLElement) => {
       mirrors.get(el)?.node.remove()
@@ -259,7 +310,7 @@ export function StopLayer() {
 
     const sync = () => {
       refresh()
-      if (pressed) return
+      if (pressed || holding) return
       if (!overlayOpen()) {
         for (const el of [...mirrors.keys()]) drop(el)
         return
@@ -268,19 +319,24 @@ export function StopLayer() {
       for (const el of [...mirrors.keys()]) if (!stops.has(el)) drop(el)
       for (const el of stops) {
         const box = present(el) ? visibleBox(el) : null
-        if (!box || reachable(el, box, layer)) drop(el)
+        if (!box || !overlayMeets(box) || uncovered(el, box, layer)) drop(el)
         else place(el, box)
       }
     }
 
     // A press that ends anywhere but on its mirror (dragged off, cancelled) lets the layer move again.
-    const released = () =>
+    const released = (e: PointerEvent) => {
+      const mine = e.pointerId === holdId
       setTimeout(() => {
         pressed = null
+        if (mine) holding = false
         refresh()
       }, 0)
+    }
+    window.addEventListener('pointerdown', onPointerDown, true)
     window.addEventListener('pointerup', released, true)
     window.addEventListener('pointercancel', released, true)
+    window.addEventListener('blur', onBlur)
     let frame = 0
     const tick = () => {
       sync()
@@ -290,8 +346,10 @@ export function StopLayer() {
     return () => {
       cancelAnimationFrame(frame)
       unwatch()
+      window.removeEventListener('pointerdown', onPointerDown, true)
       window.removeEventListener('pointerup', released, true)
       window.removeEventListener('pointercancel', released, true)
+      window.removeEventListener('blur', onBlur)
       layer.remove()
     }
   }, [])

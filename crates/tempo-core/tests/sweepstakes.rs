@@ -22,7 +22,9 @@
 //!
 //! ⚠️ Integration tests, so they see only the public API — which is the point: if an
 //! operator cannot reach Sweepstakes through it, neither can this file.
-use tempo_core::contest::{merge_into_general, ContestSession, StationData};
+use tempo_core::contest::{
+    is_call_slot, merge_into_general, sent_exchange_string, ContestSession, StationData,
+};
 use tempo_core::fd_rules::{ruleset_by_id, CURRENT_RULES_YEAR};
 use tempo_core::fieldday::FieldDayLog;
 use tempo_core::logbook::{adif_record, Logbook};
@@ -103,17 +105,14 @@ fn sweepstakes_cw_from_wisconsin_end_to_end() {
     // string at id 177.
     assert_eq!(s.contest_id, "ARRL-SS-CW");
 
-    // THE ENTRY STRIP: five boxes, all required — the §9 sizing case, and the only
-    // exchange in the shipped set with a callsign among them.
+    // THE ENTRY STRIP: four boxes, all required. §4.3 puts *"Your call sign (the call
+    // sign must be included during the exchange)"* in what each station SENDS, so the
+    // sent side below carries it; but the call they send me IS the call I log, which the
+    // strip's own call box already holds. A second, typed CALL box asked for the same
+    // callsign twice and nothing read it — the received call is the logged call.
     assert_eq!(
         entry_boxes(&s),
-        vec![
-            ("NR", true),
-            ("PREC", true),
-            ("CALL", true),
-            ("CK", true),
-            ("SEC", true),
-        ]
+        vec![("NR", true), ("PREC", true), ("CK", true), ("SEC", true),]
     );
 
     // THE SENT EXCHANGE. The serial is a PLACEHOLDER until one is issued (§2.6); the
@@ -148,13 +147,7 @@ fn sweepstakes_cw_from_wisconsin_end_to_end() {
     // K2DEF completes, sending "12 A K2DEF 71 CT".
     assert!(log.log_fields_at(
         "K2DEF",
-        &fields(&[
-            ("NR", "12"),
-            ("PREC", "A"),
-            ("CALL", "K2DEF"),
-            ("CK", "71"),
-            ("SEC", "CT"),
-        ]),
+        &fields(&[("NR", "12"), ("PREC", "A"), ("CK", "71"), ("SEC", "CT"),]),
         "CW",
         "",
         0,
@@ -171,13 +164,7 @@ fn sweepstakes_cw_from_wisconsin_end_to_end() {
     assert!(
         log.log_fields_at(
             "K2DEF",
-            &fields(&[
-                ("NR", "40"),
-                ("PREC", "A"),
-                ("CALL", "K2DEF"),
-                ("CK", "71"),
-                ("SEC", "CT"),
-            ]),
+            &fields(&[("NR", "40"), ("PREC", "A"), ("CK", "71"), ("SEC", "CT"),]),
             "CW",
             "",
             0,
@@ -195,13 +182,7 @@ fn sweepstakes_cw_from_wisconsin_end_to_end() {
     log.session.compose_for("N0GHI", SAT + 150);
     assert!(log.log_fields_at(
         "N0GHI",
-        &fields(&[
-            ("NR", "3"),
-            ("PREC", "U"),
-            ("CALL", "N0GHI"),
-            ("CK", "82"),
-            ("SEC", "MO"),
-        ]),
+        &fields(&[("NR", "3"), ("PREC", "U"), ("CK", "82"), ("SEC", "MO"),]),
         "CW",
         "",
         0,
@@ -216,13 +197,7 @@ fn sweepstakes_cw_from_wisconsin_end_to_end() {
     log.session.compose_for("W1AW", SAT + 210);
     assert!(log.log_fields_at(
         "W1AW",
-        &fields(&[
-            ("NR", "9"),
-            ("PREC", "M"),
-            ("CALL", "W1AW"),
-            ("CK", "36"),
-            ("SEC", "CT"),
-        ]),
+        &fields(&[("NR", "9"), ("PREC", "M"), ("CK", "36"), ("SEC", "CT"),]),
         "CW",
         "",
         0,
@@ -332,13 +307,7 @@ fn the_phone_weekend_is_a_second_ruleset_with_its_own_token_and_window() {
     log.session.compose_for("K2DEF", 100);
     assert!(log.log_fields_at(
         "K2DEF",
-        &fields(&[
-            ("NR", "12"),
-            ("PREC", "A"),
-            ("CALL", "K2DEF"),
-            ("CK", "71"),
-            ("SEC", "CT"),
-        ]),
+        &fields(&[("NR", "12"), ("PREC", "A"), ("CK", "71"), ("SEC", "CT"),]),
         "PH",
         "",
         0,
@@ -367,13 +336,7 @@ fn the_constant_check_guard_fires_on_my_own_check_and_never_on_theirs() {
         log.session.compose_for(call, t);
         assert!(log.log_fields_at(
             call,
-            &fields(&[
-                ("NR", nr),
-                ("PREC", "A"),
-                ("CALL", call),
-                ("CK", ck),
-                ("SEC", sec),
-            ]),
+            &fields(&[("NR", nr), ("PREC", "A"), ("CK", ck), ("SEC", sec),]),
             "CW",
             "",
             0,
@@ -534,13 +497,7 @@ fn a_merged_serial_contact_writes_stx_and_srx_once() {
     assert_eq!(log.session.compose_for("K2DEF", SAT).tx[0].raw, "1");
     assert!(log.log_fields_at(
         "K2DEF",
-        &fields(&[
-            ("NR", "12"),
-            ("PREC", "A"),
-            ("CALL", "K2DEF"),
-            ("CK", "71"),
-            ("SEC", "CT"),
-        ]),
+        &fields(&[("NR", "12"), ("PREC", "A"), ("CK", "71"), ("SEC", "CT"),]),
         "CW",
         "",
         0,
@@ -554,4 +511,121 @@ fn a_merged_serial_contact_writes_stx_and_srx_once() {
     assert_eq!(adi.matches("<SRX:").count(), 1, "{adi}");
     assert!(adi.contains("<STX:1>1"), "the serial I sent: {adi}");
     assert!(adi.contains("<SRX:2>12"), "the serial they sent: {adi}");
+}
+
+/// ⭐ **The received call is the logged call.**
+///
+/// SS-Rules v2.1 §4.3: *"Your call sign (the call sign must be included during the
+/// exchange)"* — the call each station sends inside its exchange is the call the other
+/// logs, so the receive side declares no callsign slot of its own and every reader takes
+/// the logged call.
+///
+/// ⚠️ **A row from before that change still carries a typed `CALL` among its received
+/// values** — in its journal, or from a client that still had the box — and it must read
+/// exactly as it always did. Nothing reads that value: the dupe key, the Cabrillo line and
+/// the merged ADIF all take the logged call, so a stray one, even a different one, changes
+/// nothing. The row below is that shape, logged and then restored from its journal.
+#[test]
+fn the_received_call_is_the_logged_call_and_an_old_row_reads_as_before() {
+    let s = select("arrlss_cw", &w9xyz());
+    assert!(
+        !s.role()
+            .receives
+            .iter()
+            .any(|k| is_call_slot(s.exchange, k)),
+        "the receive side has no callsign slot"
+    );
+    assert!(
+        s.role().sends.iter().any(|k| is_call_slot(s.exchange, k)),
+        "…while the SENT exchange still carries mine"
+    );
+    let mut log = FieldDayLog::new("W9XYZ", s, "20m");
+    for (call, typed, nr, when) in [
+        ("K2DEF", "K2DEF", "12", SAT + 60),
+        ("N0GHI", "N0GHX", "3", SAT + 120),
+    ] {
+        log.session.compose_for(call, when - 30);
+        assert!(log.log_fields_at(
+            call,
+            &fields(&[
+                ("NR", nr),
+                ("PREC", "A"),
+                ("CALL", typed),
+                ("CK", "71"),
+                ("SEC", "CT"),
+            ]),
+            "CW",
+            "",
+            0,
+            when
+        ));
+    }
+    // The old shape, through the journal and back into a fresh session.
+    let journal = log.journal_adif();
+    assert!(journal.contains("CALL::N0GHX"), "the old shape: {journal}");
+    let mut back = FieldDayLog::new("W9XYZ", select("arrlss_cw", &w9xyz()), "20m");
+    back.restore_journal(&journal, 0, SAT + 600);
+    assert_eq!(back.qsos().len(), 2);
+    for l in [&log, &back] {
+        let q = &l.qsos()[0];
+        assert_eq!(q.call, "K2DEF");
+        // Every slot the strip shows, aligned with the receive order: four, none blank.
+        let shown: Vec<&str> = l
+            .session
+            .role()
+            .receives
+            .iter()
+            .map(|k| q.rcvd(k))
+            .collect();
+        assert_eq!(shown, ["12", "A", "71", "CT"]);
+        // The score and the dupe check read the logged calls: two contacts, one section.
+        assert_eq!(score(l), (4, 4, Some(1), 4));
+        assert!(!l.qsos()[1].dupe);
+        // The SENT exchange still carries my call inside it — the text the CW and RTTY
+        // exchange macros key.
+        assert_eq!(
+            sent_exchange_string(q, l.session.exchange),
+            "1 A W9XYZ 74 WI"
+        );
+        let cab = l.cabrillo(14_030).expect("exports");
+        assert!(
+            cab.contains("QSO: 14000 CW 2026-11-07 2105 W9XYZ 1 A 74 WI K2DEF 12 A 71 CT\n"),
+            "{cab}"
+        );
+        assert!(
+            cab.contains("QSO: 14000 CW 2026-11-07 2106 W9XYZ 2 A 74 WI N0GHI 3 A 71 CT\n"),
+            "{cab}"
+        );
+        assert!(!cab.contains("N0GHX"), "{cab}");
+        let mut lb = Logbook::new();
+        let report = merge_into_general(l, "a1b2c3d4", &mut lb);
+        let adi: Vec<String> = report.written.iter().map(adif_record).collect();
+        // The record's CALL is the logged one. The row's received values export verbatim,
+        // as every received value always has (`SRX_STRING` is what was copied), so an old
+        // row's file is byte for byte what it was.
+        assert!(adi[1].contains("<CALL:5>N0GHI"), "{}", adi[1]);
+        assert!(
+            adi[1].contains("<SRX_STRING:15>3 A N0GHX 71 CT"),
+            "{}",
+            adi[1]
+        );
+    }
+    // …and the stray call does not key a dupe: working N0GHX is a new contact.
+    back.session.compose_for("N0GHX", SAT + 900);
+    assert!(back.log_fields_at(
+        "N0GHX",
+        &fields(&[("NR", "5"), ("PREC", "A"), ("CK", "71"), ("SEC", "CT")]),
+        "CW",
+        "",
+        0,
+        SAT + 930
+    ));
+    assert!(!back.qsos().last().expect("the row").dupe);
+    // A row logged from the four-box strip carries the four values it was given, which is
+    // the shape ARRL's Cabrillo template and the Cabrillo import already write.
+    let mut lb = Logbook::new();
+    let report = merge_into_general(&back, "a1b2c3d4", &mut lb);
+    let last = adif_record(report.written.last().expect("the new row"));
+    assert!(last.contains("<CALL:5>N0GHX"), "{last}");
+    assert!(last.contains("<SRX_STRING:9>5 A 71 CT"), "{last}");
 }

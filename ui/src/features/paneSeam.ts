@@ -105,6 +105,15 @@ export const SCOPE_SPLIT_MAX: SplitClamp = (g) => 0.45 * g.vhEff
 export const WATERFALL_SPLIT_MIN: SplitClamp = (g) => Math.min(8 * g.fontPx, 0.28 * g.vhEff)
 export const WATERFALL_SPLIT_MAX: SplitClamp = (g) => 0.45 * g.vhEff
 
+/** Tempo's waterfall strip (#549), from its own grid row (styles.css `.layout[data-three-pane]`): the
+ *  same yielding floor (WATERFALL_SPLIT_MIN) and a 65 % ceiling, taller than the 45 % above, because
+ *  Tempo's strip is a row of the workspace grid and the panes under it are held by a floor of their
+ *  own: `TEMPO_PANES_SPLIT_MIN`, the row's minimum, 21em where there is room and never more than
+ *  35 % of the effective viewport. The strip grows only into what those panes do not need, so on a
+ *  short window it stops below 65 %; PaneSeam measures that stop as the range the layout honours. */
+export const TEMPO_WATERFALL_SPLIT_MAX: SplitClamp = (g) => 0.65 * g.vhEff
+export const TEMPO_PANES_SPLIT_MIN: SplitClamp = (g) => Math.min(21 * g.fontPx, 0.35 * g.vhEff)
+
 /** The clamps of SSTV's picture stage once sized (layout L6), from its own rules (`.sstv-canvas`,
  *  `.sstv-canvas[data-sized]`): the stage's 16em floor and a 70 % ceiling. */
 export const SSTV_STAGE_SPLIT_MIN: SplitClamp = (g) => 16 * g.fontPx
