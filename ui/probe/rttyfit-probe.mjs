@@ -16,6 +16,14 @@
 //      does not scroll.
 // THE CONTROL, run every time: a planted 120 px margin under the waterfall strip at 1920×1080 / 150 % must
 // make check 1 fail. If it passes, the check cannot fail and the probe says so instead of passing.
+// AND THE WATERFALL TOOLBAR (the matrix's tightest RTTY, 1366×768 at 175 %, and the windows dragged below the matrix
+// at 150–175 %, where the toolbar wraps onto more lines than its row is tall): every control of the waterfall's header,
+// focused and revealed the layout contract's way (`focus({ preventScroll })` + `scrollIntoView({ block: 'nearest' })`),
+// is drawn inside the waterfall's row (`.rtty-wf-row`). Wrapped past the row, its last lines were drawn where the TX
+// strip stands, and five of them stayed under the strip at every scroll position (700×800 at 175 %, measured). Inside the
+// row is what it can own: what covers the row (a parked strip or dock) is the shells' scroll padding's to clear, which
+// stopvisible's Tab walk holds. ITS CONTROL: the waterfall's box let overflow again (`overflow: visible`) at 700×800 /
+// 175 % must leave a control outside the row.
 //
 // exit: 0 every check held · 1 a red, or a control that could not fail · 2 the page never drew RTTY
 import { createServer } from 'vite'
@@ -24,7 +32,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
-import { FHD, FHD_125, FHD_150, FLOOR, LAPTOP, MID_1536, QHD, UHD_200, metrics } from './sizes.mjs'
+import { FHD, FHD_125, FHD_150, FLOOR, LAPTOP, MID_1536, QHD, UHD_200, metrics, offMatrix } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 const REAL_API = join(UI, 'src', 'api.ts')
@@ -126,7 +134,7 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-async function measure([size, scale], extra = {}, css = null) {
+async function measure([size, scale], extra = {}, css = null, after = null) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -156,12 +164,30 @@ async function measure([size, scale], extra = {}, css = null) {
       if (last && JSON.stringify(m) === JSON.stringify(last)) break
       last = m
     }
+    if (after) m.after = await evaluate(after)
     return m
   } finally {
     await browser.call('Target.closeTarget', { targetId })
   }
 }
 
+/** The waterfall header's controls that, revealed the layout contract's way, are not drawn inside the waterfall's row. */
+const TOOLBAR = `(async () => {
+  const head = document.querySelector('main.rtty-cockpit .rtty-wf-row .waterfall-wrap > .panel-header')
+  if (!head) return null
+  const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(1))))
+  const ctl = [...head.querySelectorAll('button, select, input')].filter((e) => e.getBoundingClientRect().width > 0 && !e.disabled)
+  const row = head.closest('.rtty-wf-row')
+  const bad = []
+  for (const e of ctl) {
+    e.focus({ preventScroll: true }); e.scrollIntoView({ block: 'nearest', inline: 'nearest' }); await frame()
+    const q = e.getBoundingClientRect(), w = row.getBoundingClientRect()
+    if (q.top < w.top - 0.5 || q.bottom > w.bottom + 0.5) bad.push(((e.getAttribute('aria-label') || e.textContent || e.tagName) + '').trim().slice(0, 20) + ' at ' + Math.round(q.top) + '–' + Math.round(q.bottom) + ' of the row ' + Math.round(w.top) + '–' + Math.round(w.bottom))
+  }
+  document.activeElement?.blur?.()
+  return { n: ctl.length, bad }
+})()`
+const TOOLBAR_SIZES = [[LAPTOP, '175'], [offMatrix(700, 800), '175'], [offMatrix(900, 600), '175'], [offMatrix(900, 600), '150']]
 const tagOf = ([size, s]) => `${size.name} ${s ? `${s} %` : 'fit'}`
 /** Checks 1-3 for one page; `which` 0 = scope shown, 1 = hidden. */
 function reds(tag, which, m) {
@@ -207,7 +233,16 @@ try {
   const caught = m ? reds(tagOf(size), 0, m).filter((r) => r.includes('cockpit scrolls')) : []
   if (caught.length === 0) red(`CONTROL FAILED — a planted 120 px margin under the strip passed check 1 (cockpit scrolls ${m?.valve}); the check cannot fail`)
   else console.log(`rttyfit-probe: CONTROL — ${caught[0]} (caught)`)
-  if (code === 0) console.log('rttyfit-probe: PASS — RTTY scrolls no more than 1.21.0 did, at every size, its stop controls on screen wherever it does not scroll, and the control was caught')
+  for (const size of TOOLBAR_SIZES) {
+    const t = (await measure(size, {}, null, TOOLBAR))?.after
+    if (!t) red(`RTTY at ${tagOf(size)}: the waterfall's header never drew`)
+    else if (t.bad.length) red(`RTTY at ${tagOf(size)}: ${t.bad.length} of the waterfall header's ${t.n} controls are drawn outside the waterfall's row once revealed (${t.bad.slice(0, 6).join(', ')})`)
+    else console.log(`rttyfit-probe: ${tagOf(size).padEnd(22)} waterfall header: ${t.n} controls, each inside the waterfall's row once revealed`)
+  }
+  const tc = (await measure([offMatrix(700, 800), '175'], {}, '.rtty-wf-row > .waterfall-wrap { overflow: visible !important }', TOOLBAR))?.after
+  if (!tc?.bad.length) red(`CONTROL FAILED — with the waterfall's box letting its toolbar overflow, no header control was drawn outside the row at 700×800 / 175 %; the toolbar check cannot fail`)
+  else console.log(`rttyfit-probe: CONTROL — the toolbar let overflow at 700×800 / 175 %: ${tc.bad.length} outside the row (caught)`)
+  if (code === 0) console.log('rttyfit-probe: PASS — RTTY scrolls no more than 1.21.0 did, at every size, its stop controls on screen wherever it does not scroll, every waterfall header control inside its row once revealed, and the controls were caught')
   process.exitCode = process.exitCode || code
 } catch (e) {
   if (!process.exitCode) {
