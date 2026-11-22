@@ -11887,6 +11887,8 @@ impl Engine {
                 | OperatingMode::Rtty
                 | OperatingMode::Keyboard
         );
+        // Whether this entry LEAVES another section: a re-assert of Digital is not one.
+        let was_digital = self.settings.operating_mode == OperatingMode::Digital;
         self.settings.operating_mode = om;
         // The Keyboard section's modem is named by the entry ("keyboard" is PSK, "jtty" JTTY);
         // every other section leaves it as it was.
@@ -11934,6 +11936,24 @@ impl Engine {
             let band = self.settings.band.clone();
             self.tune_dial_with_reset(dial, &band, &sideband, DialOrigin::Operator, &mut reset);
             re_homed = true;
+        }
+        // ⛔ THE FT SCREENS RUN THEIR OWN SPLIT (Split Operation), so a split the operator set on
+        // another screen ends on the way in, as a QSY ends it, whether or not the dial moves. An
+        // entry that kept the dial carried the CW or Phone split into FT, and the radio stayed in
+        // it (an FTDX10 report). WSJT-X turns a split it finds off whenever it sets its state
+        // without one (`HamlibTransceiver::do_tx_frequency`). A held pass keeps its uplink split.
+        // A spot worked into FT sets its own split after this entry (`work_spot_split`), and a
+        // re-assert of the FT section (the screen opening for that spot, an FT8/FT4 click) is no
+        // entry, so it keeps that cluster SPLIT-on-Work.
+        if entry.mode == OperatingMode::Digital
+            && !was_digital
+            && (self.split_tx_mhz.is_some() || self.split_unknown)
+            && self.sat_tune.is_none()
+            && self.sat_dial_owner.is_none()
+        {
+            self.split_tx_mhz = None;
+            self.split_dirty = true;
+            self.tx_split_confirmed_hz = None;
         }
         if let Some(sideband) = carried {
             self.dial_residency = Some(DialResidency {
@@ -14888,7 +14908,7 @@ impl Engine {
     /// with its hard end). What [`TxOwner::Cw`] means, asked on its own by the keying paths that
     /// take no owner: a tune carrier, manual PTT and the FT slot planner each refuse a NEW key
     /// while it holds, so nothing keys on top of a CW word.
-    fn cw_sending(&self) -> bool {
+    pub fn cw_sending(&self) -> bool {
         !self.cw_queue.is_empty() || self.cw_keying()
     }
 

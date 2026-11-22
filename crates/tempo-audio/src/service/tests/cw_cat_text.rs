@@ -383,3 +383,60 @@ fn cw_typed_from_afar_never_hands_the_radios_keyer_a_semicolon() {
     );
     controls_key_as_before(&mut s, from_afar);
 }
+
+/// ⛔ A SPLIT PRESSED DURING A CAT-KEYER MESSAGE SETS VFO B'S MODE ONLY AFTER THE LAST WORD AND THE
+/// RADIO'S HANG TIME. The loop's end of a word is an estimate (`cw_keying_until`), and the next
+/// word is taken only once it passes, so a mode owed to VFO B could land between two words, or
+/// as the radio's own keyer finished a word it ran late on: on a radio Hamlib reaches by a VFO
+/// swap, mid-transmission. It waits for the queue to empty and `CW_HANG_MS` past the last word.
+#[test]
+fn a_split_pressed_during_a_cat_keyer_message_sets_vfo_bs_mode_after_its_hang_time() {
+    let mut s = Scene::new(station_with(|s| {
+        s.rig_model = 1042; // FTDX10
+        s.split_mode = tempo_app::settings::SplitMode::None;
+    }));
+    s.run(1);
+    {
+        let mut e = s.engine.lock().unwrap();
+        e.set_tx_enabled(true);
+        e.send_cw("CQ CQ DE KD9TAW K");
+    }
+    let from = s.sent();
+    let mut pressed = false;
+    let (mut t_last_word, mut last_word_until, mut t_x) = (None, None, None);
+    for _ in 0..400 {
+        let before = s.sent();
+        step(&mut s.state, &s.engine, &mut s.backend, &mut s.rig, s.t);
+        let new = s.lines(before);
+        if !pressed && !keyed(&new).is_empty() {
+            // The first word is on the air: split pressed now.
+            s.engine.lock().unwrap().request_split(Some(7.031));
+            pressed = true;
+        }
+        if !keyed(&new).is_empty() {
+            t_last_word = Some(s.t);
+            last_word_until = Some(s.state.cw_keying_until);
+        }
+        if t_x.is_none() && new.iter().any(|l| l.starts_with("X ")) {
+            t_x = Some(s.t);
+        }
+        s.t += 100.0;
+    }
+    let lines = s.lines(from);
+    assert_eq!(
+        keyed(&lines),
+        ["b CQ", "b CQ", "b DE", "b KD9TAW", "b K "],
+        "precondition: the whole message keyed"
+    );
+    let x: Vec<&String> = lines.iter().filter(|l| l.starts_with("X ")).collect();
+    assert_eq!(x, ["X CW -1"], "one X: {lines:?}");
+    let (t_x, t_last, until) = (t_x.unwrap(), t_last_word.unwrap(), last_word_until.unwrap());
+    assert!(
+        t_x > t_last,
+        "the X after the last word ({t_x} ms, last word {t_last} ms)"
+    );
+    assert!(
+        t_x >= until + CW_HANG_MS,
+        "the X after the last word's end plus the hang time ({t_x} ms, end {until} ms)"
+    );
+}
