@@ -331,10 +331,16 @@ async function tabWalk(p) {
  *  · RTTY at 700×800 at 175 %, plain, the dock folded: the waterfall's toolbar wraps onto more lines than its row
  *    (`.rtty-wf-row`, a size container, so its content does not size it) is tall, and the buttons on its last lines are
  *    drawn where the TX strip stands, in its own place or parked, at every scroll position. No scroll can clear them; it
- *    waits on the toolbar's lines sizing the row (the same on main before the Tab walk covered RTTY). */
+ *    waits on the toolbar's lines sizing the row (the same on main before the Tab walk covered RTTY).
+ *  · APRS at 900×600 at 175 %, plain: the header and the TX strip take the whole shell, and its body (the map and the
+ *    rail with the beacon's fields) is crushed to 0 px instead of being floored and scrolled to, so the rail is a
+ *    scroller 0 px tall: the beacon's two fields and Send message are clipped out of sight, where the TX strip stands,
+ *    at every scroll position. It waits on APRS's body taking a floor (the same on main). */
 const TAB_KNOWN = [
   { row: 'RTTY 700×800 175 en folded', names: ['Waterfall zero (base', 'Scrolls down', '◭', '⏸', 'Hide Waterfall'],
-    why: "RTTY's waterfall toolbar wraps past its row and under the TX strip" },
+    why: "RTTY's waterfall toolbar wraps past its row and under the TX strip", control: true },
+  { row: 'APRS 900×600 175 en', names: ['INPUT', 'Send message'],
+    why: "APRS's body is crushed to 0 px under the header and the TX strip, its rail's fields clipped out of sight" },
 ]
 const tabRow = (label, sz, scale, loc, folded) => `${label} ${sz} ${scale} ${loc}${folded ? ' folded' : ''}`
 /** A hidden entry's control name: `surface:name@y` without the surface and the y. */
@@ -351,7 +357,8 @@ const tabVerdict = (row, hidden, overlap) => {
   const known = all.length ? knownTab(row, all) : null
   return { red: all.length > 0 && !known, known }
 }
-/** The known-red control: on its row, one more control planted beside the toolbar's hidden ones must make the row red. */
+/** The known-red control (on the entry marked `control`, RTTY's): one more control planted beside the toolbar's hidden
+ *  ones must make the row red. The pin's matching is the same for every entry. */
 let knownControl = null
 const TAB_SIZES = (W, H) => W <= 1366 && H <= 800
 
@@ -428,13 +435,13 @@ for (const [label, route] of VIEWS.filter(([l]) => wantViews.includes(l))) {
               const { hidden, overlap, off, folded } = await tabWalk(p)
               const row = tabRow(label, sz, scale, loc, folded)
               const verdict = tabVerdict(row, hidden, overlap)
-              if (verdict.known) console.log(`KNOWN RED (pinned, waits on its own fix: ${verdict.known.why}): ${row} plain: Tab focuses ${hidden.length + overlap.length} of its ${verdict.known.names.length} named controls behind a parked surface or under one in its own place (${[...hidden, ...overlap].join(', ')})`)
+              if (verdict.known) console.log(`KNOWN RED (pinned, waits on its own fix: ${verdict.known.why}): ${row} plain: Tab focuses ${hidden.length + overlap.length} controls, each one it names, behind a parked surface or under one in its own place (${[...hidden, ...overlap].join(', ')})`)
               else if (verdict.red) {
                 reds.push(`${label} ${sz} ${scale} ${loc} plain${folded ? ' (dock folded)' : ''}: Tab focuses ${hidden.length} controls behind a parked surface (${hidden.slice(0, 8).join(', ')}) and ${overlap.length} under a surface standing in its own place, an overlap of the layout (${overlap.slice(0, 8).join(', ')})`)
                 console.log('RED ' + reds[reds.length - 1])
               }
               // THE CONTROL, on the pinned row: a button planted beside the toolbar's ⏸ (so drawn where it is) must not pass.
-              if (TAB_KNOWN.some((k) => k.row === row) && knownControl === null) {
+              if (TAB_KNOWN.some((k) => k.row === row && k.control) && knownControl === null) {
                 const planted = await p.evaluate(`(() => { const b = [...window.__tabShell.querySelectorAll('button')].find((x) => x.textContent.trim() === '⏸'); if (!b) return false
                   const c = document.createElement('button'); c.id = 'known-plant'; c.setAttribute('aria-label', 'known-red plant'); c.textContent = '•'; b.after(c); return true })()`)
                 const again = planted ? await tabWalk(p) : null
