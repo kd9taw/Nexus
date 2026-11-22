@@ -1707,11 +1707,16 @@ mod tests {
         .unwrap();
         assert!(road.answer(&offer_naming(Vec::new())));
         let road = Driven::new(road);
+        // The road's own relayed candidate, not the server's count: the stand-in counts the
+        // allocation before its answer is sent, and until the road's thread has read that answer
+        // the relay has no address, so a peer taken then is not permitted yet.
+        let relayed = || lock(&road.road.state).relayed.is_some();
         let started = Instant::now();
-        while turn.seen().allocations == 0 && started.elapsed() < Duration::from_secs(3) {
+        while !relayed() && started.elapsed() < Duration::from_secs(3) {
             std::thread::sleep(Duration::from_millis(5));
         }
-        assert_eq!(turn.seen().allocations, 1, "premise: the relayed address");
+        assert!(relayed(), "premise: the relayed address");
+        assert_eq!(turn.seen().allocations, 1, "premise: one allocation");
         let held = || lock(&road.road.state).relay.as_ref().map(Turn::held);
         for round in 1..=12u8 {
             road.road.restart_at(Instant::now()).expect("a new offer");
