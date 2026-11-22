@@ -1409,6 +1409,14 @@ mod tests {
         assert!(matches!(completion.outcome(), Outcome::Rejected { .. }));
 
         engine.settings.max_power_digital = Some(0.4);
+        // The caps are each radio's own: the radio the selection hands to has this one.
+        engine
+            .settings
+            .radios
+            .iter_mut()
+            .find(|p| p.id == incoming)
+            .unwrap()
+            .max_power_digital = Some(0.4);
         engine.set_rf_power(0.25);
         engine.set_mic_gain(0.3);
         engine.set_nr_level(0.4);
@@ -2067,13 +2075,16 @@ mod tests {
         engine.settings.max_power_phone = Some(0.8);
         engine.settings.max_power_am = Some(0.25);
         engine.rf_power = Some(0.2);
-        engine
+        // The caps are each radio's own: the radio the frequency routes to has these.
+        let routed = engine
             .settings
             .radios
             .iter_mut()
             .find(|p| p.id == incoming)
-            .unwrap()
-            .bands = vec!["2m".into()];
+            .unwrap();
+        routed.bands = vec!["2m".into()];
+        routed.max_power_phone = Some(0.8);
+        routed.max_power_am = Some(0.25);
         engine.configure_remote_selection_host(true);
         let generation = refresh(&mut engine);
         let authority = Revocation::default();

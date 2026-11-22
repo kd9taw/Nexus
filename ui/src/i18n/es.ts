@@ -7432,6 +7432,7 @@ export const ES: PartialCatalog = {
   "settings.confirmations.clublog.apiKey.notSavedAtStation": "Ninguna guardada en la estación",
   "settings.confirmations.clublog.apiKey.watched": "Oculta mientras una transmisión está mirando",
   "settings.stationOnly.hint": "Se ajusta en la estación",
+  "settings.thisRadio.hint": "Propio de esta radio ({{name}}): cada radio guarda aquí su propio ajuste.",
   "settings.confirmations.clublog.callsign.hint": "El logbook de ClubLog al que subir (vacío = tu indicativo).",
   "settings.confirmations.clublog.callsign.label": "Indicativo de ClubLog",
   "settings.confirmations.clublog.callsign.placeholder": "por defecto, tu indicativo",

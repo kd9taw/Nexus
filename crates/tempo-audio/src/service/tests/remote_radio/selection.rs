@@ -805,6 +805,10 @@ fn routed_mode_handoff_preserves_confirmed_power_and_never_replays_later() {
                     use tempo_app::settings::{OperatingMode, RouteMode, RoutingRule};
                     settings.operating_mode = OperatingMode::Phone;
                     settings.max_power_digital = Some(0.4);
+                    // The caps are each radio's own: the radio the mode routes to has this one.
+                    for r in settings.radios.iter_mut() {
+                        r.max_power_digital = Some(0.4);
+                    }
                     settings.routing_rules = vec![RoutingRule {
                         mode: Some(RouteMode::Digital),
                         radio: 1,
@@ -980,6 +984,10 @@ fn routed_mode_refuses_an_acknowledged_but_unapplied_power_ceiling() {
         let mut s = configured_station(&outgoing, |settings| {
             settings.operating_mode = OperatingMode::Phone;
             settings.max_power_digital = Some(0.4);
+            // The caps are each radio's own: the radio the mode routes to has this one.
+            for r in settings.radios.iter_mut() {
+                r.max_power_digital = Some(0.4);
+            }
             settings.routing_rules = vec![RoutingRule {
                 mode: Some(RouteMode::Digital),
                 radio: 1,
