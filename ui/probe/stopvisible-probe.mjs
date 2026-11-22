@@ -297,7 +297,9 @@ async function tabWalk(p) {
     await frames(p)
     const f = await p.evaluate(`(() => { const e = document.activeElement; if (!e || !window.__tabShell.contains(e)) return { out: true }
       const r = e.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2
-      const name = ((e.getAttribute('aria-label') || e.textContent || e.tagName) + '').replace(/\\s+/g, ' ').trim().slice(0, 20) + '@' + Math.round(y)
+      // Named as a screen reader would first: its aria-label, then its <label>'s words (a field has no text of its own),
+      // then its text; its tag only where none of those exists.
+      const name = ((e.getAttribute('aria-label') || e.labels?.[0]?.textContent?.trim() || e.textContent || e.tagName) + '').replace(/\\s+/g, ' ').trim().slice(0, 20) + '@' + Math.round(y)
       if (!r.width || !r.height) return { name }
       if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return { name, off: true }
       const lift = document.createElement('style'); lift.textContent = ${JSON.stringify(LIFT_CSS)}; document.head.appendChild(lift)
@@ -333,13 +335,13 @@ async function tabWalk(p) {
  *    drawn where the TX strip stands, in its own place or parked, at every scroll position. No scroll can clear them; it
  *    waits on the toolbar's lines sizing the row (the same on main before the Tab walk covered RTTY).
  *  · APRS at 900×600 at 175 %, plain: the header and the TX strip take the whole shell, and its body (the map and the
- *    rail with the beacon's fields) is crushed to 0 px instead of being floored and scrolled to, so the rail is a
- *    scroller 0 px tall: the beacon's two fields and Send message are clipped out of sight, where the TX strip stands,
- *    at every scroll position. It waits on APRS's body taking a floor (the same on main). */
+ *    rail with the beacon's and the message's fields) is crushed to 0 px instead of being floored and scrolled to, so
+ *    the rail is a scroller 0 px tall: the message's To and Text fields and Send message are clipped out of sight,
+ *    where the TX strip stands, at every scroll position. It waits on APRS's body taking a floor (the same on main). */
 const TAB_KNOWN = [
   { row: 'RTTY 700×800 175 en folded', names: ['Waterfall zero (base', 'Scrolls down', '◭', '⏸', 'Hide Waterfall'],
     why: "RTTY's waterfall toolbar wraps past its row and under the TX strip", control: true },
-  { row: 'APRS 900×600 175 en', names: ['INPUT', 'Send message'],
+  { row: 'APRS 900×600 175 en', names: ['To', 'Text', 'Send message'],
     why: "APRS's body is crushed to 0 px under the header and the TX strip, its rail's fields clipped out of sight" },
 ]
 const tabRow = (label, sz, scale, loc, folded) => `${label} ${sz} ${scale} ${loc}${folded ? ' folded' : ''}`
