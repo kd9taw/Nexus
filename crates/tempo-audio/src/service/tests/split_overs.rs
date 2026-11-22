@@ -612,6 +612,8 @@ struct Vfos {
     meter_delay_ms: u64,
     /// A mode write (`M`) answered `RPRT -9` and not taken.
     refuse_m: bool,
+    /// Where the radio transmitted from at each key (`T 1`): VFO B in split, else VFO A (Hz).
+    tx_at_key: Vec<u64>,
 }
 
 struct Hamlib {
@@ -681,6 +683,8 @@ fn hamlib_bench_on(engine: Arc<Mutex<Engine>>, dial: u64, own_split: Option<u64>
             "T 1" | "T 3" => {
                 radio.keyed = true;
                 k.store(true, Ordering::SeqCst);
+                let on = if v.split { v.b } else { radio.dial };
+                v.tx_at_key.push(on);
                 ok()
             }
             "T 0" => {
@@ -4750,4 +4754,375 @@ fn a_verdict_after_the_pre_set_makes_the_key_write_vfo_b_in_usb() {
         ["I 7073500", "X USB -1", "S 1 VFOB", "T 1"],
         "the key's writes: {key:?}"
     );
+}
+
+// ── A radio left in split by someone else: never keyed out of its old VFO B ──────────────────
+// The radio can come to Nexus already in split, VFO B somewhere Nexus never wrote: left there by
+// an earlier session, by another program, or by the radio's own SPLIT key. WSJT-X 3.0.2 writes the
+// TX frequency before every key with split on (`Transceiver/TransceiverBase.cpp:165-171`, "or
+// about to tx split"), XIT 0 included (`widgets/mainwindow.cpp:12378-12387`), so it never keys a
+// VFO B it did not write this session for this dial. With Split Operation = Rig on the FT screens
+// Nexus does the same: an over never keys unless Nexus wrote the split and the radio confirmed
+// it for the current dial on this connection, whatever the TX offset; and letting go of the split
+// there turns it off, never putting back a VFO B Nexus found. The radio here models its own split
+// flag and VFO B and says where each key transmitted from.
+
+/// The 12 m FT8 dial, the 10 m one, and the 10 m TX dial an earlier session left on VFO B (the
+/// 10 m dial with a 1008 Hz offset's -500 Hz step).
+const FT8_12M_DIAL: u64 = 24_915_000;
+const FT8_10M_DIAL: u64 = 28_074_000;
+const STALE_10M_VFO_B: u64 = 28_073_500;
+
+/// A station on `mhz` (band `band`) in `tier` at `tx_hz`, Split Operation `split`, nothing sent.
+fn engine_at(split: SplitMode, tier: Tier, mhz: f64, band: &str, tx_hz: f32) -> Arc<Mutex<Engine>> {
+    let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+    {
+        let mut e = engine.lock().unwrap();
+        e.set_license_class("extra");
+        let mut s = e.settings().clone();
+        s.split_mode = split;
+        e.apply_settings(s);
+        e.set_tier(tier);
+        e.set_frequency(mhz, band, "USB");
+        e.set_tx_offset(tx_hz);
+    }
+    engine
+}
+
+/// [`engine_at`] calling CQ, the snappy first over drained so the first own boundary keys it.
+fn cq_engine_at(
+    split: SplitMode,
+    tier: Tier,
+    mhz: f64,
+    band: &str,
+    tx_hz: f32,
+) -> Arc<Mutex<Engine>> {
+    let engine = engine_at(split, tier, mhz, band, tx_hz);
+    {
+        let mut e = engine.lock().unwrap();
+        e.start_cq(None).expect("Call CQ");
+        let _ = e.take_immediate_tx();
+    }
+    engine
+}
+
+/// The radio on 12 m in FT8, still in the split an earlier session left on 10 m (VFO B on
+/// 28.0735 MHz), Split Operation = Rig, the TX offset at `tx_hz`.
+fn left_in_10m_split_on_12m(tx_hz: f32) -> Bench<Hamlib> {
+    let engine = cq_engine_at(SplitMode::Rig, Tier::Ft8, 24.915, "12m", tx_hz);
+    hamlib_bench_on(engine, FT8_12M_DIAL, Some(STALE_10M_VFO_B))
+}
+
+/// Every write the radio was sent, in order.
+fn writes_of(r: &Hamlib) -> Vec<String> {
+    r.sent().into_iter().filter(|l| !l.ends_with('?')).collect()
+}
+
+/// The split and TX VFO writes before the first key, in order.
+fn split_writes_before_first_key(r: &Hamlib) -> Vec<String> {
+    let w = writes_of(r);
+    let key = w.iter().position(|l| l == "T 1").unwrap_or(w.len());
+    w[..key]
+        .iter()
+        .filter(|l| l.starts_with(['S', 'I', 'X']))
+        .cloned()
+        .collect()
+}
+
+/// Whether the split writes before the first key end with the radio taking the RX dial `dial`
+/// as its TX dial and split on last: WSJT-X's XIT 0 (split on, VFO B on the dial, its mode,
+/// split on).
+fn ends_with_xit_0_on(writes: &[String], dial: u64) -> bool {
+    let i = format!("I {dial}");
+    let at = writes.iter().rposition(|l| *l == i);
+    at.is_some_and(|at| {
+        writes[at + 1..].last().map(String::as_str) == Some("S 1 VFOB")
+            && writes[..at].iter().any(|l| l == "S 1 VFOB")
+    })
+}
+
+/// ⛔ AN OVER IN 1500-1999 Hz NEVER KEYS OUT OF A SPLIT THE RADIO WAS LEFT IN. The radio is in
+/// split from an earlier 10 m session, VFO B on 28.0735 MHz; Nexus is on 12 m with the TX offset at
+/// 1958 Hz, which needs no shift, and holds no split on this connection. Nexus used to write
+/// nothing for such an over ("no shift and nothing held") and keyed: the radio transmitted on
+/// 10 m. Now split, VFO B on the 12 m dial and split on last go before the key, every one taken,
+/// and the radio transmits on 12 m.
+#[test]
+fn an_unheld_in_window_over_never_keys_out_of_a_split_the_radio_was_left_in() {
+    let mut b = left_in_10m_split_on_12m(1958.0);
+    let overs = b.overs(1);
+    let before = split_writes_before_first_key(&b.radio);
+    assert!(
+        ends_with_xit_0_on(&before, FT8_12M_DIAL),
+        "the over keyed without VFO B written on the 12 m dial: {before:?} {overs:?}"
+    );
+    let v = b.radio.vfos.lock().unwrap();
+    assert_eq!(
+        v.tx_at_key,
+        [FT8_12M_DIAL],
+        "the radio transmitted out of the old VFO B"
+    );
+}
+
+/// ⭐ A BAND CHANGE PRE-SETS THE SPLIT WHATEVER THE TX OFFSET. Connected on 10 m with the radio
+/// still in its old split and the TX offset at 1958 Hz (no shift), the band changes to 12 m while
+/// the station receives, well clear of the next boundary. The pre-set used to be cancelled for an
+/// over that needs no shift with no split held, so nothing was written and the over keyed out of
+/// the 10 m VFO B. Now split on, VFO B on the 12 m dial, its mode and split on last go while it
+/// receives, and the over keys on 12 m.
+#[test]
+fn a_band_change_with_an_in_window_offset_still_presets_the_split() {
+    let engine = cq_engine_at(SplitMode::Rig, Tier::Ft8, 28.074, "10m", 1958.0);
+    let mut b = hamlib_bench_on(engine, FT8_10M_DIAL, Some(STALE_10M_VFO_B));
+    let _ = b.ticks(100);
+    b.engine.lock().unwrap().set_frequency(24.915, "12m", "USB");
+    let change: Vec<String> = b
+        .ticks(250)
+        .into_iter()
+        .filter(|l| l.starts_with(['S', 'I', 'X', 'T']))
+        .collect();
+    assert!(
+        !change.iter().any(|l| l == "T 1"),
+        "premise: nothing keyed while receiving: {change:?}"
+    );
+    assert!(
+        change.ends_with(&[
+            "S 1 VFOB".to_string(),
+            "I 24915000".to_string(),
+            "X PKTUSB -1".to_string(),
+            "S 1 VFOB".to_string(),
+        ]),
+        "the 12 m split not pre-set at the band change: {change:?}"
+    );
+    {
+        let v = b.radio.vfos.lock().unwrap();
+        assert_eq!(
+            (v.split, v.b),
+            (true, FT8_12M_DIAL),
+            "VFO B before the over"
+        );
+    }
+    b.engine.lock().unwrap().set_tx_enabled(true);
+    b.slot = (b.t / 30_000.0).ceil() * 30_000.0;
+    let _ = b.overs(1);
+    assert_eq!(
+        b.radio.vfos.lock().unwrap().tx_at_key,
+        [FT8_12M_DIAL],
+        "the radio transmitted off 12 m"
+    );
+}
+
+/// ⛔ LETTING GO OF THE SPLIT ON THE FT SCREENS NEVER PUTS BACK A VFO B ON ANOTHER BAND. The radio
+/// came in split on 10 m (VFO B 28.0735 MHz) and Nexus is on 12 m, the TX offset at 1353 Hz (a
+/// -500 Hz step). Nexus used to take that split for the operator's own and put it back, `S 1 VFOB`
+/// and `I 28073500`, every time it let go of its own: after a refused over, at a band change and
+/// as Nexus stopped, so the stale split came back for the next over and the next session. Now each
+/// of those turns split off (`S 0 VFOA`) and 28.0735 MHz is never written.
+#[test]
+fn a_release_never_restores_a_split_on_another_band() {
+    let stale = format!("I {STALE_10M_VFO_B}");
+    // A refused over: the radio refuses VFO B's dial, so nothing keys and the split is let go of.
+    let mut b = left_in_10m_split_on_12m(1353.0);
+    b.radio.vfos.lock().unwrap().refuse_i = true;
+    let _ = b.ticks(900);
+    let w = writes_of(&b.radio);
+    assert!(!w.iter().any(|l| l == "T 1"), "premise: refused: {w:?}");
+    assert!(
+        !w.iter().any(|l| *l == stale),
+        "a refused over: the 10 m VFO B put back: {w:?}"
+    );
+    assert!(
+        !b.radio.vfos.lock().unwrap().split,
+        "a refused over: the radio left in split: {w:?}"
+    );
+
+    // Nexus stopping, after an over that held the split.
+    let mut b = left_in_10m_split_on_12m(1353.0);
+    let _ = b.overs(1);
+    let before = b.radio.sent().len();
+    b.state
+        .stop_for_shutdown(&b.engine, &mut b.backend, &mut b.rig);
+    let w: Vec<String> = b.radio.sent()[before..]
+        .iter()
+        .filter(|l| !l.ends_with('?'))
+        .cloned()
+        .collect();
+    assert_eq!(w, ["T 0", "S 0 VFOA"], "Nexus stopping");
+    assert!(
+        !b.radio.vfos.lock().unwrap().split,
+        "stopping: left in split"
+    );
+
+    // A band change (12 m to 15 m), after an over that held the split.
+    let mut b = left_in_10m_split_on_12m(1353.0);
+    let _ = b.overs(1);
+    b.engine.lock().unwrap().set_frequency(21.074, "15m", "USB");
+    let w: Vec<String> = b
+        .ticks(3)
+        .into_iter()
+        .filter(|l| l.starts_with(['S', 'I']))
+        .collect();
+    assert_eq!(w, ["S 0 VFOA"], "a band change");
+    assert!(
+        !writes_of(&b.radio).iter().any(|l| *l == stale),
+        "the 10 m VFO B written: {:?}",
+        writes_of(&b.radio)
+    );
+}
+
+/// ⛔ A SESSION LEFT IN SPLIT DOES NOT LEAVE THE NEXT ONE IN IT. Session one starts with the radio
+/// already in split, works 10 m with Split Operation = Rig (VFO B 28.0735 MHz) and stops: the radio
+/// ends with split off. Session two connects on 12 m with the TX offset at 1958 Hz (no shift) and
+/// keys on 12 m, never out of the 10 m VFO B. Before, session one's stop put the split it found
+/// back on, and session two's first overs went out on 10 m.
+#[test]
+fn a_session_left_in_split_does_not_leave_the_next_session_in_split() {
+    let engine = cq_engine_at(SplitMode::Rig, Tier::Ft8, 28.074, "10m", 1008.0);
+    let mut one = hamlib_bench_on(engine, FT8_10M_DIAL, Some(STALE_10M_VFO_B));
+    let _ = one.overs(1);
+    assert_eq!(
+        one.radio.vfos.lock().unwrap().tx_at_key,
+        [STALE_10M_VFO_B],
+        "premise: session one transmitted on its own 10 m TX dial"
+    );
+    one.state
+        .stop_for_shutdown(&one.engine, &mut one.backend, &mut one.rig);
+    assert!(
+        !one.radio.vfos.lock().unwrap().split,
+        "session one left the radio in split: {:?}",
+        writes_of(&one.radio)
+    );
+
+    // Session two: a new loop and link to the same radio, now on 12 m.
+    let radio = one.radio;
+    radio.vfos.lock().unwrap().tx_at_key.clear();
+    radio.peer.lines.lock().unwrap().clear();
+    let engine = cq_engine_at(SplitMode::Rig, Tier::Ft8, 24.915, "12m", 1958.0);
+    let rig = Rig::rigctld(&radio.peer.address);
+    let mut two = Bench::new(engine, loop_state(), rig, radio);
+    let _ = two.overs(1);
+    assert_eq!(
+        two.radio.vfos.lock().unwrap().tx_at_key,
+        [FT8_12M_DIAL],
+        "session two transmitted off 12 m: {:?}",
+        writes_of(&two.radio)
+    );
+}
+
+/// ⛔ FT2, WHERE NOTHING CAN BE PRE-SET, WRITES THE SPLIT AT THE KEY. The radio left in its 10 m
+/// split, Nexus on 12 m in FT2 at 1958 Hz (no shift). FT2's 3.75 s slot is shorter than the
+/// pre-set's lead, so the over's key writes split on, VFO B on the 12 m dial, its mode and split on
+/// last, and the radio transmits on 12 m.
+#[test]
+fn an_ft2_over_writes_the_split_at_the_key_and_never_keys_the_old_vfo_b() {
+    let engine = cq_engine_at(SplitMode::Rig, Tier::Ft2, 24.915, "12m", 1958.0);
+    let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, Some(STALE_10M_VFO_B));
+    let key = b.ticks_to_key(1_000);
+    assert!(b.radio.keyed(), "premise: FT2 keyed: {key:?}");
+    let before = split_writes_before_first_key(&b.radio);
+    assert!(
+        ends_with_xit_0_on(&before, FT8_12M_DIAL),
+        "FT2: keyed without VFO B written on the 12 m dial: {before:?}"
+    );
+    assert_eq!(
+        b.radio.vfos.lock().unwrap().tx_at_key,
+        [FT8_12M_DIAL],
+        "FT2: the radio transmitted out of the old VFO B"
+    );
+}
+
+/// ⛔ A LATE START RIGHT AFTER CONNECTING WRITES THE SPLIT AT THE KEY. The radio left in its 10 m
+/// split, Nexus on 12 m in FT8 at 1958 Hz (no shift), connected 2 s into this station's own slot
+/// with Call CQ pressed at once: no quiet moment comes before the key, so nothing is pre-set. The
+/// key writes split on, VFO B on the 12 m dial, its mode and split on last, and the radio
+/// transmits on 12 m.
+#[test]
+fn a_late_start_right_after_connecting_writes_the_split_at_the_key() {
+    let engine = engine_at(SplitMode::Rig, Tier::Ft8, 24.915, "12m", 1958.0);
+    let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, Some(STALE_10M_VFO_B));
+    b.t = b.slot + 2_000.0;
+    b.call_cq_now();
+    let key = b.ticks_to_key(100);
+    assert!(b.radio.keyed(), "premise: the late start keyed: {key:?}");
+    let before = split_writes_before_first_key(&b.radio);
+    assert!(
+        ends_with_xit_0_on(&before, FT8_12M_DIAL),
+        "late start: keyed without VFO B written on the 12 m dial: {before:?}"
+    );
+    assert_eq!(
+        b.radio.vfos.lock().unwrap().tx_at_key,
+        [FT8_12M_DIAL],
+        "late start: the radio transmitted out of the old VFO B"
+    );
+}
+
+/// ⭐ A SPLIT THE RADIO TAKES TOO SLOWLY COSTS ONE OVER, NOT THE SESSION. A radio at about 190 ms a
+/// split line (an FTDX10 behind Hamlib), connected 2 s before this station's own slot, so its first
+/// over writes the whole cold split at the key: four lines, about 760 ms, past the 500 ms budget,
+/// every one taken. That over is dropped and TX stays on; what the radio took is kept, so the next
+/// own slot sends only split on last and keys, on the TX dial. Before, the first over halted TX, the
+/// split was let go of, and every first over after it was cold and halted again.
+///
+/// ⛔ AND A RADIO THAT CANNOT CONFIRM EVEN ONE LINE IN TIME STILL HALTS: at 600 ms a line, the
+/// third late over in a row halts TX with the split's reason, and nothing ever keys.
+#[test]
+fn a_split_the_radio_takes_too_slowly_costs_one_over_not_the_session() {
+    let slow = |ms: u64| {
+        let engine = cq_engine_at(SplitMode::Rig, Tier::Ft8, 24.915, "12m", 1353.0);
+        let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, Some(STALE_10M_VFO_B));
+        b.rig.test_reply_deadline_ms = Some(2_000);
+        b.radio.vfos.lock().unwrap().split_write_delay_ms = ms;
+        // No quiet moment with the pre-set's lead before the first own boundary.
+        b.t = b.slot - 2_000.0;
+        b
+    };
+
+    let mut b = slow(190);
+    let first = b.ticks(150);
+    assert!(
+        !first.iter().any(|l| l == "T 1"),
+        "premise: the cold over did not fit its budget: {first:?}"
+    );
+    assert!(
+        b.engine.lock().unwrap().tx_enabled(),
+        "TX halted for a split the radio took: {first:?}"
+    );
+    let key = b.ticks_to_key(1_600);
+    assert!(b.radio.keyed(), "the next own slot did not key: {key:?}");
+    assert_eq!(
+        split_writes(&key)[split_writes(&key).len().saturating_sub(2)..],
+        ["S 1 VFOB", "T 1"],
+        "the next over's key: {key:?}"
+    );
+    assert_eq!(
+        b.radio.vfos.lock().unwrap().tx_at_key,
+        [24_914_500],
+        "keyed off the 12 m TX dial"
+    );
+
+    let mut b = slow(600);
+    let mut writes = Vec::new();
+    for own_slot in 0..3 {
+        let until = b.slot + 30_000.0 * own_slot as f64 + 1_000.0;
+        while b.t < until {
+            writes.extend(b.ticks(1));
+        }
+        let on = b.engine.lock().unwrap().tx_enabled();
+        assert_eq!(
+            on,
+            own_slot < 2,
+            "after own slot {}: TX on {on}: {writes:?}",
+            own_slot + 1
+        );
+    }
+    assert!(!writes.iter().any(|l| l == "T 1"), "keyed late: {writes:?}");
+    let refused = b
+        .engine
+        .lock()
+        .unwrap()
+        .snapshot()
+        .radio
+        .slot_key_refused
+        .expect("nothing says why TX halted");
+    assert!(refused.split_failed, "not told as the split: {refused:?}");
 }
