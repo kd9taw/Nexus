@@ -285,7 +285,7 @@ yours.
 - The IC-9700 satellite uplink and the FTX-1's ALC scale.
 - wfview's virtual port in the Mac's Serial Port list.
 - MSK144's longer over, the JS8 fixes, and Split Operation = Rig outside the ham bands.
-- Going to FT8 turning a CW or Phone split off, and a GridTracker or JTAlert click with two radio windows.
+- A GridTracker or JTAlert click with two radio windows.
 - The 15-second Heartbeat and the new window names with JTAlert.
 
 **Over 130 changes since 1.24.0.** The full list is in the CHANGELOG.
