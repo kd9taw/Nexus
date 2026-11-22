@@ -278,7 +278,6 @@ log.
 These have been tested in software or against a simulated radio, not yet on the air. Please tell us how they work on
 yours.
 
-- The JTDX-style FT8 and FT4 decoders, and FT8's search for the station in DX Call.
 - CW and RTTY FSK on the same serial port as PTT, CW Tune through a WinKeyer or key line, and RTTY Reverse on FSK.
 - Field Day answers to a caller with or without a grid, CQs and calls with no grid, and the WSPR and FST4W button lock.
 - The listening level's boost with a radio.
