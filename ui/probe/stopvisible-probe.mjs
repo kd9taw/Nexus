@@ -309,7 +309,7 @@ async function tabWalk(p) {
         : h && !h.contains(e) ? (h.matches('.cockpit-txstrip') ? 'txstrip' : 'header') : null
       if (!by) return { name }
       // PARKED, or standing in its own place: a surface where it would stand unstuck covers the control in any scroll, so
-      // that is an overlap of the layout, not a reach the scroll padding could give (told apart, printed as a note).
+      // that is an overlap of the layout, not a reach the scroll padding could give (told apart in the report; red just the same, unless a known red names it).
       const sf = by === 'txstrip' || by === 'header' ? h : b
       const was = sf.style.position, at = sf.getBoundingClientRect().top
       sf.style.position = 'static'; const own = sf.getBoundingClientRect().top; sf.style.position = was
@@ -342,6 +342,14 @@ const bareName = (h) => h.slice(h.indexOf(':') + 1).replace(/@-?\d+$/, '')
 const knownTab = (row, hidden) => {
   const k = TAB_KNOWN.find((x) => x.row === row)
   return k && hidden.every((h) => k.names.includes(bareName(h))) ? k : null
+}
+/** A row's verdict: red where Tab leaves any control hidden, behind a parked surface or under one standing in its own
+ *  place (a surface standing where it would unstuck covers the control at every scroll: an overlap of the layout, which
+ *  no scroll padding clears, and just as unseen), unless a known red pins that row and names every one of them. */
+const tabVerdict = (row, hidden, overlap) => {
+  const all = [...hidden, ...overlap]
+  const known = all.length ? knownTab(row, all) : null
+  return { red: all.length > 0 && !known, known }
 }
 /** The known-red control: on its row, one more control planted beside the toolbar's hidden ones must make the row red. */
 let knownControl = null
@@ -418,12 +426,11 @@ for (const [label, route] of VIEWS.filter(([l]) => wantViews.includes(l))) {
             // Every cockpit in English; FT, whose line was the first case, in each language of its rows.
             if (state === 'plain' && scale !== 'auto' && TAB_SIZES(W, H) && (route === 'operate' || loc === 'en')) {
               const { hidden, overlap, off, folded } = await tabWalk(p)
-              if (overlap.length) console.log(`note (an overlap of the layout, not parking): ${label} ${sz} ${scale} ${loc} plain: Tab focuses ${overlap.length} controls under a surface standing in its own place (${overlap.slice(0, 6).join(', ')})`)
               const row = tabRow(label, sz, scale, loc, folded)
-              const known = hidden.length ? knownTab(row, hidden) : null
-              if (known) console.log(`KNOWN RED (pinned, waits on its own fix: ${known.why}): ${row} plain: Tab focuses ${hidden.length} of its ${known.names.length} named controls behind a parked surface (${hidden.join(', ')})`)
-              else if (hidden.length) {
-                reds.push(`${label} ${sz} ${scale} ${loc} plain${folded ? ' (dock folded)' : ''}: Tab focuses ${hidden.length} controls behind a parked surface (${hidden.slice(0, 8).join(', ')})`)
+              const verdict = tabVerdict(row, hidden, overlap)
+              if (verdict.known) console.log(`KNOWN RED (pinned, waits on its own fix: ${verdict.known.why}): ${row} plain: Tab focuses ${hidden.length + overlap.length} of its ${verdict.known.names.length} named controls behind a parked surface or under one in its own place (${[...hidden, ...overlap].join(', ')})`)
+              else if (verdict.red) {
+                reds.push(`${label} ${sz} ${scale} ${loc} plain${folded ? ' (dock folded)' : ''}: Tab focuses ${hidden.length} controls behind a parked surface (${hidden.slice(0, 8).join(', ')}) and ${overlap.length} under a surface standing in its own place, an overlap of the layout (${overlap.slice(0, 8).join(', ')})`)
                 console.log('RED ' + reds[reds.length - 1])
               }
               // THE CONTROL, on the pinned row: a button planted beside the toolbar's ⏸ (so drawn where it is) must not pass.
@@ -432,7 +439,7 @@ for (const [label, route] of VIEWS.filter(([l]) => wantViews.includes(l))) {
                   const c = document.createElement('button'); c.id = 'known-plant'; c.setAttribute('aria-label', 'known-red plant'); c.textContent = '•'; b.after(c); return true })()`)
                 const again = planted ? await tabWalk(p) : null
                 await p.evaluate(`(() => { document.getElementById('known-plant')?.remove(); return 1 })()`)
-                const caught = !!again && again.hidden.some((h) => bareName(h) === 'known-red plant') && !knownTab(row, again.hidden)
+                const caught = !!again && [...again.hidden, ...again.overlap].some((h) => bareName(h) === 'known-red plant') && tabVerdict(row, again.hidden, again.overlap).red
                 knownControl = caught
                 console.log(`CONTROL — ${row}: one more control planted under the TX strip beside the named ones: ${caught ? 'red (caught)' : `not caught (planted ${planted}, hidden ${again?.hidden.join(', ')}, overlap ${again?.overlap.join(', ')})`}`)
               }
@@ -581,6 +588,7 @@ let revealControl = null
 // keeps its own place, and the dock's, far down the shell's scroll, so no reveal can bring it clear and the keep row is
 // parked, not standing in its own place, wherever the walk scrolls.
 let keepControl = null
+let overlapControl = null
 {
   const p = await openPage('cw', [900, 600], '150', 'en')
   try {
@@ -595,6 +603,17 @@ let keepControl = null
     const { hidden, folded } = await tabWalk(p)
     keepControl = folded && hidden.some((h) => h.startsWith('keep:keep plant'))
     console.log(`CONTROL — CW 900×600 150 % with a button planted under the folded keep row: ${keepControl ? 'read as behind the keep row (caught)' : `not caught (folded ${folded}, hidden ${hidden.join(', ')})`}`)
+    // THE OVERLAP CONTROL, on this row no known red pins: a button drawn into the TX strip's own place (pulled up under
+    // it in the flow, as RTTY's toolbar is drawn there) moves with the strip's own place, so no scroll separates the two;
+    // it must make the row red, as an overlap or behind it.
+    await p.evaluate(`(() => { document.querySelector('[aria-label="keep plant"]')?.remove(); const sh = document.querySelector('main.cw-cockpit'); [...sh.children].filter((c) => c.style.flex === '0 0 2000px').forEach((c) => c.remove())
+      const strip = sh.querySelector(':scope > .cockpit-txstrip'); const box = document.createElement('div')
+      box.style.cssText = 'flex: 0 0 auto; position: relative; z-index: 1; margin-top: -' + strip.offsetHeight + 'px; padding-left: 40px'
+      const b = document.createElement('button'); b.setAttribute('aria-label', 'overlap plant'); b.textContent = '•'; box.appendChild(b); strip.after(box); return 1 })()`)
+    const o = await tabWalk(p)
+    const oRow = tabRow('CW', lab([900, 600]), '150', 'en', o.folded)
+    overlapControl = [...o.hidden, ...o.overlap].some((h) => bareName(h) === 'overlap plant') && tabVerdict(oRow, o.hidden, o.overlap).red
+    console.log(`CONTROL — ${oRow} with a button drawn into the TX strip's own place: ${overlapControl ? 'red (caught)' : `not caught (hidden ${o.hidden.join(', ')}; overlap ${o.overlap.join(', ')})`}`)
   } finally {
     await p.close()
   }
@@ -839,6 +858,7 @@ if (errors) { console.log(`stopvisible: ${errors} screens never drew`); process.
       (hidden.length ? `; in its scroll: ${hidden.slice(0, 16).map((r) => `${r.view} ${r.W}×${r.H} ${r.scale} ${r.loc} ${r.state} (cap ${r.squeezed.cap} px, stop ${r.squeezed.stop.h} px${r.squeezed.stop.live ? ', live' : ''})`).join('; ')}` : ''))
   }
 }
+if (overlapControl !== true) console.log('CONTROL FAILED: a button drawn into the TX strip’s own place on an unpinned row did not make it red: the overlap check cannot fail')
 if (keepControl !== true) console.log('CONTROL FAILED: a button planted under the folded keep row was not read as behind it: the keep-row Tab check cannot fail')
 if (knownControl === false) console.log('CONTROL FAILED: a control planted beside a known red’s named ones did not make its row red: the pin cannot fail')
 if (tabControl !== true) console.log('CONTROL FAILED: with the scroll padding taken away, no Tab stop landed behind FT’s parked line: the Tab check cannot fail')
@@ -851,6 +871,6 @@ if (logControl === false) console.log('CONTROL FAILED: the prompt to log over th
 if (moveControl === false) console.log('CONTROL FAILED: the prompt to log held where it opened met no stop after the change: the moving-stop check cannot fail')
 if (moveReds.length) console.log(`stopvisible: RED — ${moveReds.length} rows where the prompt to log met a stop that moved while it was open:\n  ${moveReds.join('\n  ')}`)
 if (logReds.length) console.log(`stopvisible: RED — ${logReds.length} rows where the prompt to log met a stop control or hid Stop TX:\n  ${logReds.join('\n  ')}`)
-if (reds.length || freshReds.length || mirrorReds.length || logReds.length || moveReds.length || logControl === false || moveControl === false || mirrorControl === false || freshControl === false || control !== true || knownControl === false || keepControl !== true || tabControl !== true || offControl !== true || revealControl !== true) { console.log(`stopvisible: RED — ${reds.length} rows with no Stop TX on screen and topmost`); process.exit(1) }
+if (reds.length || freshReds.length || mirrorReds.length || logReds.length || moveReds.length || logControl === false || moveControl === false || mirrorControl === false || freshControl === false || control !== true || knownControl === false || keepControl !== true || overlapControl !== true || tabControl !== true || offControl !== true || revealControl !== true) { console.log(`stopvisible: RED — ${reds.length} rows with no Stop TX on screen and topmost`); process.exit(1) }
 console.log('stopvisible: PASS — a Stop TX fully on screen and topmost in every row, no Tab stop behind FT’s parked line, FT’s Stop TX where a fresh layout puts it after a header change, one click through the stop layer stops once over a parked strip and a squeezed bar, the prompt to log meets no stop control and leaves Stop TX reachable, also after a stop moves while it is open; every control was caught')
 process.exit(0)
