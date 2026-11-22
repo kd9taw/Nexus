@@ -27,6 +27,13 @@ const READY = 'Ready. Stream to see and operate Nexus at the shack, or Listen fo
 const NOT_APPROVED = 'This browser isn\'t approved for this station yet. Press Stream, and Nexus at the shack asks you to approve it.'
 const WAITING = /^Waiting for approval at the shack: Nexus there asks whether to let “Chrome on Windows” stream\. Approve it if it shows this key: [0-9A-F]{4}( [0-9A-F]{4}){7}\.$/
 
+/** What a wait on a page just rendered gets: the page loads its session and draws the station card,
+ *  real work a loaded machine stretches. Measured 2026-11-21, render to the first case's Stream
+ *  button: 186 ms with the CPU to itself, 7.3 s with a thirty-third of it, and that case took 6.5 s
+ *  against the default 5 s budget. A reaction to the operator's own press keeps the default second. */
+const PAGE = { timeout: 5_000 }
+vi.setConfig({ testTimeout: 15_000 })
+
 afterEach(() => { cleanup(); vi.restoreAllMocks(); localStorage.clear() })
 function account(state: AccountSession['entitlement']['state'] = 'active'): AccountSession {
   const accountId = crypto.randomUUID(), now = Date.now()
@@ -49,7 +56,7 @@ it('an approved browser\'s card: one big Stream, a small Listen, the beta line, 
   session.stations.push({ id: crypto.randomUUID(), name: 'Home', device: { id: crypto.randomUUID(), name: 'Chrome on Windows', approved: 1 } })
   client(session)
   render(<RemoteApp />)
-  const stream = await screen.findByRole('button', { name: 'Stream' })
+  const stream = await screen.findByRole('button', { name: 'Stream' }, PAGE)
   const listen = screen.getByRole('button', { name: 'Listen' })
   // The one thing to do next is the amber one; Listen is the plain small one beside it.
   expect(stream.classList.contains('remote-button--primary')).toBe(true)
@@ -67,7 +74,7 @@ it('the old workspace and observer are gone, even for a browser that kept the ol
   session.stations.push({ id: crypto.randomUUID(), name: 'Home', device: { id: crypto.randomUUID(), name: 'Laptop', approved: 1 } })
   client(session)
   render(<RemoteApp />)
-  expect(await screen.findByRole('button', { name: 'Stream' })).toBeTruthy()
+  expect(await screen.findByRole('button', { name: 'Stream' }, PAGE)).toBeTruthy()
   expect(screen.queryByRole('button', { name: 'Open Nexus' })).toBeNull()
   expect(screen.queryByRole('button', { name: 'Observe station' })).toBeNull()
   localStorage.removeItem('nexus.remote.workspace')
@@ -84,7 +91,7 @@ it('not approved yet: one sentence, and Stream asks the shack under this browser
     return structuredClone(session)
   })
   render(<RemoteApp />)
-  await screen.findByRole('button', { name: 'Stream' })
+  await screen.findByRole('button', { name: 'Stream' }, PAGE)
   expect(sentence()).toBe(NOT_APPROVED)
   expect(card().querySelector('.remote-beta')?.textContent).toBe(`Beta ${BETA}`)
   expect(card().querySelector('input'), 'no name to type before asking').toBeNull()
@@ -106,7 +113,7 @@ it('Listen asks the shack too when the browser is not approved, and opens audio 
   session.stations.push({ id: stationId, name: 'Home', device: null })
   const service = client(session)
   render(<RemoteApp />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Listen' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Listen' }, PAGE))
   await waitFor(() => expect(service.post).toHaveBeenCalledWith(`stations/${stationId}/device`, expect.anything()))
   cleanup()
   // Approved: Listen opens the station with no picture; Stream opens the stream. Both start on their own.
@@ -115,7 +122,7 @@ it('Listen asks the shack too when the browser is not approved, and opens audio 
   vi.spyOn(HostedConnection.prototype, 'start').mockImplementation(() => {})
   vi.spyOn(HostedConnection.prototype, 'stop').mockImplementation(() => {})
   render(<RemoteApp />)
-  fireEvent.click(await screen.findByRole('button', { name: 'Listen' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Listen' }, PAGE))
   await waitFor(() => expect(document.querySelector('.remote-stream-app')).toBeTruthy())
   expect(document.querySelector('.remote-stream-video'), 'Listen: no picture').toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Disconnect and return to stations' }))
@@ -128,7 +135,7 @@ it('an account whose access has stopped: the card says why in one sentence, and 
   session.stations.push({ id: crypto.randomUUID(), name: 'Home', device: { id: crypto.randomUUID(), name: 'Laptop', approved: 1 } })
   client(session)
   render(<RemoteApp />)
-  const stream = await screen.findByRole('button', { name: 'Stream' }) as HTMLButtonElement
+  const stream = await screen.findByRole('button', { name: 'Stream' }, PAGE) as HTMLButtonElement
   expect(stream.disabled).toBe(true)
   expect((screen.getByRole('button', { name: 'Listen' }) as HTMLButtonElement).disabled).toBe(true)
   expect(sentence()).toMatch(/^Your trial ended/)
@@ -139,11 +146,11 @@ it('signed out and with no station, the page says the one next step: sign in, th
   vi.spyOn(BrowserClient, 'load').mockResolvedValue({ post: vi.fn(), authenticated: async () => false, signIn: vi.fn(), signOut: vi.fn(),
     signInRefusal: null } as unknown as BrowserClient)
   render(<RemoteApp />)
-  expect(await screen.findByRole('button', { name: 'Sign in' })).toBeTruthy()
+  expect(await screen.findByRole('button', { name: 'Sign in' }, PAGE)).toBeTruthy()
   expect(screen.queryByRole('button', { name: 'Stream' })).toBeNull()
   cleanup()
   client(account('none'))
   render(<RemoteApp />)
-  expect(await screen.findByText(/open Settings → Remote and press “Pair a station”/)).toBeTruthy()
+  expect(await screen.findByText(/open Settings → Remote and press “Pair a station”/, {}, PAGE)).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Link to my account' })).toBeTruthy()
 })
