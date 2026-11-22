@@ -12,6 +12,11 @@ Many of this release's fixes concern keying lines: CW and RTTY FSK on the same s
 typed on Windows and the Mac, and radios with no data mode. Your own transmission is no longer decoded back as received
 text on RTTY, PSK, SSTV or APRS.
 
+With more than one radio, each radio now keeps its own PTT lines, keyers and power caps, and each Nexus window is its
+own station in GridTracker and JTAlert. Split puts the transmit VFO in the mode you are operating, and going to FT8
+turns a CW or Phone split off. The log prompt can play a sound and be made wider, and macros send the report in your
+log.
+
 ## The short version
 
 - **A JTDX-style decoder for FT8 and FT4, now the default,** with four presets from Easy to Ludicrous.
@@ -26,8 +31,25 @@ text on RTTY, PSK, SSTV or APRS.
 - **CW and RTTY FSK key on the same serial port as PTT,** the usual interface wiring.
 - **RTTY overs start and end on a new line,** and with two LTRS characters, as fldigi sends them.
 - **Your own transmission is no longer decoded** on RTTY, PSK, SSTV or APRS.
+- **Each radio keeps its own PTT lines, keyers and power caps.**
+- **Split puts the transmit VFO in your mode,** and a split +/- press can no longer leave your licence.
+- **A sound when a contact is ready to log,** and a log prompt you can widen.
+- **A sound card that opens but sends no audio is named and reopened.**
 
 ## Upgrading from 1.24
+
+### Check this first if you run more than one radio
+
+- **PTT lines, keyers and power caps are now each radio's own:** the RTS/DTR keying lines and serial handshake, the CW
+  keyer and WinKeyer or keyline port, the RTTY FSK port and line, the headphone monitor and voice-keyer microphone, the
+  split and scope source, and the power caps, Tune power and SSTV power. The radio you are using keeps every value it
+  had. Your other radios start with the values you had set, power caps included, so no radio transmits with more power
+  than before, but with the usual defaults for the PTT wiring and keyers, so no radio takes another radio's PTT line or
+  keyer port. Switch to each radio and check those settings once. The CAT broker, the JS8 API and the TCI server stay
+  one for the whole station.
+- **GridTracker and JTAlert see each window as its own station.** The single window is now called "Nexus" (it was
+  "Tempo"), and each radio window "Nexus - r1", "Nexus - r2" and so on. If JTAlert remembers settings for the old
+  "Tempo" name, choose the new name once.
 
 ### Check this first if you operate FT8 or FT4
 
@@ -65,6 +87,14 @@ text on RTTY, PSK, SSTV or APRS.
 - **The large TX meters pane is smaller,** with dials half the size, and the panes beside it get the room.
 - **A frequency you type is used when you click away** in Nexus, as if you had pressed Enter. Esc still cancels.
 - **The listening level goes past 100 %,** up to +20 dB, for a radio whose USB audio is quiet in your headphones.
+- **Going to the FT8, FT4 or FT2 screens turns a split you set on CW or Phone off,** as WSJT-X does; FT then uses its
+  own Split Operation setting. A satellite pass keeps its uplink split.
+- **`{RST}` in a CW, RTTY or PSK macro sends the report in the log's Sent box,** not always 599 (5NN), and 599 only when
+  the box is empty. A macro you edited and saved keeps its own text.
+- **Ludicrous and a Custom thread count leave one processor core free.**
+- **The Windows installer is about 350 MB, about 80 MB larger than 1.24.0's.** The difference is Microsoft's WebView2
+  runtime, which the installer carries so that Nexus starts on a computer that does not have it; Microsoft's current
+  runtime is larger. Nexus itself is about the same size as before.
 
 ## Operating FT8 and FT4
 
@@ -91,6 +121,10 @@ text on RTTY, PSK, SSTV or APRS.
 - **MSK144 overs are as long as WSJT-X's.**
 - **JS8:** TX On and Tune in the top bar are no longer greyed out, and an FT answer from Remote or a logger no longer
   turns TX on while you are on JS8.
+- **GridTracker and JTAlert:** Nexus says it is there every 15 seconds, as WSJT-X does, and the Connections log says
+  when the WSJT-X UDP API cannot send. With two radio windows, a GridTracker or JTAlert click starts a contact only in
+  the window it names; a Halt TX still stops every window.
+- **FT and SSTV: the waterfall's divider follows the mouse again** as you drag it.
 
 ## Contests
 
@@ -108,6 +142,7 @@ text on RTTY, PSK, SSTV or APRS.
   names. QTCs and the multipliers are not supported yet, so Nexus shows your contact count rather than a score.
 - **With the contest switch on, Nexus says so even in plain FT8:** the mode badge names the contest and the FT screen
   shows a **Contest** chip.
+- **Sweepstakes no longer asks for the call twice:** the received exchange is NR, PREC, CK and SEC beside the call box.
 
 ## RTTY, CW and keying lines
 
@@ -127,6 +162,10 @@ text on RTTY, PSK, SSTV or APRS.
   Each ignores the radio's audio while you transmit and for 0.6 seconds after.
 - **The FSK serial port box says what to put in it,** and points a two-port Yaesu at its Standard COM port.
 - **The RTTY waterfall's title bar stays on one line** on a small laptop at 175 %.
+- **RTTY and PSK macros can send names:** `{NAME}` is yours and `{HISNAME}` the other station's, as in CW.
+- **RTTY: Stop from a Remote client also ends an Auto run.**
+- **CW by CAT says when CAT itself is down,** instead of blaming the radio, and **says when your rig model cannot key
+  CW over CAT at all** (every Xiegu model, among others), suggesting the Serial keyline or Soundcard keyer.
 
 ## Radios and CAT
 
@@ -148,6 +187,20 @@ text on RTTY, PSK, SSTV or APRS.
 - **Flex: Settings ▸ Radio ▸ Audio says when the waterfall is hearing the computer, not the radio.**
 - **Mac: wfview's virtual serial port shows up in the Serial Port list.**
 - **Phone on FM: the notch buttons no longer look switched on.**
+- **Split puts the transmit VFO in the mode you are operating:** USB or LSB on Phone, CW on CW, the data mode on RTTY
+  and PSK. Before, VFO B kept the mode it was last in, usually the DATA-U your last FT8 session left, so Phone could go
+  out in DATA-U and CW did not key (reported on an FTDX10). It works on every radio Nexus runs through Hamlib and on
+  Nexus's own Icom and Flex connections; OmniRig and TCI cannot set it, so set it on the radio there.
+- **Split +/- can no longer move your transmit frequency outside your licence,** and a split from a spot or a
+  satellite's Doppler correction is checked the same way. On the FT-991/A, FT-891, FT-710, FTDX10 and FTDX101, each
+  press now reaches the radio as you make it.
+- **IC-7300, IC-705, IC-7100 and IC-905 through Hamlib: the A/B indicator follows the radio around split,** pressing B
+  with split on no longer snaps the radio back to A, and with B selected under split Nexus checks your licence at VFO A,
+  where these radios then transmit.
+- **PTT NOT ACCEPTED says what to check first,** hovering it shows what the radio or Hamlib answered, and the diagnostic
+  log records each refused press. A press the radio refused no longer freezes the scope.
+- **A sound card that opens but sends no audio is named and reopened:** the status line shows **NO RECEIVE AUDIO** and
+  Nexus reopens the card by itself, never while you are transmitting.
 
 ## Remote
 
@@ -178,6 +231,19 @@ text on RTTY, PSK, SSTV or APRS.
 - **Space Wx shows today's sunspot number so far,** next to yesterday's.
 - **The WSJT-X UDP address says that each saved profile has its own.**
 - **SSTV: the ISS's 70 cm downlink, 437.550 MHz FM, is in the band menu.** Nexus asks before sending a picture there.
+- **A sound when a contact is ready to log,** in Settings ▸ Appearance ▸ Accessibility & eyes-free, off unless you turn
+  it on; with Auto-log on and the prompt off, it plays when Auto-log logs the contact.
+- **The log prompt can be made wider** by dragging its right edge, and remembers the width.
+- **Log your Station power when an amplifier Nexus can't read is inline,** per radio, in Settings ▸ Digital.
+- **QRZ sync works with a big logbook,** 250 contacts at a time, and carries on where it stopped.
+- **Two windows no longer upload the same contacts to LoTW twice,** and several radio windows no longer undo each
+  other's changes to the shared radio list.
+- **World Radio League: a contact WRL already has counts as uploaded** instead of being sent again.
+- **N3FJP: Test tries the host and port you typed,** not the ones last saved.
+- **Chase and Chase Feed rows name the frequency and mode to tune to,** not only the band.
+- **Linux AppImage: LoTW uploads work again on Fedora,** and links, files and folders open in your own browser and file
+  manager.
+- **Every installer carries the IOTA island lists.**
 
 ## Screens
 
@@ -192,6 +258,12 @@ text on RTTY, PSK, SSTV or APRS.
 - **The left rail shows more of its sections on a laptop,** and says when the rest are below.
 - **The first-run wizard's Next and Finish stay on screen.**
 - **The JT65 mode button no longer says receive-only.**
+- **Tempo: the waterfall can be dragged taller,** to about half the window at 1080p and two thirds at 1440p and up.
+- **Stop TX works when a menu covers only part of it,** and pop-ups and cards keep clear of every stop button (Stop TX,
+  Esc/Stop, Abort and SSTV's Stop), an open menu and the control you are using from the keyboard.
+- **Phone and CW: the ⋯ panel opens on screen.**
+- **Conditions: the Openings box says "No band openings right now."** instead of standing empty.
+- **Settings: the LoTW download buttons no longer cover Station Location** in a narrow column.
 
 ## Other fixes
 
@@ -213,5 +285,7 @@ yours.
 - The IC-9700 satellite uplink and the FTX-1's ALC scale.
 - wfview's virtual port in the Mac's Serial Port list.
 - MSK144's longer over, the JS8 fixes, and Split Operation = Rig outside the ham bands.
+- Going to FT8 turning a CW or Phone split off, and a GridTracker or JTAlert click with two radio windows.
+- The 15-second Heartbeat and the new window names with JTAlert.
 
-**Nearly 100 changes since 1.24.0.** The full list is in the CHANGELOG.
+**Over 130 changes since 1.24.0.** The full list is in the CHANGELOG.
