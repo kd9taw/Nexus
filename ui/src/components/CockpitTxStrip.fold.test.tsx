@@ -358,14 +358,27 @@ describe('a focused control is never left behind the parked keep row', () => {
     expect(main().scrollTop).toBeCloseTo(500 + (120.5 - 233.5) / 1.75, 3)
   })
 
-  it('with the strip parked right on the keep row, a control behind the two is centred in the room above the strip', () => {
-    // The strip is held at its bottom offset, 233..300, on the row: no room between. The room above is 50..233, its middle
-    // 141.5; the control's centre 300.
+  it('with the strip parked right on the keep row, a control BEFORE it behind the two is centred in the room above the strip', () => {
+    // Scrolled to the foot, a control before the strip (the header, the scope) meets it held at its bottom offset,
+    // 233..300, on the row: no room between. The room above is 50..233, its middle 141.5; the control's centre 300.
     boxes['cockpit-txstrip'] = box(233, 67)
     mountFolded()
     main().scrollTop = 500
-    focusOn('key-d', 280, 40)
+    boxes['scope-key'] = box(280, 40)
+    const el = document.createElement('button')
+    el.className = 'scope-key'
+    main().insertBefore(el, main().firstChild)
+    tabTo(el)
+    flush()
     expect(main().scrollTop).toBeCloseTo(500 + (300 - 141.5) / 1.75, 3)
+  })
+
+  it('the control: a dock row AFTER the strip is never sent above it, where the strip would cover it', () => {
+    boxes['cockpit-txstrip'] = box(233, 67)
+    mountFolded()
+    main().scrollTop = 500
+    focusOn('key-e', 280, 40)
+    expect(main().scrollTop).toBe(500)
   })
 
   it('a control already in sight does not move the shell', () => {

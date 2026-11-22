@@ -524,14 +524,17 @@ function centreIfBehind(shell: HTMLElement, strip: HTMLElement, dock: HTMLElemen
   if (cy < parked && (cy < s.top || cy > s.bottom)) return
   if (shell.offsetHeight === 0) return
   const z = shell.getBoundingClientRect().height / shell.offsetHeight
-  // THE STRIP PARKED ON THE KEEP ROW: a control above the strip's own place, scrolled down to the foot, meets the strip
-  // held at its bottom offset, right on the row, and there is no room between the two (CW at 900×600 / 150 %: ⊞ Panels
-  // behind both, measured). Its room is then above the strip, under the shell's top or a header pinned there: where the
-  // room between does not hold the control and the room above is the larger, the control is centred there instead.
+  // THE STRIP PARKED ON THE KEEP ROW: a control BEFORE the strip in the shell (the header, the scope), scrolled down to
+  // the foot, meets the strip held at its bottom offset, right on the row, and there is no room between the two (CW at
+  // 900×600 / 150 %: ⊞ Panels behind both, measured). Its room is then above the strip, under the shell's top or a header
+  // pinned there: where the room between does not hold it and the room above is the larger, it is centred there
+  // instead. Only a control before the strip: one after it (the dock's own rows) stays below it however the shell
+  // scrolls, and above the strip it would be under the strip (JS8's macro keys at 900×600 / 175 %, measured).
   const head = pinnedAbove(shell, strip)
   const top = head ? head.getBoundingClientRect().bottom : shell.getBoundingClientRect().top
   const between = parked - s.bottom
-  if (between < q.height && s.top - top > between) {
+  const before = (strip.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_PRECEDING) !== 0
+  if (before && between < q.height && s.top - top > between) {
     shell.scrollTop += (cy - (top + s.top) / 2) / z
     return
   }
