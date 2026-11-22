@@ -168,7 +168,12 @@ function useParkLine(ref: RefObject<HTMLElement | null>) {
     // error, and Stop TX with it: 0.8 px at 1366×768 at 175 % on the first transmit (measured in Chrome; 0.1 now).
     const px = `${Math.max(0, Math.round((q.height / z - reach) * 100) / 100)}px`
     if (strip.style.getPropertyValue('--cockpit-ftstrip-rest') !== px) strip.style.setProperty('--cockpit-ftstrip-rest', px)
-    const park = `${Math.ceil(reach * z)}px`
+    // What the parked line covers, from the scrollport's foot: the reach, and the shell's own bottom padding under it — a
+    // sticky box parks inside its scroller's padding (Chrome), so the line stands that far above the foot. Without the
+    // padding, the last controls above the strip scrolled only to the padding's top and stayed behind the line (4 Tab stops
+    // at 1366×768 at the OS's 175 % with the app at 100 %, measured).
+    const pad = shell ? parseFloat(getComputedStyle(shell).paddingBottom) || 0 : 0
+    const park = `${Math.ceil((reach + pad) * z)}px`
     if (shell && shell.style.getPropertyValue('--cockpit-ftstrip-park-h') !== park) shell.style.setProperty('--cockpit-ftstrip-park-h', park)
   }
   useLayoutEffect(apply)

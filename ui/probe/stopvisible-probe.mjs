@@ -27,10 +27,12 @@
 // grid across its face (inset past its round corners) the topmost element is the button. While it reads, every
 // element takes pointer events, so a notice that lets clicks through still counts as covering what it hides.
 //
-// AND THE TAB WALK (FT, plain, 150/175 % up to 1366×768): real Tab through the shell; no focused control may have its
-// centre behind the QSO strip's parked line (it covered 36 Tab stops at 900×600 / 175 % before the shell's scroll
-// padding read the parked line's height), and on the supported screens (probe/sizes.mjs, not the off-matrix windows)
-// none may have it outside the window: a control Tab focuses is one the operator cannot see.
+// AND THE TAB WALK (FT, plain, every pinned scale, 100 % included, up to 1366×768): real Tab through the shell; no focused
+// control may have its centre behind the QSO strip's parked line (it covered 36 Tab stops at 900×600 / 175 % before the
+// shell's scroll padding read the parked line's height, and 4 at 1366×768 at the OS's 175 % with the app at 100 %, where
+// the padding left out the shell's own bottom padding, which the line parks above), and on the supported screens
+// (probe/sizes.mjs, not the off-matrix windows) none may have it outside the window: a control Tab focuses is one the
+// operator cannot see.
 // AND THE ONE-JUMP REVEAL (FT, plain, the scaled rows on the supported screens, where the shell scrolls): from the top of
 // the shell, each control of the QSO strip, focused (`focus()`) and revealed the layout contract's way (`focus({
 // preventScroll })` + `scrollIntoView({ block: 'nearest' })`), must end on screen and topmost, and already so in the
@@ -82,7 +84,7 @@ const OFF = [[700, 800], [900, 600], [1200, 750]]
 const CI = [
   ['175', [[700, 800], [900, 600], px(LAPTOP)], ['en', 'ru']],
   ['150', [[900, 600], px(LAPTOP)], ['en']],
-  ['100', [px(FLOOR), px(UHD), px(UHD_200)], ['en']],
+  ['100', [px(FLOOR), px(FLOOR_150), px(UHD), px(UHD_200)], ['en', 'ru']],
   ['auto', [[1200, 750], px(FLOOR)], ['en']],
 ]
 const FULL_SIZES = [...OFF, ...MATRIX.map(px)]
@@ -371,7 +373,7 @@ for (const [label, route] of VIEWS.filter(([l]) => wantViews.includes(l))) {
             // The first-run state is only a test while the nudge is drawn: printed per row, so a nudge that moved off a
             // screen reads as such, and a page that never drew it anywhere is a red below.
             if (state === 'firstRun') { row.nudge = !!m?.nudge; nudgeRows.push(row) }
-            if (route === 'operate' && state === 'plain' && scale !== 'auto' && Number(scale) >= 150 && TAB_SIZES(W, H)) {
+            if (route === 'operate' && state === 'plain' && scale !== 'auto' && TAB_SIZES(W, H)) {
               const { hidden, off } = await tabWalk(p)
               if (hidden.length) {
                 reds.push(`${label} ${sz} ${scale} ${loc} plain: Tab focuses ${hidden.length} controls behind the parked QSO-strip line (${hidden.slice(0, 8).join(', ')})`)
