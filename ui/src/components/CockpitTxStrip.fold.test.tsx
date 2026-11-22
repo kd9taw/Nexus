@@ -279,13 +279,14 @@ describe('a focused control is never left behind the parked keep row', () => {
   }
   beforeEach(() => {
     for (const k of Object.keys(boxes)) delete boxes[k]
-    Object.assign(boxes, { 'cockpit-txstrip': box(100, 67), 'cockpit-txdock-keep': box(300, 156), 'layout': box(50, 400) })
+    // As Chrome parks them in a 356 px shell at 100..456: the strip stuck at the top, the keep row at the foot.
+    Object.assign(boxes, { 'cockpit-txstrip': box(100, 67), 'cockpit-txdock-keep': box(300, 156), 'layout': box(100, 356) })
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
       for (const [c, b] of Object.entries(boxes)) if (this.classList.contains(c)) return b
       return box(0, 0)
     })
     vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
-      if (this.tagName === 'MAIN') return 400 / 1.75
+      if (this.tagName === 'MAIN') return 356 / 1.75
       if (this.classList.contains('cockpit-txdock')) return this.getAttribute('data-fold') === 'on' ? 0 : DOCK_H
       if (this.classList.contains('cockpit-txdock-keep')) return 156 / 1.75
       if (this.classList.contains('cockpit-txstrip')) return STRIP_H
@@ -358,9 +359,9 @@ describe('a focused control is never left behind the parked keep row', () => {
     expect(main().scrollTop).toBeCloseTo(500 + (120.5 - 233.5) / 1.75, 3)
   })
 
-  it('with the strip parked right on the keep row, a control BEFORE it behind the two is centred in the room above the strip', () => {
-    // Scrolled to the foot, a control before the strip (the header, the scope) meets it held at its bottom offset,
-    // 233..300, on the row: no room between. The room above is 50..233, its middle 141.5; the control's centre 300.
+  it('a control BEFORE the strip meets it resting on the keep row, and is centred in the room above the two', () => {
+    // Scrolled to the foot, a control before the strip (the header, the scope) meets the strip held at its bottom offset,
+    // 233..300, right on the row. Its room is the shell's top to there, 100..233, its middle 166.5; its centre is 300.
     boxes['cockpit-txstrip'] = box(233, 67)
     mountFolded()
     main().scrollTop = 500
@@ -370,15 +371,35 @@ describe('a focused control is never left behind the parked keep row', () => {
     main().insertBefore(el, main().firstChild)
     tabTo(el)
     flush()
-    expect(main().scrollTop).toBeCloseTo(500 + (300 - 141.5) / 1.75, 3)
+    expect(main().scrollTop).toBeCloseTo(500 + (300 - 166.5) / 1.75, 3)
+  })
+
+  it('…and with the dock whole: a sticky dock parks at the foot, and the strip rests on it', () => {
+    // Unfolded, the dock (300..456) is what parks; it wrote no scroll padding and nothing centred, and Tab stopped behind
+    // it (38 controls on CW at 1366×768 at the OS's 175 %, measured).
+    injectSheet(SHEET)
+    shellH = 900
+    boxes['cockpit-txdock'] = box(300, 156)
+    boxes['cockpit-txstrip'] = box(233, 67)
+    render(<Shell />)
+    expect(main().style.getPropertyValue('--cockpit-txdock-keep-h'), 'the whole dock is cleared').toBe('156px')
+    main().scrollTop = 500
+    boxes['scope-key'] = box(280, 40)
+    const el = document.createElement('button')
+    el.className = 'scope-key'
+    main().insertBefore(el, main().firstChild)
+    tabTo(el)
+    flush()
+    expect(main().scrollTop).toBeCloseTo(500 + (300 - 166.5) / 1.75, 3)
   })
 
   it('the control: a dock row AFTER the strip is never sent above it, where the strip would cover it', () => {
+    // Its room is under the strip parked at the top, 167..300, its middle 233.5, never the room above the strip.
     boxes['cockpit-txstrip'] = box(233, 67)
     mountFolded()
     main().scrollTop = 500
     focusOn('key-e', 280, 40)
-    expect(main().scrollTop).toBe(500)
+    expect(main().scrollTop).toBeCloseTo(500 + (300 - 233.5) / 1.75, 3)
   })
 
   it('a control already in sight does not move the shell', () => {

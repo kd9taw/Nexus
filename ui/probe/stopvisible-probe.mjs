@@ -28,10 +28,11 @@
 // element takes pointer events, so a notice that lets clicks through still counts as covering what it hides.
 //
 // AND THE TAB WALK (every cockpit in English and FT in each of its languages, plain, every pinned scale, 100 % included,
-// up to 1366×768): real Tab through the shell; no focused control may have its centre behind FT's parked QSO-strip line
-// or a folded dock's keep row (FT's line covered 36 Tab stops at 900×600 / 175 % before the shell's scroll padding read
+// up to 1366×768): real Tab through the shell; no focused control may have its centre behind a parked surface: FT's
+// QSO-strip line, a dock (folded to its keep row or whole), SSTV's bar, the TX strip or a pinned header (FT's line covered 36 Tab stops at 900×600 / 175 % before the shell's scroll padding read
 // its height, and 4 at 1366×768 at the OS's 175 % with the app at 100 %, where the padding left out the shell's own
-// bottom padding, which the line parks above; a folded keep row left the same gap, 21 px on CW at 900×600 / 150 %), and on the supported screens
+// bottom padding, which the line parks above; a folded keep row left the same gap, 21 px on CW at 900×600 / 150 %; an unfolded dock and SSTV's bar wrote no
+// padding at all, 38 stops on CW at 1366×768 at 100 %), and on the supported screens
 // (probe/sizes.mjs, not the off-matrix windows) none may have it outside the window: a control Tab focuses is one the
 // operator cannot see.
 // AND THE ONE-JUMP REVEAL (FT, plain, the scaled rows on the supported screens, where the shell scrolls): from the top of
@@ -85,7 +86,7 @@ const OFF = [[700, 800], [900, 600], [1200, 750]]
 const CI = [
   ['175', [[700, 800], [900, 600], px(LAPTOP)], ['en', 'ru']],
   ['150', [[900, 600], px(LAPTOP)], ['en']],
-  ['100', [px(FLOOR), px(FLOOR_150), px(UHD), px(UHD_200)], ['en', 'ru']],
+  ['100', [px(FLOOR), px(FLOOR_150), px(LAPTOP), px(UHD), px(UHD_200)], ['en', 'ru']],
   ['auto', [[1200, 750], px(FLOOR)], ['en']],
 ]
 const FULL_SIZES = [...OFF, ...MATRIX.map(px)]
@@ -276,15 +277,18 @@ async function apply(p, st, route) {
 /** What parks at the foot of a cockpit's shell and can stand over a control the shell scrolls: FT's QSO strip (its
  *  first line), a folded dock's keep row, an unfolded sticky dock, SSTV's Send/Stop bar. */
 const PARKED_FOOT = ".cockpit-ftstrip, .cockpit-txdock-keep[data-fold='on'], .cockpit-txdock, .sstv-tx-bar"
+/** What parks at its top (or, held at its bottom offset, rests on what parks at the foot): the TX strip, a pinned header. */
+const PARKED_TOP = '.cockpit-txstrip, .cockpit-header-pinned'
 /** THE TAB WALK (every cockpit, plain state, sizes where something parks): real Tab from the start of the shell, and
- *  every control it focuses must not have its centre behind a surface parked at the shell's foot (one that does not
- *  hold it), nor outside the window. Parked at the foot, FT's line covered 36 Tab stops at 900×600 / 175 % (measured)
+ *  every control it focuses must not have its centre behind a parked surface that does not hold it (at the shell's foot,
+ *  or the TX strip and a pinned header, wherever they are parked), nor outside the window. Parked at the foot, FT's line covered 36 Tab stops at 900×600 / 175 % (measured)
  *  until the shell's scroll padding read its height. Returns the hidden ones as `surface:name@y`, the names focused
  *  outside the window, and whether the dock was folded. */
 async function tabWalk(p) {
   await p.evaluate(`(() => { document.activeElement?.blur?.(); const m = [...document.querySelectorAll('main')].find((x) => x.closest('[hidden]') == null && x.getBoundingClientRect().height > 0)
     window.__tabShell = m; m.scrollTop = 0; m.querySelector('button, input, select, textarea')?.focus({ preventScroll: true }); m.scrollTop = 0; return 1 })()`)
   const hidden = []
+  const overlap = []
   const off = []
   let first = null
   for (let i = 0; i < 220; i++) {
@@ -298,17 +302,28 @@ async function tabWalk(p) {
       if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return { name, off: true }
       const lift = document.createElement('style'); lift.textContent = ${JSON.stringify(LIFT_CSS)}; document.head.appendChild(lift)
       const t = document.elementFromPoint(x, y); lift.remove()
-      const b = t && !(t === e || e.contains(t)) ? t.closest(${JSON.stringify(PARKED_FOOT)}) : null
-      return { name, by: b && !b.contains(e) ? (b.matches('.cockpit-ftstrip') ? 'strip' : b.matches('.cockpit-txdock-keep') ? 'keep' : b.matches('.sstv-tx-bar') ? 'bar' : 'dock') : null } })()`).catch(() => null)
+      const over = t && !(t === e || e.contains(t)) ? t : null
+      const b = over?.closest(${JSON.stringify(PARKED_FOOT)})
+      const h = over?.closest(${JSON.stringify(PARKED_TOP)})
+      const by = b && !b.contains(e) ? (b.matches('.cockpit-ftstrip') ? 'strip' : b.matches('.cockpit-txdock-keep') ? 'keep' : b.matches('.sstv-tx-bar') ? 'bar' : 'dock')
+        : h && !h.contains(e) ? (h.matches('.cockpit-txstrip') ? 'txstrip' : 'header') : null
+      if (!by) return { name }
+      // PARKED, or standing in its own place: a surface where it would stand unstuck covers the control in any scroll, so
+      // that is an overlap of the layout, not a reach the scroll padding could give (told apart, printed as a note).
+      const sf = by === 'txstrip' || by === 'header' ? h : b
+      const was = sf.style.position, at = sf.getBoundingClientRect().top
+      sf.style.position = 'static'; const own = sf.getBoundingClientRect().top; sf.style.position = was
+      return { name, by, overlap: Math.abs(own - at) < 1 } })()`).catch(() => null)
     if (!f) continue
     if (f.out) { if (first) break; continue }
     if (f.name === first) break
     first ??= f.name
-    if (f.by) hidden.push(`${f.by}:${f.name}`)
+    if (f.by && f.overlap) overlap.push(`${f.by}:${f.name}`)
+    else if (f.by) hidden.push(`${f.by}:${f.name}`)
     if (f.off) off.push(f.name)
   }
   const folded = await p.evaluate(`(() => { document.activeElement?.blur?.(); const m = window.__tabShell; m.scrollTop = 0; return !!m.querySelector(".cockpit-txdock[data-fold='on']") })()`)
-  return { hidden, off, folded }
+  return { hidden, overlap, off, folded }
 }
 const TAB_SIZES = (W, H) => W <= 1366 && H <= 800
 
@@ -382,15 +397,12 @@ for (const [label, route] of VIEWS.filter(([l]) => wantViews.includes(l))) {
             if (state === 'firstRun') { row.nudge = !!m?.nudge; nudgeRows.push(row) }
             // Every cockpit in English; FT, whose line was the first case, in each language of its rows.
             if (state === 'plain' && scale !== 'auto' && TAB_SIZES(W, H) && (route === 'operate' || loc === 'en')) {
-              const { hidden, off, folded } = await tabWalk(p)
-              // Red behind FT's parked line and a folded dock's keep row. An unfolded sticky dock and SSTV's bar write
-              // no scroll padding yet: printed, not a red, until that is fixed on its own.
-              const red = hidden.filter((h) => h.startsWith('strip:') || h.startsWith('keep:'))
-              if (red.length) {
-                reds.push(`${label} ${sz} ${scale} ${loc} plain${folded ? ' (dock folded)' : ''}: Tab focuses ${red.length} controls behind a surface parked at the shell's foot (${red.slice(0, 8).join(', ')})`)
+              const { hidden, overlap, off, folded } = await tabWalk(p)
+              if (overlap.length) console.log(`note (an overlap of the layout, not parking): ${label} ${sz} ${scale} ${loc} plain: Tab focuses ${overlap.length} controls under a surface standing in its own place (${overlap.slice(0, 6).join(', ')})`)
+              if (hidden.length) {
+                reds.push(`${label} ${sz} ${scale} ${loc} plain${folded ? ' (dock folded)' : ''}: Tab focuses ${hidden.length} controls behind a parked surface (${hidden.slice(0, 8).join(', ')})`)
                 console.log('RED ' + reds[reds.length - 1])
               }
-              if (hidden.length > red.length) console.log(`note (not yet a red): ${label} ${sz} ${scale} ${loc} plain: Tab focuses ${hidden.length - red.length} controls behind an unfolded dock or SSTV's bar (${hidden.filter((h) => !red.includes(h)).slice(0, 6).join(', ')})`)
               // Off the window only on the supported screens: the off-matrix windows (dragged below any of them) hold
               // the xs layout's stops, and a control that runs past the side there is a matter for those layouts.
               if (off.length && !OFF.some(([w, h]) => w === W && h === H)) {
