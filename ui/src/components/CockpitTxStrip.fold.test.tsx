@@ -402,6 +402,36 @@ describe('a focused control is never left behind the parked keep row', () => {
     expect(main().scrollTop).toBeCloseTo(500 + (300 - 233.5) / 1.75, 3)
   })
 
+  it('a control taller than its room has its top put at the room’s top, never centred past both ends', () => {
+    // The room is 167..300 (133 px); the control is 200 px from 250. Centred, it would run past both ends.
+    mountFolded()
+    main().scrollTop = 500
+    focusOn('tall-key', 250, 200)
+    expect(main().scrollTop).toBeCloseTo(500 + (250 - 167) / 1.75, 3)
+  })
+
+  it('at the end of the shell’s scroll, a scroller inside it that holds the control takes the rest', () => {
+    // The shell cannot scroll past 500 (it is at the end of its range); the control sits far down an inner column
+    // (JS8's), centre 330.5, its room's middle 233.5: the column scrolls the 97 rendered px instead.
+    injectSheet('.inner-col { overflow-y: auto }')
+    mountFolded()
+    let st = 500
+    Object.defineProperty(main(), 'scrollTop', { configurable: true, get: () => st, set: (v: number) => { st = Math.min(500, v) } })
+    const col = document.createElement('div')
+    col.className = 'inner-col'
+    Object.defineProperty(col, 'scrollHeight', { configurable: true, get: () => 1000 })
+    Object.defineProperty(col, 'clientHeight', { configurable: true, get: () => 200 })
+    document.querySelector('main > .cockpit-txdock')!.insertBefore(col, document.querySelector('.cw-macros'))
+    boxes['deep-key'] = box(300, 61)
+    const el = document.createElement('button')
+    el.className = 'deep-key'
+    col.appendChild(el)
+    tabTo(el)
+    flush()
+    expect(main().scrollTop, 'the shell is at the end of its range').toBe(500)
+    expect(col.scrollTop, 'the column brings the control up').toBeCloseTo((330.5 - 233.5) / 1.75, 3)
+  })
+
   it('a control already in sight does not move the shell', () => {
     mountFolded()
     main().scrollTop = 500

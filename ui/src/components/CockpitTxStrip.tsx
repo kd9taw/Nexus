@@ -566,10 +566,29 @@ function centreIfBehind(shell: HTMLElement, strip: HTMLElement, dock: HTMLElemen
   // 700×800 / 175 %, measured), and a scroll that brings the control up leaves it there. Stuck at the top, it will rest.
   const s = strip.getBoundingClientRect()
   const hi = before ? (s.top > lo ? Math.min(s.top, sh.bottom - edge.rest) : sh.bottom - edge.rest) : sh.bottom - edge.bottom
-  // In sight is the whole control where its room holds it, its centre where it does not.
-  const fits = q.height <= hi - lo
+  // In sight is the whole control where its room holds it, its centre where it does not. One that fits is centred in its
+  // room. One taller than its room has its top put at the room's top, so its label and its centre are what show, while
+  // its centre still lands in the room; taller than twice the room, that would leave its centre behind the parked
+  // surfaces (JS8's fields at 900×600 / 175 %: a 23 px room, measured), so it is centred.
+  const room = hi - lo
+  const fits = q.height <= room
   if (hi <= lo || (fits ? q.top >= lo && q.bottom <= hi : cy >= lo && cy <= hi)) return
-  shell.scrollTop += (cy - (lo + hi) / 2) / edge.z
+  let move = fits || q.height / 2 > room ? cy - (lo + hi) / 2 : q.top - lo
+  // THE SHELL FIRST, then a scroller inside it that holds the control (a pane's or JS8's column): at the end of the
+  // shell's own scroll, a control far down an inner column stayed behind the keep row (JS8 at 1366×768 at the OS's 175 %
+  // with the app at 150 %, measured), and only its column can bring it up. Each takes what its range allows.
+  const scrollers = [shell]
+  for (let p = el.parentElement; p && p !== shell; p = p.parentElement) {
+    if (p.scrollHeight > p.clientHeight + 1 && /(auto|scroll)/.test(getComputedStyle(p).overflowY)) scrollers.push(p)
+  }
+  for (const sc of scrollers) {
+    if (Math.abs(move) < 0.5) break
+    const z = sc.offsetHeight > 0 ? sc.getBoundingClientRect().height / sc.offsetHeight : edge.z
+    const was = sc.scrollTop
+    // The browser clamps a scroll to its range: what it took is what moved.
+    sc.scrollTop = was + move / z
+    move -= (sc.scrollTop - was) * z
+  }
 }
 
 /** The same, for something opened rather than focused (JS8's heartbeat menu): where it scrolls with a folded dock's

@@ -576,6 +576,30 @@ let revealControl = null
   }
 }
 
+// THE KEEP-ROW CONTROL: on CW at 900×600 / 150 % (the dock folded there), a button planted at the shell's foot under the
+// keep row (sticky at the bottom, below the row's z) must be read as focused behind the keep row. A tall spacer before it
+// keeps its own place, and the dock's, far down the shell's scroll, so no reveal can bring it clear and the keep row is
+// parked, not standing in its own place, wherever the walk scrolls.
+let keepControl = null
+{
+  const p = await openPage('cw', [900, 600], '150', 'en')
+  try {
+    let m = null
+    for (let i = 0; i < 160 && !m?.stops.length; i++) { await sleep(250); m = await p.evaluate(MEASURE).catch(() => null) }
+    await apply(p, PLAIN, 'cw')
+    await settle(p)
+    await p.evaluate(`(() => { const sh = document.querySelector('main.cw-cockpit'); const b = document.createElement('button'); b.setAttribute('aria-label', 'keep plant')
+      b.style.cssText = 'position: sticky; bottom: 0; z-index: 1; flex: 0 0 auto; align-self: flex-start'
+      const gap = document.createElement('div'); gap.style.cssText = 'flex: 0 0 2000px'
+      const dock = sh.querySelector(':scope > .cockpit-txdock'); sh.insertBefore(gap, dock); sh.insertBefore(b, dock); return 1 })()`)
+    const { hidden, folded } = await tabWalk(p)
+    keepControl = folded && hidden.some((h) => h.startsWith('keep:keep plant'))
+    console.log(`CONTROL — CW 900×600 150 % with a button planted under the folded keep row: ${keepControl ? 'read as behind the keep row (caught)' : `not caught (folded ${folded}, hidden ${hidden.join(', ')})`}`)
+  } finally {
+    await p.close()
+  }
+}
+
 // THE STOP LAYER OVER A PARKED STRIP AND A SQUEEZED BAR (components/StopLayer): with a modal open over the whole window,
 // a real click at Stop TX's own place on FT's parked line (900×600 / 175 %), and at Stop TX and at SSTV's own Stop in its
 // squeezed bar while SSTV is sending under an alarm (900×600 / 175 %, ru), stops exactly once, through the layer's mirror.
@@ -815,6 +839,7 @@ if (errors) { console.log(`stopvisible: ${errors} screens never drew`); process.
       (hidden.length ? `; in its scroll: ${hidden.slice(0, 16).map((r) => `${r.view} ${r.W}×${r.H} ${r.scale} ${r.loc} ${r.state} (cap ${r.squeezed.cap} px, stop ${r.squeezed.stop.h} px${r.squeezed.stop.live ? ', live' : ''})`).join('; ')}` : ''))
   }
 }
+if (keepControl !== true) console.log('CONTROL FAILED: a button planted under the folded keep row was not read as behind it: the keep-row Tab check cannot fail')
 if (knownControl === false) console.log('CONTROL FAILED: a control planted beside a known red’s named ones did not make its row red: the pin cannot fail')
 if (tabControl !== true) console.log('CONTROL FAILED: with the scroll padding taken away, no Tab stop landed behind FT’s parked line: the Tab check cannot fail')
 if (offControl !== true) console.log('CONTROL FAILED: a control planted below the window was not read as focused outside it: the off-window Tab check cannot fail')
@@ -826,6 +851,6 @@ if (logControl === false) console.log('CONTROL FAILED: the prompt to log over th
 if (moveControl === false) console.log('CONTROL FAILED: the prompt to log held where it opened met no stop after the change: the moving-stop check cannot fail')
 if (moveReds.length) console.log(`stopvisible: RED — ${moveReds.length} rows where the prompt to log met a stop that moved while it was open:\n  ${moveReds.join('\n  ')}`)
 if (logReds.length) console.log(`stopvisible: RED — ${logReds.length} rows where the prompt to log met a stop control or hid Stop TX:\n  ${logReds.join('\n  ')}`)
-if (reds.length || freshReds.length || mirrorReds.length || logReds.length || moveReds.length || logControl === false || moveControl === false || mirrorControl === false || freshControl === false || control !== true || knownControl === false || tabControl !== true || offControl !== true || revealControl !== true) { console.log(`stopvisible: RED — ${reds.length} rows with no Stop TX on screen and topmost`); process.exit(1) }
+if (reds.length || freshReds.length || mirrorReds.length || logReds.length || moveReds.length || logControl === false || moveControl === false || mirrorControl === false || freshControl === false || control !== true || knownControl === false || keepControl !== true || tabControl !== true || offControl !== true || revealControl !== true) { console.log(`stopvisible: RED — ${reds.length} rows with no Stop TX on screen and topmost`); process.exit(1) }
 console.log('stopvisible: PASS — a Stop TX fully on screen and topmost in every row, no Tab stop behind FT’s parked line, FT’s Stop TX where a fresh layout puts it after a header change, one click through the stop layer stops once over a parked strip and a squeezed bar, the prompt to log meets no stop control and leaves Stop TX reachable, also after a stop moves while it is open; every control was caught')
 process.exit(0)
