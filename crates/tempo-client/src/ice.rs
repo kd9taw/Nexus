@@ -1633,10 +1633,23 @@ mod tests {
             }
             turn.seen().allocations == 1
         };
+        // A ufrag of this test's own, and counters that count only checks naming it: each counter's
+        // port was another socket's a moment ago, and a check still on its way there, from another
+        // road in this process (whose offers share `offer_naming`'s) or on this machine, would be
+        // counted as this road's. The CONTROL hears its checks through the same filter.
+        let ours = credentials().expect("randomness").ufrag;
+        let offer = |candidates| Offer {
+            ufrag: ours.clone(),
+            ..offer_naming(candidates)
+        };
+        let counter = |ip: IpAddr| Counter::naming(ip, &ours);
         let turn = StandIn::start("road", "throwaway-password");
         let road = on_every_interface(Role::Computer, relayed(&turn));
-        let (loopback_one, its_network) = (on_loopback(), Counter::on(road.host().ip()));
-        assert!(road.answer(&offer_naming(vec![loopback_one.line()])));
+        let (loopback_one, its_network) = (
+            counter(Ipv4Addr::LOCALHOST.into()),
+            counter(road.host().ip()),
+        );
+        assert!(road.answer(&offer(vec![loopback_one.line()])));
         let road = Driven::new(road);
         assert!(
             allocated(&turn),
@@ -1644,10 +1657,10 @@ mod tests {
         );
         assert!(road.road.add_candidate(&its_network.line()), "read");
         let control_turn = StandIn::start("road", "throwaway-password");
-        let probed = on_loopback();
+        let probed = counter(Ipv4Addr::LOCALHOST.into());
         let control =
             IceRoad::bind(loopback(), Role::Computer, relayed(&control_turn), TICK).unwrap();
-        assert!(control.answer(&offer_naming(Vec::new())));
+        assert!(control.answer(&offer(Vec::new())));
         let control = Driven::new(control);
         assert!(
             allocated(&control_turn),
