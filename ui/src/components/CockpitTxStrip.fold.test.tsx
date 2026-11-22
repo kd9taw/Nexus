@@ -410,6 +410,15 @@ describe('a focused control is never left behind the parked keep row', () => {
     expect(main().scrollTop).toBeCloseTo(500 + (250 - 167) / 1.75, 3)
   })
 
+  it('…but one nearer twice its room is centred: top-aligned, its centre would sit on the parked edge', () => {
+    // The room is 167..300 (133 px); the control is 2 × 133 − 1 = 265 px from 250, its centre 382.5. Top-aligned, its
+    // centre would land at 299.5, half a pixel above the keep row; centred, at the room's middle, 233.5.
+    mountFolded()
+    main().scrollTop = 500
+    focusOn('near-twice', 250, 265)
+    expect(main().scrollTop).toBeCloseTo(500 + (382.5 - 233.5) / 1.75, 3)
+  })
+
   it('at the end of the shell’s scroll, a scroller inside it that holds the control takes the rest', () => {
     // The shell cannot scroll past 500 (it is at the end of its range); the control sits far down an inner column
     // (JS8's), centre 330.5, its room's middle 233.5: the column scrolls the 97 rendered px instead.

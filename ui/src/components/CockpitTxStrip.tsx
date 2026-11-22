@@ -568,12 +568,13 @@ function centreIfBehind(shell: HTMLElement, strip: HTMLElement, dock: HTMLElemen
   const hi = before ? (s.top > lo ? Math.min(s.top, sh.bottom - edge.rest) : sh.bottom - edge.rest) : sh.bottom - edge.bottom
   // In sight is the whole control where its room holds it, its centre where it does not. One that fits is centred in its
   // room. One taller than its room has its top put at the room's top, so its label and its centre are what show, while
-  // its centre still lands in the room; taller than twice the room, that would leave its centre behind the parked
-  // surfaces (JS8's fields at 900×600 / 175 %: a 23 px room, measured), so it is centred.
+  // its centre still lands a pixel or more inside the room; nearer twice the room than that, its centre would sit on the
+  // parked surface's edge or behind it (JS8's fields at 900×600 / 175 %: a 23 px room; its band preset, 45 px in a 23 px
+  // room at 1366×768 at the OS's 175 % with the app at 150 %, centred 0.5 px above the strip; measured), so it is centred.
   const room = hi - lo
   const fits = q.height <= room
   if (hi <= lo || (fits ? q.top >= lo && q.bottom <= hi : cy >= lo && cy <= hi)) return
-  let move = fits || q.height / 2 > room ? cy - (lo + hi) / 2 : q.top - lo
+  let move = fits || q.height / 2 > room - 1 ? cy - (lo + hi) / 2 : q.top - lo
   // THE SHELL FIRST, then a scroller inside it that holds the control (a pane's or JS8's column): at the end of the
   // shell's own scroll, a control far down an inner column stayed behind the keep row (JS8 at 1366×768 at the OS's 175 %
   // with the app at 150 %, measured), and only its column can bring it up. Each takes what its range allows.
