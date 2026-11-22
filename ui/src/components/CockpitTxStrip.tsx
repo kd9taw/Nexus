@@ -522,8 +522,21 @@ function centreIfBehind(shell: HTMLElement, strip: HTMLElement, dock: HTMLElemen
   const parked = parkedTop(keep).top
   const cy = q.top + q.height / 2
   if (cy < parked && (cy < s.top || cy > s.bottom)) return
-  if (parked <= s.bottom || shell.offsetHeight === 0) return
-  shell.scrollTop += (cy - (s.bottom + parked) / 2) / (shell.getBoundingClientRect().height / shell.offsetHeight)
+  if (shell.offsetHeight === 0) return
+  const z = shell.getBoundingClientRect().height / shell.offsetHeight
+  // THE STRIP PARKED ON THE KEEP ROW: a control above the strip's own place, scrolled down to the foot, meets the strip
+  // held at its bottom offset, right on the row, and there is no room between the two (CW at 900×600 / 150 %: ⊞ Panels
+  // behind both, measured). Its room is then above the strip, under the shell's top or a header pinned there: where the
+  // room between does not hold the control and the room above is the larger, the control is centred there instead.
+  const head = pinnedAbove(shell, strip)
+  const top = head ? head.getBoundingClientRect().bottom : shell.getBoundingClientRect().top
+  const between = parked - s.bottom
+  if (between < q.height && s.top - top > between) {
+    shell.scrollTop += (cy - (top + s.top) / 2) / z
+    return
+  }
+  if (between <= 0) return
+  shell.scrollTop += (cy - (s.bottom + parked) / 2) / z
 }
 
 /** The same, for something opened rather than focused (JS8's heartbeat menu): where it scrolls with a folded dock's
@@ -567,7 +580,14 @@ function useDockClearance(ref: RefObject<HTMLDivElement | null>) {
     }
     strip.style.setProperty('--cockpit-txstrip-bottom',
       dock && getComputedStyle(dock).position === 'sticky' ? `${keep ? keep.offsetHeight : dock.offsetHeight}px` : '0px')
-    if (keep) shell.style.setProperty('--cockpit-txdock-keep-h', `${Math.ceil(parkedTop(keep).height)}px`)
+    // With the shell's own bottom padding under the row: a sticky box parks inside its scroller's padding, so the row
+    // stands that far above the scrollport's foot, and a focus padded by the row alone stopped short behind it (21 px on
+    // CW at 900×600 / 150 %, measured). Rendered, as the row is.
+    if (keep) {
+      const z = shell.offsetHeight > 0 ? shell.getBoundingClientRect().height / shell.offsetHeight : 1
+      const pad = (parseFloat(getComputedStyle(shell).paddingBottom) || 0) * z
+      shell.style.setProperty('--cockpit-txdock-keep-h', `${Math.ceil(parkedTop(keep).height + pad)}px`)
+    }
     else shell.style.removeProperty('--cockpit-txdock-keep-h')
     // A notice standing on the parked row's top edge (JTTY's) keeps clear of Stop TX: the column to its right.
     const stop = strip.querySelector<HTMLElement>('.op-btn.stop')

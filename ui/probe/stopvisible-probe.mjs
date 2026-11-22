@@ -27,10 +27,11 @@
 // grid across its face (inset past its round corners) the topmost element is the button. While it reads, every
 // element takes pointer events, so a notice that lets clicks through still counts as covering what it hides.
 //
-// AND THE TAB WALK (FT, plain, every pinned scale, 100 % included, up to 1366×768): real Tab through the shell; no focused
-// control may have its centre behind the QSO strip's parked line (it covered 36 Tab stops at 900×600 / 175 % before the
-// shell's scroll padding read the parked line's height, and 4 at 1366×768 at the OS's 175 % with the app at 100 %, where
-// the padding left out the shell's own bottom padding, which the line parks above), and on the supported screens
+// AND THE TAB WALK (every cockpit in English and FT in each of its languages, plain, every pinned scale, 100 % included,
+// up to 1366×768): real Tab through the shell; no focused control may have its centre behind FT's parked QSO-strip line
+// or a folded dock's keep row (FT's line covered 36 Tab stops at 900×600 / 175 % before the shell's scroll padding read
+// its height, and 4 at 1366×768 at the OS's 175 % with the app at 100 %, where the padding left out the shell's own
+// bottom padding, which the line parks above; a folded keep row left the same gap, 21 px on CW at 900×600 / 150 %), and on the supported screens
 // (probe/sizes.mjs, not the off-matrix windows) none may have it outside the window: a control Tab focuses is one the
 // operator cannot see.
 // AND THE ONE-JUMP REVEAL (FT, plain, the scaled rows on the supported screens, where the shell scrolls): from the top of
@@ -272,36 +273,42 @@ async function apply(p, st, route) {
   return st.mode && POLLED.has(route) ? 1300 : 0
 }
 
-/** THE TAB WALK (FT, plain state, sizes where its strip parks): real Tab from the start of the shell, and every control it
- *  focuses in the shell must not have its centre behind the parked QSO-strip line, nor outside the window. Parked at the
- *  foot, the line covered 36 Tab stops at 900×600 / 175 % (measured) until the shell's scroll padding read its height.
- *  Returns the names hidden behind the line and the names focused outside the window. */
+/** What parks at the foot of a cockpit's shell and can stand over a control the shell scrolls: FT's QSO strip (its
+ *  first line), a folded dock's keep row, an unfolded sticky dock, SSTV's Send/Stop bar. */
+const PARKED_FOOT = ".cockpit-ftstrip, .cockpit-txdock-keep[data-fold='on'], .cockpit-txdock, .sstv-tx-bar"
+/** THE TAB WALK (every cockpit, plain state, sizes where something parks): real Tab from the start of the shell, and
+ *  every control it focuses must not have its centre behind a surface parked at the shell's foot (one that does not
+ *  hold it), nor outside the window. Parked at the foot, FT's line covered 36 Tab stops at 900×600 / 175 % (measured)
+ *  until the shell's scroll padding read its height. Returns the hidden ones as `surface:name@y`, the names focused
+ *  outside the window, and whether the dock was folded. */
 async function tabWalk(p) {
-  await p.evaluate(`(() => { document.activeElement?.blur?.(); const m = document.querySelector('main.operate-cockpit'); m.scrollTop = 0; m.querySelector('button, input, select')?.focus({ preventScroll: true }); m.scrollTop = 0; return 1 })()`)
+  await p.evaluate(`(() => { document.activeElement?.blur?.(); const m = [...document.querySelectorAll('main')].find((x) => x.closest('[hidden]') == null && x.getBoundingClientRect().height > 0)
+    window.__tabShell = m; m.scrollTop = 0; m.querySelector('button, input, select, textarea')?.focus({ preventScroll: true }); m.scrollTop = 0; return 1 })()`)
   const hidden = []
   const off = []
   let first = null
-  for (let i = 0; i < 160; i++) {
+  for (let i = 0; i < 220; i++) {
     await p.call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 })
     await p.call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 })
     await frames(p)
-    const f = await p.evaluate(`(() => { const e = document.activeElement; if (!e || !e.closest('main.operate-cockpit')) return { out: true }
+    const f = await p.evaluate(`(() => { const e = document.activeElement; if (!e || !window.__tabShell.contains(e)) return { out: true }
       const r = e.getBoundingClientRect(); const x = r.left + r.width / 2, y = r.top + r.height / 2
       const name = ((e.getAttribute('aria-label') || e.textContent || e.tagName) + '').replace(/\\s+/g, ' ').trim().slice(0, 20) + '@' + Math.round(y)
       if (!r.width || !r.height) return { name }
       if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return { name, off: true }
       const lift = document.createElement('style'); lift.textContent = ${JSON.stringify(LIFT_CSS)}; document.head.appendChild(lift)
       const t = document.elementFromPoint(x, y); lift.remove()
-      return { name, behind: !(t === e || e.contains(t)) && !!t?.closest('.cockpit-ftstrip') && !e.closest('.cockpit-ftstrip') } })()`).catch(() => null)
+      const b = t && !(t === e || e.contains(t)) ? t.closest(${JSON.stringify(PARKED_FOOT)}) : null
+      return { name, by: b && !b.contains(e) ? (b.matches('.cockpit-ftstrip') ? 'strip' : b.matches('.cockpit-txdock-keep') ? 'keep' : b.matches('.sstv-tx-bar') ? 'bar' : 'dock') : null } })()`).catch(() => null)
     if (!f) continue
     if (f.out) { if (first) break; continue }
     if (f.name === first) break
     first ??= f.name
-    if (f.behind) hidden.push(f.name)
+    if (f.by) hidden.push(`${f.by}:${f.name}`)
     if (f.off) off.push(f.name)
   }
-  await p.evaluate(`(() => { document.activeElement?.blur?.(); document.querySelector('main.operate-cockpit').scrollTop = 0; return 1 })()`)
-  return { hidden, off }
+  const folded = await p.evaluate(`(() => { document.activeElement?.blur?.(); const m = window.__tabShell; m.scrollTop = 0; return !!m.querySelector(".cockpit-txdock[data-fold='on']") })()`)
+  return { hidden, off, folded }
 }
 const TAB_SIZES = (W, H) => W <= 1366 && H <= 800
 
@@ -373,12 +380,17 @@ for (const [label, route] of VIEWS.filter(([l]) => wantViews.includes(l))) {
             // The first-run state is only a test while the nudge is drawn: printed per row, so a nudge that moved off a
             // screen reads as such, and a page that never drew it anywhere is a red below.
             if (state === 'firstRun') { row.nudge = !!m?.nudge; nudgeRows.push(row) }
-            if (route === 'operate' && state === 'plain' && scale !== 'auto' && TAB_SIZES(W, H)) {
-              const { hidden, off } = await tabWalk(p)
-              if (hidden.length) {
-                reds.push(`${label} ${sz} ${scale} ${loc} plain: Tab focuses ${hidden.length} controls behind the parked QSO-strip line (${hidden.slice(0, 8).join(', ')})`)
+            // Every cockpit in English; FT, whose line was the first case, in each language of its rows.
+            if (state === 'plain' && scale !== 'auto' && TAB_SIZES(W, H) && (route === 'operate' || loc === 'en')) {
+              const { hidden, off, folded } = await tabWalk(p)
+              // Red behind FT's parked line and a folded dock's keep row. An unfolded sticky dock and SSTV's bar write
+              // no scroll padding yet: printed, not a red, until that is fixed on its own.
+              const red = hidden.filter((h) => h.startsWith('strip:') || h.startsWith('keep:'))
+              if (red.length) {
+                reds.push(`${label} ${sz} ${scale} ${loc} plain${folded ? ' (dock folded)' : ''}: Tab focuses ${red.length} controls behind a surface parked at the shell's foot (${red.slice(0, 8).join(', ')})`)
                 console.log('RED ' + reds[reds.length - 1])
               }
+              if (hidden.length > red.length) console.log(`note (not yet a red): ${label} ${sz} ${scale} ${loc} plain: Tab focuses ${hidden.length - red.length} controls behind an unfolded dock or SSTV's bar (${hidden.filter((h) => !red.includes(h)).slice(0, 6).join(', ')})`)
               // Off the window only on the supported screens: the off-matrix windows (dragged below any of them) hold
               // the xs layout's stops, and a control that runs past the side there is a matter for those layouts.
               if (off.length && !OFF.some(([w, h]) => w === W && h === H)) {
