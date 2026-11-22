@@ -11876,6 +11876,8 @@ impl Engine {
                 | OperatingMode::Rtty
                 | OperatingMode::Keyboard
         );
+        // Whether this entry LEAVES another section: a re-assert of Digital is not one.
+        let was_digital = self.settings.operating_mode == OperatingMode::Digital;
         self.settings.operating_mode = om;
         // The Keyboard section's modem is named by the entry ("keyboard" is PSK, "jtty" JTTY);
         // every other section leaves it as it was.
@@ -11929,8 +11931,11 @@ impl Engine {
         // entry that kept the dial carried the CW or Phone split into FT, and the radio stayed in
         // it (an FTDX10 report). WSJT-X turns a split it finds off whenever it sets its state
         // without one (`HamlibTransceiver::do_tx_frequency`). A held pass keeps its uplink split.
-        // A spot worked into FT sets its own split after this entry (`work_spot_split`).
+        // A spot worked into FT sets its own split after this entry (`work_spot_split`), and a
+        // re-assert of the FT section (the screen opening for that spot, an FT8/FT4 click) is no
+        // entry, so it keeps that cluster SPLIT-on-Work.
         if entry.mode == OperatingMode::Digital
+            && !was_digital
             && (self.split_tx_mhz.is_some() || self.split_unknown)
             && self.sat_tune.is_none()
             && self.sat_dial_owner.is_none()

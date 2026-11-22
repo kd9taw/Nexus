@@ -47818,6 +47818,83 @@ mod tests {
         }
     }
 
+    /// ⛔ A CLUSTER SPLIT-ON-WORK INTO FT SURVIVES THE FT SCREEN RE-ASSERTING ITS SECTION. "UP 2"
+    /// worked from CW enters FT and sets the split; the FT screen opening then re-asserts Digital
+    /// (`set_operating_mode("digital", false)`, as the view change and an FT8/FT4 click do), and
+    /// that is no entry from another section, so the split stands and no `S 0` goes out.
+    #[test]
+    fn a_cluster_split_into_ft_survives_the_ft_screens_re_assert() {
+        let (addr, seen) = recording_rigctld_stub();
+        let engine = engine_on(1042);
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.split_mode = tempo_app::settings::SplitMode::Rig;
+            s.license_class = tempo_app::settings::LicenseClass::Extra;
+            e.apply_settings(s);
+            e.set_operating_mode("cw", false);
+        }
+        split_ticks(
+            &engine,
+            Rig::rigctld(&addr),
+            vec![
+                |_, _| {},
+                |e, _| e.work_spot_split("digital", 14.074, "20m", Some(2.0)),
+                |e, _| e.set_operating_mode("digital", false),
+                |_, _| {},
+            ],
+        );
+        let wire = split_verbs(&seen);
+        assert!(
+            wire.iter().any(|l| l == "S 1 VFOB"),
+            "precondition: {wire:?}"
+        );
+        assert!(!wire.iter().any(|l| l.starts_with("S 0")), "{wire:?}");
+        assert!(engine.lock().unwrap().split_tx_mhz().is_some(), "{wire:?}");
+    }
+
+    /// …and CW → Tempo (the Digital section, no re-home) → FT still ends the operator's split: the
+    /// entry into Tempo is the one that leaves CW.
+    #[test]
+    fn the_operators_split_ends_on_cw_to_tempo_to_ft() {
+        let (addr, seen) = recording_rigctld_stub();
+        let engine = engine_on(1042);
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.split_mode = tempo_app::settings::SplitMode::Rig;
+            e.apply_settings(s);
+            e.set_operating_mode("cw", false);
+        }
+        split_ticks(
+            &engine,
+            Rig::rigctld(&addr),
+            vec![
+                |_, _| {},
+                |e, _| {
+                    let dial = e.settings().dial_hz() as f64 / 1e6;
+                    e.request_split(Some(dial + 0.002));
+                },
+                |_, _| {},
+                |e, _| e.set_operating_mode("digital", false),
+                |_, _| {},
+                |e, _| e.set_operating_mode("digital", true),
+                |_, _| {},
+            ],
+        );
+        let wire = split_verbs(&seen);
+        assert!(
+            wire.iter().any(|l| l == "S 1 VFOB"),
+            "precondition: {wire:?}"
+        );
+        assert_eq!(engine.lock().unwrap().split_tx_mhz(), None);
+        assert_eq!(
+            wire.last().map(String::as_str),
+            Some("S 0 VFOA"),
+            "{wire:?}"
+        );
+    }
+
     /// CONTROL: a held satellite pass keeps its uplink split through the entry into FT; the uplink
     /// is the pass's, not a split the operator carried in.
     #[test]
