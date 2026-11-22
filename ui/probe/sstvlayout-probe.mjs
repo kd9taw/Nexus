@@ -153,7 +153,10 @@ const REACH_SETUP = `(() => {
       if (topmost(e)) return true
     }
     const max = s.scrollHeight - s.clientHeight
-    for (let y = 0; y <= max + 5; y += 24) { s.scrollTop = Math.min(y, max); await frame(); if (topmost(e)) return true }
+    // Fine enough to land in the narrowest band the parked strip and bar leave: at 900×600 at 175 % they cover all of
+    // SSTV's 179 px scrollport but about 15 px, and a 24 px step stepped over it, so whether a control was found
+    // depended on where its own offset happened to fall (a 50 px change in the header's height turned three to red).
+    for (let y = 0; y <= max + 5; y += 4) { s.scrollTop = Math.min(y, max); await frame(); if (topmost(e)) return true }
     return false
   }
   // A file input is drawn hidden inside its label (the "Choose image" button): the label is what is clicked.
