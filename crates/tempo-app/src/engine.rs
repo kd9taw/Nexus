@@ -2326,7 +2326,12 @@ struct StandingSplit {
 /// rig had acknowledged it.
 struct ProposedSplit<'a> {
     engine: &'a mut Engine,
-    held: (Option<u64>, crate::dualrx::ReceiverId, Option<u64>),
+    held: (
+        Option<u64>,
+        crate::dualrx::ReceiverId,
+        Option<u64>,
+        Option<u64>,
+    ),
 }
 
 impl<'a> ProposedSplit<'a> {
@@ -2335,6 +2340,10 @@ impl<'a> ProposedSplit<'a> {
             engine.tx_split_confirmed_hz,
             engine.tx_split_confirmed_rx,
             engine.sat_uplink_acked_hz,
+            // ⛔ AND THE REVERSED SPLIT'S VFO A, TAKEN OUT: a proposal is judged at the proposal.
+            // Left in, every split proposed while VFO B was selected under split was judged at
+            // VFO A, so a TX dial past the band edge was admitted.
+            engine.split_tx_on_vfo_a_hz.take(),
         );
         engine.tx_split_confirmed_hz = Some(tx_hz);
         engine.tx_split_confirmed_rx = rx;
@@ -2357,6 +2366,7 @@ impl Drop for ProposedSplit<'_> {
             e.tx_split_confirmed_hz,
             e.tx_split_confirmed_rx,
             e.sat_uplink_acked_hz,
+            e.split_tx_on_vfo_a_hz,
         ) = self.held;
     }
 }
@@ -4880,6 +4890,13 @@ pub struct Engine {
     /// confirmation beside it ([`Engine::tx_source`] does not). The gate reads it only through
     /// [`Engine::tx_source`] (D1).
     tx_split_confirmed_rx: crate::dualrx::ReceiverId,
+    /// VFO A's frequency while the acknowledged split is REVERSED: VFO B was selected under split
+    /// on an Icom behind Hamlib, which then receives on B and transmits on A
+    /// ([`Self::observe_rig_freq_after_vfo_select`]). The gate judges this, not the split TX dial
+    /// (operator ruling: treat VFO A as TX in that state). Meaningful only beside
+    /// `tx_split_confirmed_hz`; cleared by the next split write (which puts the radio on A),
+    /// an A select, a knob QSY and a split command's reselect of A.
+    split_tx_on_vfo_a_hz: Option<u64>,
     /// The acknowledged split, when it was the SATELLITE's own uplink: the "this split IS my
     /// uplink" identity [`Engine::sat_tx_mode_for_split`] asks, answered at the moment the rig
     /// acknowledged it ([`Engine::rig_split_applied`]) and kept, because the next Doppler tick
@@ -8037,6 +8054,7 @@ impl Engine {
             sat_mode_released: false,
             split_tx_mhz: None,
             tx_split_confirmed_hz: None,
+            split_tx_on_vfo_a_hz: None,
             tx_split_confirmed_rx: crate::dualrx::ReceiverId::Main,
             sat_uplink_acked_hz: None,
             split_standing: None,
@@ -9934,6 +9952,7 @@ impl Engine {
         // let the loop apply that TX frequency to whichever rig came next.
         // Marking dirty commands the NEW radio back to simplex instead.
         self.tx_split_confirmed_hz = None; // the radio moved — the confirmation is void
+        self.split_tx_on_vfo_a_hz = None; // …and a reversed split with it
         self.observed_split = None; // …and what the rig said about the OLD dial says nothing here
         self.split_standing = None; // …and the split the OLD radio had is not the new one's
                                     // The new radio gets `S 0` (below) when either was in doubt.
@@ -10583,6 +10602,7 @@ impl Engine {
         // A plain QSY always returns the rig to SIMPLEX — leftover split from a
         // pile-up must never silently shift TX on the next frequency.
         self.tx_split_confirmed_hz = None; // the radio moved — the confirmation is void
+        self.split_tx_on_vfo_a_hz = None; // …and a reversed split with it
         self.split_qsy_gen = self.split_qsy_gen.wrapping_add(1);
         self.observed_split = None; // …and what the rig said about the OLD dial says nothing here
         if self.split_tx_mhz.take().is_some() || self.split_unknown {
@@ -10652,6 +10672,27 @@ impl Engine {
     /// mirrors the knob. Updates the band from the frequency; leaves the operating mode +
     /// sideband to the rig-mode policy (the radio loop still owns what it commands).
     pub fn observe_rig_freq(&mut self, hz: u64) {
+        self.observe_rig_freq_as(hz, false);
+    }
+
+    /// [`Self::observe_rig_freq`] for the first dial read after the radio loop selected VFO A or
+    /// B: the radio now receives on the other VFO, whose frequency this is. The dial follows it,
+    /// but it is no knob QSY, so the split stands. Treated as one, it turned split off (`S 0 VFOA`),
+    /// which on an Icom behind Hamlib also selects VFO A: pressing B with split on snapped the
+    /// radio back to A.
+    ///
+    /// ⛔ `tx_stays_on_vfo_a`: the radio loop's word that VFO B was selected on an Icom behind
+    /// Hamlib, which under split then receives on B and TRANSMITS ON A. With a split acknowledged,
+    /// the dial this read replaces is VFO A's frequency, and the licence gate judges it from here
+    /// ([`Self::split_tx_on_vfo_a_hz`]); any other select puts the split back the right way round.
+    pub fn observe_rig_freq_after_vfo_select(&mut self, hz: u64, tx_stays_on_vfo_a: bool) {
+        let vfo_a_hz = (self.settings.dial_mhz * 1e6).round() as u64;
+        self.split_tx_on_vfo_a_hz =
+            (tx_stays_on_vfo_a && self.tx_split_confirmed_hz.is_some()).then_some(vfo_a_hz);
+        self.observe_rig_freq_as(hz, true);
+    }
+
+    fn observe_rig_freq_as(&mut self, hz: u64, vfo_select: bool) {
         let mhz = hz as f64 / 1_000_000.0;
         // Is this the first thing the CAT link has ever said? Then it is not a knob move at
         // all: it is the link reporting where the rig ALREADY was, which is the boot seed's
@@ -10699,11 +10740,15 @@ impl Engine {
         // A knob QSY returns the rig to simplex, exactly like an app-commanded retune
         // (set_frequency): otherwise a manual split's TX VFO would be left on the OLD dial —
         // transmitting off-frequency — and the SPLIT badge would lie about the offset.
-        self.tx_split_confirmed_hz = None; // the radio moved — the confirmation is void
-        self.split_qsy_gen = self.split_qsy_gen.wrapping_add(1);
-        self.observed_split = None; // …and what the rig said about the OLD dial says nothing here
-        if self.split_tx_mhz.take().is_some() || self.split_unknown {
-            self.split_dirty = true;
+        // A VFO select is not one: the radio's split is as it was.
+        if !vfo_select {
+            self.split_tx_on_vfo_a_hz = None;
+            self.tx_split_confirmed_hz = None; // the radio moved — the confirmation is void
+            self.split_qsy_gen = self.split_qsy_gen.wrapping_add(1);
+            self.observed_split = None; // …and what the rig said about the OLD dial says nothing here
+            if self.split_tx_mhz.take().is_some() || self.split_unknown {
+                self.split_dirty = true;
+            }
         }
         // A cross-band knob QSY is a leave-event for the per-(band, mode) dial memory
         // too — bank the residency being left before adopting the knob's dial. An
@@ -12474,6 +12519,19 @@ impl Engine {
         self.observed_vfo = Some((vfo_b, now_unix_secs()));
     }
 
+    /// The radio loop's report that a split command put the radio back on VFO A by itself: on an
+    /// Icom behind Hamlib every `S` selects the receive VFO first (`07 00`). The belief and the
+    /// reading both become A, as the radio now is: an IC-7300, IC-705 or IC-905 cannot be asked
+    /// which VFO it is on, so nothing else would correct the indicator. An A/B press not yet
+    /// written is newer than the split and keeps its own answer ([`Self::active_vfo_b_effective`]).
+    pub fn rig_reselected_vfo_a(&mut self) {
+        if !self.vfo_dirty {
+            self.active_vfo_b = false;
+        }
+        self.observe_rig_vfo(false);
+        self.split_tx_on_vfo_a_hz = None;
+    }
+
     /// WHICH VFO TO REPORT — the rig's answer when we have a fresh one, the commanded value
     /// otherwise.
     ///
@@ -12608,6 +12666,7 @@ impl Engine {
         }
         // The rig refused: whatever we thought it acknowledged is no longer true.
         self.tx_split_confirmed_hz = None;
+        self.split_tx_on_vfo_a_hz = None; // …and a reversed split with it
         self.split_standing = None;
     }
 
@@ -12697,6 +12756,9 @@ impl Engine {
             }
         }
         self.tx_split_confirmed_hz = standing.map(|s| s.hz);
+        if standing.is_none() {
+            self.split_tx_on_vfo_a_hz = None;
+        }
         if let Some(s) = standing {
             self.tx_split_confirmed_rx = s.rx;
             self.sat_uplink_acked_hz = s.sat_uplink_acked_hz;
@@ -12723,6 +12785,7 @@ impl Engine {
         self.split_standing = None;
         self.split_unknown = false;
         self.tx_split_confirmed_hz = None;
+        self.split_tx_on_vfo_a_hz = None; // …and a reversed split with it
         self.sat_uplink_acked_hz = None;
     }
 
@@ -12732,6 +12795,7 @@ impl Engine {
     pub fn rig_split_unknown(&mut self) {
         self.split_standing = None;
         self.tx_split_confirmed_hz = None;
+        self.split_tx_on_vfo_a_hz = None; // …and a reversed split with it
         self.split_unknown = true;
     }
 
@@ -12746,6 +12810,10 @@ impl Engine {
         // this one yet, so between here and the ack there is nothing confirmed to judge. TX
         // locks for that gap, which is the correct direction.
         self.tx_split_confirmed_hz = None;
+        // ⛔ NOT the reversed split's VFO A: a request is not a write, and a request refused
+        // under a held PTT puts the standing split back (`split_refused_while_keyed`), still
+        // reversed on the radio. Inert while nothing is acknowledged; an acknowledged write
+        // clears it (`rig_split_applied_on`).
     }
 
     /// Set (`Some("USB"|"LSB"|"FM")`) or clear (`None` = AUTO) the transient Phone mode override
@@ -25463,6 +25531,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if !on {
             // The rig is not split. Anything we believed it had acknowledged is void.
             self.tx_split_confirmed_hz = None;
+            self.split_tx_on_vfo_a_hz = None; // …and a reversed split with it
             self.split_standing = None;
             self.split_unknown = false;
         }
@@ -25535,6 +25604,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // gate judges from here until something contradicts it.
         self.tx_split_confirmed_hz = Some(tx_hz);
         self.tx_split_confirmed_rx = rx;
+        // A split write the rig took leaves it receiving on A and transmitting on B.
+        self.split_tx_on_vfo_a_hz = None;
         // Whether it is the satellite's own uplink, recorded now: the next Doppler tick moves the
         // identity `sat_tx_mode_for_split` checks on to an uplink the loop has not written yet,
         // while the rig still transmits on this one ([`Self::sat_uplink_word`]).
@@ -31711,6 +31782,8 @@ contact yourself."
     ///   4. Otherwise simplex, and the dial is the emission.
     pub(crate) fn tx_freq_verdict(&self) -> TxFreqVerdict {
         if let Some(hz) = self.tx_split_confirmed_hz {
+            // Reversed (VFO B selected on an Icom that transmits on A then): VFO A transmits.
+            let hz = self.split_tx_on_vfo_a_hz.unwrap_or(hz);
             return TxFreqVerdict::Split(hz as f64 / 1e6);
         }
         // A split OFF the radio did not confirm: it may still be split, and nothing says where.

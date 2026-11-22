@@ -133,6 +133,39 @@ fn the_licence_judges_the_requested_transmit_frequency() {
     assert_eq!(attempt(&mut g, split), Ok(()));
 }
 
+/// ⛔ A Remote split proposed while the split is REVERSED (VFO B selected on an Icom behind Hamlib,
+/// which then transmits on VFO A) is judged at the proposal. 14.200 is Extra-only phone; VFO A,
+/// 14.250, is inside General phone, and judged there the proposal was admitted.
+#[test]
+fn a_remote_split_while_reversed_is_judged_at_the_proposal() {
+    let mut s = Station::new(OperatingMode::Phone);
+    s.engine.settings.license_class = LicenseClass::General;
+    s.engine.set_frequency(14.250, "20m", "USB");
+    s.engine.take_immediate_retune();
+    s.sample(14_250_000, "USB");
+    s.engine.split_tx_mhz = Some(14.300);
+    s.engine.tx_split_confirmed_hz = Some(14_300_000);
+    s.engine.split_tx_on_vfo_a_hz = Some(14_250_000);
+    let connection = link(&s);
+    let permit = s.authority.permit(unexpired_deadline()).unwrap();
+    assert_eq!(
+        s.engine
+            .queue_remote_split(Some(14.300), Some(14.200), connection, &permit),
+        Err(Reason::OutsidePrivileges)
+    );
+    assert_eq!(
+        s.engine.split_tx_mhz(),
+        Some(14.300),
+        "nothing was requested"
+    );
+    // Control: a proposal inside General phone is admitted.
+    assert_eq!(
+        s.engine
+            .queue_remote_split(Some(14.300), Some(14.310), connection, &permit),
+        Ok(())
+    );
+}
+
 /// A General in Phone on 40 m at 7.290 with the cockpit's mode pick `pick` (`None` = AUTO), idle
 /// and freshly read, so the only thing a split or XIT request can be refused on is the licence.
 fn general_phone_on_40m(pick: Option<&str>) -> Station {

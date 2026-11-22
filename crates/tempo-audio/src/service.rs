@@ -1875,6 +1875,12 @@ const KEY_WATCH_POLL_MS: f64 = 250.0;
 /// on (its hang time, which radios set up to about a second): inside it a keyed `t` in the watch is
 /// that, and is unkeyed without saying a late key was.
 const CW_HANG_MS: f64 = 1_000.0;
+/// Does Hamlib model `rig_model` select VFO A with every split command
+/// ([`RadioLoop::note_split_reselected_vfo_a`])? Hamlib's Icom models (3000s), less the three
+/// with satellite mode: the IC-910 (3044), the IC-9100 (3068) and the IC-9700 (3081).
+fn hamlib_split_reselects_vfo_a(rig_model: u32) -> bool {
+    (3000..4000).contains(&rig_model) && !matches!(rig_model, 3044 | 3068 | 3081)
+}
 /// The same poll WHILE A SATELLITE PASS IS ENGAGED — five times a second.
 ///
 /// A second of staleness is a display lag on a terrestrial band and a defect on
@@ -5339,6 +5345,12 @@ struct RadioLoop {
     /// answer" inherited by a TS-570D would leave the new rig's A/B press invisible for the
     /// rest of the session.
     vfo_read_native: Option<bool>,
+    /// [`Rig::split_writes`] as of the last A/B select or split-reselect check
+    /// ([`Self::note_split_reselected_vfo_a`]).
+    split_writes_seen: u64,
+    /// The loop selected VFO A or B (`Some(true)` = B) and has not read the dial since: the next
+    /// read is that VFO's frequency, not a knob QSY ([`Engine::observe_rig_freq_after_vfo_select`]).
+    vfo_select_unread: Option<bool>,
     /// Last time we ran the FULL rig read-back (dial + RF power + S-meter + mode + funcs), ms.
     last_rig_poll: f64,
     /// Last time we read the TRANSMIT meters (ms). 0.0 when the bars are blanked (not keyed), so
@@ -5942,6 +5954,8 @@ impl RadioLoop {
             split_detect: None,
             rfpower_floor: None,
             vfo_read_native: None,
+            split_writes_seen: 0,
+            vfo_select_unread: None,
             last_rig_poll: now_unix_ms(),
             last_tx_meter_poll: 0.0,
             tx_rf: TxRfWatch::default(),
@@ -8879,6 +8893,42 @@ impl RadioLoop {
             self.rig_split_dial = dial;
         }
         self.audio_rig_split = true;
+    }
+
+    /// After split commands on an Icom behind Hamlib, the radio is on VFO A: say so.
+    ///
+    /// ⭐ EVERY `S` SELECTS VFO A THERE. `rig_set_split_vfo` makes the receive VFO A for both
+    /// `S 1 VFOB` and `S 0 VFOA`, and `icom_set_split_vfo` selects it (`07 00`) before the split
+    /// command whenever Hamlib's current VFO is not it. Nexus still believed B after a B press,
+    /// and an IC-7300, IC-705 or IC-905 cannot be asked which VFO it is on (Hamlib leaves their
+    /// `get_vfo` out), so the A/B indicator showed B while the radio received on A.
+    ///
+    /// Only Hamlib's own Icom models WITHOUT satellite mode: on the IC-910, IC-9100 and IC-9700
+    /// (`RIG_FUNC_SATMODE`) Hamlib keeps the VFOs it is given. An A/B select written after the
+    /// split commands outranks them: the VFO write calls this first, then counts from there.
+    fn note_split_reselected_vfo_a(&mut self, engine: &Mutex<Engine>, rig: &Rig) {
+        let writes = rig.split_writes();
+        let new = writes > self.split_writes_seen;
+        self.split_writes_seen = writes;
+        if new && self.split_reselects_vfo_a() {
+            engine_lock(engine).rig_reselected_vfo_a();
+        }
+    }
+
+    /// Is this radio an Icom behind Hamlib whose split commands select VFO A
+    /// ([`Self::note_split_reselected_vfo_a`])? Under split such a radio with VFO B selected
+    /// receives on B and transmits on A.
+    fn split_reselects_vfo_a(&self) -> bool {
+        hamlib_split_reselects_vfo_a(self.applied.rig_model)
+            && self.rigctld_proc.as_ref().is_none_or(CatDaemon::is_hamlib)
+    }
+
+    /// The A/B select the next dial read follows, if any: `Some(true)` when VFO B was selected on
+    /// a radio that then transmits on VFO A under split ([`Self::split_reselects_vfo_a`]).
+    fn take_vfo_select_unread(&mut self) -> Option<bool> {
+        self.vfo_select_unread
+            .take()
+            .map(|vfo_b| vfo_b && self.split_reselects_vfo_a())
     }
 
     /// Let go of the Rig split Nexus holds: put back the radio's own split if one was read before
@@ -12116,13 +12166,16 @@ impl RadioLoop {
                         if adopt {
                             self.last_dial = hz;
                         }
+                        let after_select = self.take_vfo_select_unread();
                         // The read-back and the knob adoption under ONE lock: the ISS Doppler
                         // tick must never see the first without the second (a rounded read
                         // would look like the dial was tuned away and leave it off-channel).
                         {
                             let mut eng = engine_lock(engine);
                             eng.rig_freq_read(hz);
-                            if adopt {
+                            if let (true, Some(tx_on_a)) = (adopt, after_select) {
+                                eng.observe_rig_freq_after_vfo_select(hz, tx_on_a);
+                            } else if adopt {
                                 eng.observe_rig_freq(hz);
                             }
                         }
@@ -13068,7 +13121,10 @@ impl RadioLoop {
                             if let Some(vfo_b) =
                                 Some(engine_lock(engine)).and_then(|mut e| e.take_vfo_apply())
                             {
+                                // Every split command sent so far went out before this select.
+                                self.note_split_reselected_vfo_a(engine, rig);
                                 if rig.set_vfo(if vfo_b { "VFOB" } else { "VFOA" }).is_ok() {
+                                    self.vfo_select_unread = Some(vfo_b);
                                     // Optimistic, and load-bearing for the READ-BACK below —
                                     // the same discipline as `observe_rig_passband` and the
                                     // DSP funcs ("optimistic; a GET confirms").
@@ -13344,11 +13400,14 @@ impl RadioLoop {
                     if adopt {
                         self.last_dial = hz;
                     }
+                    let after_select = self.take_vfo_select_unread();
                     // One lock for both, as in the heavy poll.
                     {
                         let mut eng = engine_lock(engine);
                         eng.rig_freq_read(hz);
-                        if adopt {
+                        if let (true, Some(tx_on_a)) = (adopt, after_select) {
+                            eng.observe_rig_freq_after_vfo_select(hz, tx_on_a);
+                        } else if adopt {
                             eng.observe_rig_freq(hz);
                         }
                     }
@@ -13784,6 +13843,7 @@ impl RadioLoop {
                     }
                 }
             }
+            self.note_split_reselected_vfo_a(engine, rig);
 
             // Surface the mode-set outcome to the CAT status so the operator can SEE the mode
             // the rig was commanded into (and any rejection) — emitted only on a real change
@@ -22547,6 +22607,7 @@ mod tests {
     mod hw_handshake_monitor;
     mod ic905_ten_ghz;
     mod icom_lan;
+    mod icom_split_vfo;
     mod js8_frames;
     mod js8_retune;
     mod js8_tx_delay;
