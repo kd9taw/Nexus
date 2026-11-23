@@ -1092,6 +1092,11 @@ impl Rig {
     pub fn set_unkey_retried(&mut self, retried: bool) {
         self.unkey_retried = retried;
     }
+    /// Whether a release waits for the daemon's unkey retry ([`Self::set_unkey_retried`]).
+    #[cfg(test)]
+    pub(crate) fn unkey_retried(&self) -> bool {
+        self.unkey_retried
+    }
     /// Name the (verb, token) pairs this link must never send (#381, #385). Everything else is
     /// sent as before, so a power or a switch the radio's driver maps correctly still goes out.
     pub fn set_never_send(&mut self, refused: &'static [(HamlibVerb, &'static str)]) {

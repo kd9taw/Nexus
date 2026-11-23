@@ -385,6 +385,15 @@ fn hamlib_launch_refused(t: &Transport) -> bool {
 /// see [`crate::rigctld_proc::ControlLines`]. They reach only the Hamlib path; the native CI-V
 /// daemon opens the port itself and gets the same guarantee from
 /// [`crate::control_line::idle_both_lines`] at its own open.
+/// Whether `proc` sends an unanswered unkey once more before it answers: Nexus's CI-V daemon on a
+/// virtual port (wfview's). Its client's release then waits for both tries
+/// ([`Rig::set_unkey_retried`]), so a radio that never answers PTT off is heard saying so. Set
+/// wherever a keying `Rig` is put on a daemon: the open (`open_cat`) and a radio switch's adoption
+/// of a monitor's connection (`install_handoff_connection`).
+fn unkey_retried_by(proc: Option<&CatDaemon>) -> bool {
+    matches!(proc, Some(CatDaemon::Native(d)) if d.retries_unkey())
+}
+
 fn spawn_cat_daemon(
     t: &Transport,
     target: &str,
@@ -9676,6 +9685,8 @@ impl RadioLoop {
         // configured.
         old_transport.ptt_serial_port = String::new();
         self.rigctld_proc = conn.rigctld_proc;
+        // The monitor opened its daemon as the active open would; its release now keys.
+        rig.set_unkey_retried(unkey_retried_by(self.rigctld_proc.as_ref()));
         self.applied.broker_self_port = want_active.broker_self_port;
         self.applied.ptt_serial_port = want_active.ptt_serial_port.clone();
         self.reset_for_handoff();
@@ -22404,9 +22415,7 @@ fn open_cat(
                     || t.is_slow_serial_link(),
             ); // network chains + the native daemon + the TCI client (a write waits for the SDR program's report) + slow serial links (Xiegu / vintage Kenwood / any rig ≤ 19200 baud) get the long deadline
             rig.set_network_chain(network); // a key-down waits the network window
-                                            // Nexus's CI-V daemon on a virtual port tries an unanswered unkey twice; the release
-                                            // waits for both, so a radio that never answers PTT off is heard saying so.
-            rig.set_unkey_retried(matches!(&proc, CatDaemon::Native(d) if d.retries_unkey()));
+            rig.set_unkey_retried(unkey_retried_by(Some(&proc)));
             let mut probe = finish_cat_open(&mut rig, t);
             // Say WHICH backend this result came from — a native-CI-V radio silently
             // falling back to rigctld otherwise reads as "native was tested and failed".
@@ -30560,6 +30569,83 @@ mod tests {
         let p = pool.lock().unwrap();
         assert_eq!(p[0].ticks, 1);
         assert_eq!(p[1].ticks, 1, "the second monitor got its turn");
+    }
+
+    /// A radio switch onto a radio on wfview's virtual port adopts the monitor's connection, whose
+    /// daemon tries an unanswered unkey twice: the adopted `Rig`'s release waits for both, as the
+    /// open's does, or a radio that never answers PTT off would never be heard saying so. The
+    /// control: a daemon on a real port leaves the release at its 700 ms.
+    #[test]
+    fn an_adopted_connection_waits_for_the_unkey_retry_where_its_daemon_retries() {
+        use crate::civ::broker::{CivDaemon, Link};
+        use crate::civ::commands::IcomModel;
+        use crate::civ::engine::tests_support::{Answer, LateBus};
+        for virtual_port in [true, false] {
+            let addr = IcomModel::Ic7300.default_civ_addr();
+            let bus = LateBus::new(addr, |_| Answer {
+                after: Duration::ZERO,
+                ack: Some(true),
+            });
+            let daemon = CivDaemon::start_with_link(
+                Box::new(bus),
+                addr,
+                0,
+                1,
+                Some(IcomModel::Ic7300),
+                Link::port(virtual_port),
+            )
+            .unwrap();
+            let monitor_rig = Rig::with_control(
+                Some(format!("127.0.0.1:{}", daemon.local_addr().port())),
+                PttMode::Vox,
+            );
+            let mut rig = Rig::vox();
+            let mut state = loop_state();
+            state.applied = cat_transport(4532, None);
+            let want = cat_transport(4533, None);
+            let connection = MonitorConn {
+                id: 1,
+                transport: want.clone(),
+                rig: monitor_rig,
+                rigctld_proc: Some(CatDaemon::Native(daemon)),
+                last_poll: 1.0,
+                ticks: 1,
+                smeter_supported: Some(true),
+                freq_misses: 0,
+                open_failures: 0,
+                retry_after_ms: 0.0,
+            };
+            let _demoted = state.install_handoff_connection(&mut rig, connection, &want, 0);
+            assert_eq!(
+                rig.unkey_retried(),
+                virtual_port,
+                "virtual_port={virtual_port}"
+            );
+        }
+    }
+
+    /// The open's wiring: Native Icom CI-V on a pseudo-terminal (wfview's kind of port) starts the
+    /// daemon on the virtual-port link, and the `Rig` the open hands the radio loop waits for the
+    /// unkey's retry on a release.
+    #[cfg(all(target_os = "linux", feature = "serial"))]
+    #[test]
+    fn the_open_on_a_virtual_port_waits_for_the_unkey_retry() {
+        let (_master, pty) = crate::ports::tests::open_pty();
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let mut t = cat_transport(port, None);
+        t.rig_model = 3073; // IC-7300
+        t.icom_native_cat = true;
+        t.serial_port = pty;
+        let (rig, proc, _) = open_cat(&t, PttMode::Cat, false, None);
+        assert!(
+            matches!(&proc, Some(CatDaemon::Native(d)) if d.retries_unkey()),
+            "Nexus's CI-V daemon on the virtual-port link"
+        );
+        assert!(rig.unkey_retried());
     }
 
     #[test]

@@ -56,8 +56,9 @@
 //! ## On a virtual port (wfview's), whose radio may be across a network
 //!
 //! The engine waits [`VIRTUAL_PORT_DEADLINE`] (1 s, Hamlib's Icom per-try time) for each answer,
-//! and an unkey the radio does not answer is sent once more, as Hamlib retries ([`Link::port`],
-//! [`RigBackend::try_set_ptt`]). Nexus's client waits for both tries on that link's release
+//! and an unkey the radio does not answer is sent once more ([`Link::port`],
+//! [`RigBackend::try_set_ptt`]); Hamlib's Icom backend tries up to four times, with 100 ms between
+//! tries, about 4.3 s on a silent radio, where Nexus tries twice, about 2 s. Nexus's client waits for both tries on that link's release
 //! (`rig::RETRIED_RELEASE_DEADLINE_MS`, 2.5 s), so a radio that never answers PTT off is heard
 //! saying so (`RPRT -5`) and a slot over halts, as WSJT-X does, while a slow round trip is simply
 //! answered. ⚠️ The cost: a radio that never answers holds the radio loop about 2 s for each
@@ -301,6 +302,9 @@ pub struct CivBackend {
     /// Send an unanswered unkey once more ([`RigBackend::try_set_ptt`]): a shared bus
     /// ([`Link::shared`]), whose radio may be across a network.
     retry_unkey: bool,
+    /// How many keys (`1C 00 01`) this backend has sent, from every connection: an unkey's retry
+    /// is skipped when one went out since its first try ([`RigBackend::try_set_ptt`]).
+    keys_written: std::sync::atomic::AtomicU64,
 }
 
 /// The operator's filter memories a mode change can land in, for [`CivBackend::fil_memory`]: an
@@ -365,6 +369,7 @@ impl CivBackend {
             rx_addressing: RxAddressing::for_model(model),
             keying: KeyingPolicy::Allowed,
             retry_unkey: false,
+            keys_written: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -1562,20 +1567,35 @@ impl RigBackend for CivBackend {
     /// answer, since the frame may already be on the wire and the radio keyed. The frame is the
     /// same one either way.
     ///
-    /// ⛔ ON A SHARED BUS AN UNKEY THE RADIO DID NOT ANSWER GOES OUT ONCE MORE, as Hamlib's Icom
-    /// backend sends a timed-out command again (`icom_transaction`, Hamlib 4.6.5
-    /// `rigs/icom/frame.c`): one more unkey on the wire for a radio across a network. Only after
-    /// both tries is the unkey answered `RPRT -5`, about two deadlines out, and Nexus's client
-    /// waits that long for a release on this link (`rig::RETRIED_RELEASE_DEADLINE_MS`), so a radio
-    /// that never answers PTT off halts a slot over with that reason, as WSJT-X does. A key is
-    /// never sent twice, and a serial bus keeps its one try.
+    /// ⛔ ON A SHARED BUS AN UNKEY THE RADIO DID NOT ANSWER GOES OUT ONCE MORE. Hamlib's Icom
+    /// backend sends a timed-out command again, up to three times with 100 ms between tries
+    /// (`icom_transaction`, Hamlib 4.6.5 `rigs/icom/frame.c`); this sends it once more: one more
+    /// unkey on the wire for a radio across a network. Only after both tries is the unkey answered
+    /// `RPRT -5`, about two deadlines out, and Nexus's client waits that long for a release on this
+    /// link (`rig::RETRIED_RELEASE_DEADLINE_MS`), so a radio that never answers PTT off halts a
+    /// slot over with that reason, as WSJT-X does. A key is never sent twice, and a serial bus
+    /// keeps its one try.
+    ///
+    /// ⛔ NOT OVER A LATER KEY. Another connection may key while the first try waits; the retry,
+    /// queued behind that key, would unkey it with the key told `RPRT 0`. So a key written since
+    /// the first try ([`CivBackend::keys_written`]) skips the retry, and the unanswered unkey is
+    /// answered `RPRT -5` as it stands. Within one connection this cannot happen: its lines are
+    /// served in order, so its next key is read only after both tries.
     fn try_set_ptt(&self, on: bool) -> Result<(), SetFault> {
         // A key is refused where the link may not key; an unkey never is.
         if on && self.keying_refused("T 1").is_some() {
             return Err(SetFault::Refused);
         }
+        if on {
+            self.keys_written.fetch_add(1, Ordering::SeqCst);
+        }
+        let keys_before = self.keys_written.load(Ordering::SeqCst);
         let answered = self.answer(commands::set_ptt(self.addr, on));
-        if !on && self.retry_unkey && answered == Err(SetFault::NoAnswer) {
+        if !on
+            && self.retry_unkey
+            && answered == Err(SetFault::NoAnswer)
+            && self.keys_written.load(Ordering::SeqCst) == keys_before
+        {
             super::diag::note("CivBackend: the unkey was not answered, sending it once more");
             return self.answer(commands::set_ptt(self.addr, false));
         }
@@ -6527,6 +6547,86 @@ mod tests {
             gap >= Duration::from_millis(1_000),
             "after the first deadline: {gap:?}"
         );
+    }
+
+    /// ⛔ A LATE `FB` TO AN EARLIER FRAME NEVER STANDS FOR AN UNKEY THE RADIO DID NOT ANSWER. The
+    /// dial write's `FB` lands while the unkey waits, and the radio never answers the unkey (it may
+    /// never have had it). Taken as the unkey's, it said `RPRT 0` with one unkey on the wire, and
+    /// Nexus's idle self-heal stopped unkeying a radio that may still be keyed. Now the unkey is
+    /// unanswered, its retry goes out, and the silence after it halts the over.
+    #[test]
+    fn on_wfviews_port_a_late_fb_to_an_earlier_frame_never_confirms_the_unkey() {
+        let (daemon, mut rig, written) = wfview_port(|f| match (f.cmd, f.data.as_slice()) {
+            (0x05, _) => after(1_300, Some(true)),
+            (0x1C, [0x00, 0x01]) => after(100, Some(true)),
+            _ => after(0, None),
+        });
+        let _ = rig.ptt(true);
+        std::thread::sleep(Duration::from_millis(1_000));
+        let (mut c, mut rd) = client(daemon.local_addr().port());
+        assert_eq!(roundtrip(&mut c, &mut rd, "F 14074000\n"), "RPRT -5\n");
+        let unkey = rig.ptt(false);
+        let why = crate::slot::slot_unkey_failure(&unkey, true).expect("not taken as unkeyed");
+        assert!(why.contains("RPRT -5"), "{why}");
+        assert_eq!(unkeys(&written).len(), 2, "the unkey, then once more");
+    }
+
+    /// ⛔ THE RETRY NEVER UNKEYS A LATER KEY. Connection A's unkey goes unanswered; while it waits,
+    /// connection B keys. A's retry, queued behind B's key, would have unkeyed it, with B told
+    /// `RPRT 0`. A key written since the first try skips the retry: the wire carries the unkey and
+    /// the key, and nothing after them.
+    #[test]
+    fn on_wfviews_port_the_unkey_retry_never_follows_another_connections_key() {
+        let (daemon, _rig, written) = wfview_port(|f| match f.data.as_slice() {
+            [0x00, 0x01] => after(100, Some(true)),
+            _ => after(0, None),
+        });
+        let port = daemon.local_addr().port();
+        let a = std::thread::spawn(move || {
+            let (mut c, mut rd) = client(port);
+            roundtrip(&mut c, &mut rd, "T 0\n")
+        });
+        std::thread::sleep(Duration::from_millis(200));
+        let (mut c, mut rd) = client(port);
+        // B's key is answered (its FB may as well be A's late one, so it may say `RPRT -5`).
+        assert!(
+            roundtrip(&mut c, &mut rd, "T 1\n").starts_with("RPRT "),
+            "B's key"
+        );
+        assert_eq!(
+            a.join().unwrap(),
+            "RPRT -5\n",
+            "A's unkey, unanswered, not retried"
+        );
+        std::thread::sleep(Duration::from_millis(1_500));
+        let ptt: Vec<Vec<u8>> = written
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, f)| f.cmd == 0x1C)
+            .map(|(_, f)| f.data.clone())
+            .collect();
+        assert_eq!(
+            ptt,
+            [vec![0x00, 0x00], vec![0x00, 0x01]],
+            "no unkey after B's key"
+        );
+    }
+
+    /// ⛔ A KEY IS NEVER SENT TWICE: a key the radio does not answer is `RPRT -5` after one try.
+    #[test]
+    fn on_wfviews_port_an_unanswered_key_is_sent_once() {
+        let (daemon, _rig, written) = wfview_port(|_| after(0, None));
+        let (mut c, mut rd) = client(daemon.local_addr().port());
+        assert_eq!(roundtrip(&mut c, &mut rd, "T 1\n"), "RPRT -5\n");
+        std::thread::sleep(Duration::from_millis(1_500));
+        let keys = written
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, f)| f.cmd == 0x1C && f.data == [0x00, 0x01])
+            .count();
+        assert_eq!(keys, 1);
     }
 
     /// A real COM port keeps its timing: an unkey the radio does not answer is `RPRT -5` after the

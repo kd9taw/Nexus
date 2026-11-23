@@ -737,7 +737,7 @@ pub fn available_usb_ports() -> Vec<UsbPort> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     /// Every spelling of one port is that port; different ports never are; empty is nothing.
     #[test]
     fn same_port_sees_through_case_the_win32_prefix_and_the_mac_tty_twin() {
@@ -1209,7 +1209,7 @@ mod tests {
     /// A pseudo-terminal pair, as a virtual-port program makes one: the master end (held open
     /// by the caller, as that program holds it) and the slave's path.
     #[cfg(all(target_os = "linux", feature = "serial"))]
-    fn open_pty() -> (std::fs::File, String) {
+    pub(crate) fn open_pty() -> (std::fs::File, String) {
         use std::os::unix::io::FromRawFd;
         // SAFETY: plain libc calls on a descriptor this function owns; `ptsname_r` writes at
         // most `buf.len()` bytes, NUL-terminated.
