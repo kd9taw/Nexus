@@ -261,13 +261,13 @@ export function CockpitTxStrip({ radio, onSetTxEnabled, onTune, onAtuTune, onAtu
  *    sticky at `top: 0` — SSTV, RTTY, PSK). A strip parked at 0 would park OVER it and cover the
  *    dial and the band; it parks right under it instead. A header that is not sticky clears nothing.
  *  · `--cockpit-txstrip-h` on the SHELL: what is parked at the top while the strip is sticky — the
- *    strip's rendered height, plus a pinned header's — which the shell's `scroll-padding-top` reads
+ *    strip's rendered height, plus a pinned header's and the shell's top padding (parkedEdges) — which the shell's `scroll-padding-top` reads
  *    so whatever is scrolled to the start lands below it. RENDERED, not offsetHeight: under the UI
  *    zoom Chrome applies `scroll-padding` unzoomed (measured: at 175 % a 42 px offsetHeight padded
  *    42 screen px under a 74 px strip), and more padding than the strip only scrolls a target a
  *    little lower.
- *  · `--cockpit-txdock-keep-h` on the SHELL, while the dock is folded: the keep row's height, which the shell's
- *    `scroll-padding-bottom` reads so a focus or a `scrollIntoView` never lands behind the parked row. RENDERED, for the
+ *  · `--cockpit-txdock-keep-h` on the SHELL, while a dock parks at the foot: the keep row's height folded, the whole dock's
+ *    (or SSTV's bar's) unfolded, and the shell's bottom padding (parkedEdges), which the shell's `scroll-padding-bottom` reads so a focus or a `scrollIntoView` never lands behind the parked row. RENDERED, for the
  *    strip's reason: with offsetHeight (89 px for RTTY's 156 px row at 175 %) it cleared CW and PSK by luck and not RTTY.
  *  Re-read on every render as well as on a resize. */
 const isDock = (c: Element): c is HTMLElement =>
@@ -510,36 +510,86 @@ export function revealAfterPress(el: HTMLElement, reveal: () => void): void {
   }, DOUBLE_CLICK_MS - since)
 }
 
-/** A FOCUSED CONTROL THE PADDING COULD NOT CLEAR. Where the room between the strip and the keep row is shorter than the
- *  control (JS8 at 900×600 at 175 %: 22 px for its 38 px buttons), no `scroll-padding` fits it and Chrome top-aligns it,
- *  its centre behind the keep row, so Enter would send a key the operator cannot see. Its centre is brought to the middle
- *  of that room instead, after the browser's own reveal. The parked surfaces hold their own focus. */
-function centreIfBehind(shell: HTMLElement, strip: HTMLElement, dock: HTMLElement, el: HTMLElement): void {
-  const keep = dock.getAttribute('data-fold') === 'on' ? keepRow(dock) : undefined
-  if (!keep || keep.contains(el) || strip.contains(el) || el.closest('.panels-menu-pop')) return
-  const q = el.getBoundingClientRect()
-  const s = strip.getBoundingClientRect()
-  const parked = parkedTop(keep).top
-  const cy = q.top + q.height / 2
-  if (cy < parked && (cy < s.top || cy > s.bottom)) return
-  if (shell.offsetHeight === 0) return
-  const z = shell.getBoundingClientRect().height / shell.offsetHeight
-  // THE STRIP PARKED ON THE KEEP ROW: a control BEFORE the strip in the shell (the header, the scope), scrolled down to
-  // the foot, meets the strip held at its bottom offset, right on the row, and there is no room between the two (CW at
-  // 900×600 / 150 %: ⊞ Panels behind both, measured). Its room is then above the strip, under the shell's top or a header
-  // pinned there: where the room between does not hold it and the room above is the larger, it is centred there
-  // instead. Only a control before the strip: one after it (the dock's own rows) stays below it however the shell
-  // scrolls, and above the strip it would be under the strip (JS8's macro keys at 900×600 / 175 %, measured).
+/** WHAT IS PARKED AT THE SHELL'S EDGES, in rendered px from the shell's own top and bottom edges: the one measurement the
+ *  shell's scroll padding (`--cockpit-txstrip-h`, `--cockpit-txdock-keep-h`) and the Tab fallback below both read.
+ *  · `top`: what parks at the top while the strip is sticky — the shell's top padding (a sticky box parks inside its
+ *    scroller's padding), a pinned header, the strip.
+ *  · `bottom`: what parks at the foot — the shell's bottom padding, and a folded dock's keep row (with a notice standing on
+ *    it), or a sticky dock whole, or SSTV's bar. Nothing where no dock parks.
+ *  · `strip`: the strip's own height while it is sticky.
+ *  · `rest`: from the shell's bottom edge to the strip's top where, held at its bottom offset, it rests on what parks at
+ *    the foot: a control BEFORE it in the shell (the header, the scope) meets the two together there.
+ *  Geometry from the parked surfaces' own heights and offsets, not from where they stand now: the strip stands at the top
+ *  or at the foot depending on the scroll, and what it clears does not. */
+function parkedEdges(shell: HTMLElement, strip: HTMLElement, dock: HTMLElement | undefined): { top: number; bottom: number; strip: number; rest: number; z: number } {
+  const z = shell.offsetHeight > 0 ? shell.getBoundingClientRect().height / shell.offsetHeight : 1
+  const cs = getComputedStyle(shell)
+  const sticky = getComputedStyle(strip).position === 'sticky'
   const head = pinnedAbove(shell, strip)
-  const top = head ? head.getBoundingClientRect().bottom : shell.getBoundingClientRect().top
-  const between = parked - s.bottom
+  const stripH = sticky ? strip.getBoundingClientRect().height : 0
+  const top = sticky ? (parseFloat(cs.paddingTop) || 0) * z + (head ? head.getBoundingClientRect().height : 0) + stripH : 0
+  const keep = dock?.getAttribute('data-fold') === 'on' ? keepRow(dock) : undefined
+  const parkedH = keep ? parkedTop(keep).height : dock && getComputedStyle(dock).position === 'sticky' ? dock.getBoundingClientRect().height : 0
+  const padB = (parseFloat(cs.paddingBottom) || 0) * z
+  const bottom = parkedH > 0 ? padB + parkedH : 0
+  // Where the strip rests, from the shell's bottom edge to its top: its own bottom offset (what it clears of the dock,
+  // `--cockpit-txstrip-bottom`, layout px) over the padding. Read as the strip resolves it; what parks where it does not.
+  const offset = parseFloat(getComputedStyle(strip).bottom)
+  const rest = sticky ? padB + (Number.isFinite(offset) ? offset * z : parkedH) + stripH : 0
+  return { top, bottom, strip: stripH, rest, z }
+}
+
+/** A FOCUSED CONTROL THE PADDING COULD NOT CLEAR. Chrome reveals a focus inside the scroll padding, which is right for a
+ *  control after the strip (the panes, a dock's scrolling rows): its room is between the top's parked surfaces and the
+ *  foot's. It is not enough where:
+ *  · the room is shorter than the control (JS8 at 900×600 at 175 %: 22 px for its 38 px buttons), so no padding fits it
+ *    and Chrome top-aligns it, its centre behind the keep row;
+ *  · the control is BEFORE the strip (the header, the scope): scrolled down to the foot it meets the strip resting on the
+ *    dock or the keep row, so its room is above the strip's height there (CW's ⊞ Panels at 900×600 / 150 %, and CW's
+ *    scope controls at 1366×768 at 100 % behind the strip resting on the whole dock, measured).
+ *  Either way Enter would act on a control the operator cannot see, so its centre is brought to the middle of its room,
+ *  after the browser's own reveal. The parked surfaces hold their own focus. */
+function centreIfBehind(shell: HTMLElement, strip: HTMLElement, dock: HTMLElement | undefined, el: HTMLElement): void {
+  if (strip.contains(el) || el.closest('.panels-menu-pop') || shell.offsetHeight === 0) return
+  const head = pinnedAbove(shell, strip)
+  const keep = dock?.getAttribute('data-fold') === 'on' ? keepRow(dock) : undefined
+  const parked = keep ?? (dock && getComputedStyle(dock).position === 'sticky' ? dock : undefined)
+  if (head?.contains(el) || parked?.contains(el)) return
+  const edge = parkedEdges(shell, strip, dock)
+  const sh = shell.getBoundingClientRect()
+  const q = el.getBoundingClientRect()
+  const cy = q.top + q.height / 2
   const before = (strip.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_PRECEDING) !== 0
-  if (before && between < q.height && s.top - top > between) {
-    shell.scrollTop += (cy - (top + s.top) / 2) / z
-    return
+  const lo = sh.top + (before ? (head ? edge.top - edge.strip : 0) : edge.top)
+  // Before the strip, the strip's own top bounds the room where it stands below the room's top: resting on the foot's
+  // surfaces, or lower in its own place (Chrome rests it a little above its offset's arithmetic: 17 px on JTTY at
+  // 700×800 / 175 %, measured), and a scroll that brings the control up leaves it there. Stuck at the top, it will rest.
+  const s = strip.getBoundingClientRect()
+  const hi = before ? (s.top > lo ? Math.min(s.top, sh.bottom - edge.rest) : sh.bottom - edge.rest) : sh.bottom - edge.bottom
+  // In sight is the whole control where its room holds it, its centre where it does not. One that fits is centred in its
+  // room. One taller than its room has its top put at the room's top, so its label and its centre are what show, while
+  // its centre still lands a pixel or more inside the room; nearer twice the room than that, its centre would sit on the
+  // parked surface's edge or behind it (JS8's fields at 900×600 / 175 %: a 23 px room; its band preset, 45 px in a 23 px
+  // room at 1366×768 at the OS's 175 % with the app at 150 %, centred 0.5 px above the strip; measured), so it is centred.
+  const room = hi - lo
+  const fits = q.height <= room
+  if (hi <= lo || (fits ? q.top >= lo && q.bottom <= hi : cy >= lo && cy <= hi)) return
+  let move = fits || q.height / 2 > room - 1 ? cy - (lo + hi) / 2 : q.top - lo
+  // THE SHELL FIRST, then a scroller inside it that holds the control (a pane's or JS8's column): at the end of the
+  // shell's own scroll, a control far down an inner column stayed behind the keep row (JS8 at 1366×768 at the OS's 175 %
+  // with the app at 150 %, measured), and only its column can bring it up. Each takes what its range allows.
+  const scrollers = [shell]
+  for (let p = el.parentElement; p && p !== shell; p = p.parentElement) {
+    if (p.scrollHeight > p.clientHeight + 1 && /(auto|scroll)/.test(getComputedStyle(p).overflowY)) scrollers.push(p)
   }
-  if (between <= 0) return
-  shell.scrollTop += (cy - (s.bottom + parked) / 2) / z
+  for (const sc of scrollers) {
+    if (Math.abs(move) < 0.5) break
+    const z = sc.offsetHeight > 0 ? sc.getBoundingClientRect().height / sc.offsetHeight : edge.z
+    const was = sc.scrollTop
+    // The browser clamps a scroll to its range: what it took is what moved.
+    sc.scrollTop = was + move / z
+    move -= (sc.scrollTop - was) * z
+  }
 }
 
 /** The same, for something opened rather than focused (JS8's heartbeat menu): where it scrolls with a folded dock's
@@ -583,14 +633,11 @@ function useDockClearance(ref: RefObject<HTMLDivElement | null>) {
     }
     strip.style.setProperty('--cockpit-txstrip-bottom',
       dock && getComputedStyle(dock).position === 'sticky' ? `${keep ? keep.offsetHeight : dock.offsetHeight}px` : '0px')
-    // With the shell's own bottom padding under the row: a sticky box parks inside its scroller's padding, so the row
-    // stands that far above the scrollport's foot, and a focus padded by the row alone stopped short behind it (21 px on
-    // CW at 900×600 / 150 %, measured). Rendered, as the row is.
-    if (keep) {
-      const z = shell.offsetHeight > 0 ? shell.getBoundingClientRect().height / shell.offsetHeight : 1
-      const pad = (parseFloat(getComputedStyle(shell).paddingBottom) || 0) * z
-      shell.style.setProperty('--cockpit-txdock-keep-h', `${Math.ceil(parkedTop(keep).height + pad)}px`)
-    }
+    // What parks at the two edges, the scroll padding's one source (parkedEdges): folded or whole, a dock that parks at
+    // the foot is cleared, and so is the shell's own padding a sticky box parks inside. A whole dock wrote nothing, and Tab
+    // stopped behind it (38 controls on CW at 1366×768 at the OS's 175 %, measured), as it did 21 px short of a keep row.
+    const edge = parkedEdges(shell, strip, dock)
+    if (edge.bottom > 0) shell.style.setProperty('--cockpit-txdock-keep-h', `${Math.ceil(edge.bottom)}px`)
     else shell.style.removeProperty('--cockpit-txdock-keep-h')
     // A notice standing on the parked row's top edge (JTTY's) keeps clear of Stop TX: the column to its right.
     const stop = strip.querySelector<HTMLElement>('.op-btn.stop')
@@ -615,10 +662,7 @@ function useDockClearance(ref: RefObject<HTMLDivElement | null>) {
     // it always had (the sheet's fallback is 0), so their documents are unchanged.
     if (head) strip.style.setProperty('--cockpit-txstrip-top', `${head.offsetHeight}px`)
     else strip.style.removeProperty('--cockpit-txstrip-top')
-    shell.style.setProperty('--cockpit-txstrip-h',
-      getComputedStyle(strip).position === 'sticky'
-        ? `${Math.ceil(strip.getBoundingClientRect().height + (head ? head.getBoundingClientRect().height : 0))}px`
-        : '0px')
+    shell.style.setProperty('--cockpit-txstrip-h', `${Math.ceil(edge.top)}px`)
   }
   useLayoutEffect(apply)
   useLayoutEffect(() => {
@@ -642,14 +686,16 @@ function useDockClearance(ref: RefObject<HTMLDivElement | null>) {
     // focusin fires again on a window regain, so the screen jumped under the next click. The focus Tab moves follows its
     // keydown within this task; nothing else counts.
     let tabAt = -Infinity
+    // What scrolls: the shell, or where the strip stands in a wrapper with no dock (Tempo's header) the `<main>` round it.
+    const scroller = shell.tagName === 'MAIN' ? shell : (shell.closest<HTMLElement>('main') ?? shell)
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Tab') tabAt = e.timeStamp
     }
     const onFocus = (e: FocusEvent) => {
       const el = e.target
-      if (dock && el instanceof HTMLElement && e.timeStamp - tabAt < TAB_FOCUS_MS) {
+      if (el instanceof HTMLElement && e.timeStamp - tabAt < TAB_FOCUS_MS) {
         requestAnimationFrame(() => {
-          if (document.activeElement === el) centreIfBehind(shell, strip, dock, el)
+          if (document.activeElement === el) centreIfBehind(scroller, strip, dock, el)
         })
       }
     }
