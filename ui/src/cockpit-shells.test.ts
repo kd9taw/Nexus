@@ -112,9 +112,12 @@ const RULES = parseRules(css)
  *  element modelled without it — SSTV's sized stage (layout L6) is the element that has it. */
 function compoundClasses(compound: string): string[] | null {
   if (/[\s>+~:#]/.test(compound)) return null
-  const parts = compound.match(/\.[a-zA-Z0-9_-]+|\[[a-zA-Z0-9_-]+\]/g)
+  // …and the one VALUED attribute the shells' rules key on, the viewport bucket on <html> (`[data-viewport='xs']`),
+  // as its own token (`[data-viewport=xs]`): a chain sees a bucket's rules only when it models that bucket's root, so
+  // every chain that does not (all of them but the per-bucket ones below) matches exactly what it did before.
+  const parts = compound.match(/\.[a-zA-Z0-9_-]+|\[[a-zA-Z0-9_-]+\]|\[data-viewport=(['"]?)[a-z]+\1\]/g)
   if (!parts || parts.join('') !== compound) return null
-  return parts.map((p) => (p.startsWith('.') ? p.slice(1) : p))
+  return parts.map((p) => (p.startsWith('.') ? p.slice(1) : p.replace(/['"]/g, '')))
 }
 
 /** Right-to-left match of a class-only selector (descendant/child combinators OK)
@@ -1900,19 +1903,28 @@ describe("APRS's body has a fixed 10em floor, and the shell it floors in scrolls
   // 10em now — FIXED, never content, which would re-arm the map's growth loop (aprsLayout.test.ts) — and that floor is
   // safe only because the shell is a definite-height flex column whose deficit valve scrolls. CASCADE WINNERS, all
   // three: a declaration that loses never reaches the box.
-  const body = [...APRS_CHAIN, new Set(['aprs-body'])]
+  // PER VIEWPORT BUCKET: the rules keyed on `[data-viewport]` are live in one bucket each, and xs, where the floor binds,
+  // has APRS rules of its own (the one-column stack). Each bucket's chain carries its root (<html>'s bucket token).
+  const BUCKETS = ['xs', 'sm', 'md', 'lg', 'xl']
   const blockDisplay = blockLonghand('display')
   const fails = (rules: Rule[]): string[] => {
     const out: string[] = []
-    const floor = winningValue(body, blockLonghand('min-height'), rules)
-    if (floor?.value !== '10em') out.push(`.aprs-body min-height is ${JSON.stringify(floor)}`)
-    const valve = winningValue(APRS_CHAIN, blockOverflowY, rules)
-    if (valve?.value !== 'auto') out.push(`the APRS shell's overflow-y is ${JSON.stringify(valve)}`)
-    const display = winningValue(APRS_CHAIN, blockDisplay, rules)
-    if (display?.value !== 'flex') out.push(`the APRS shell's display is ${JSON.stringify(display)}`)
+    for (const vp of BUCKETS) {
+      const shell = [new Set([`[data-viewport=${vp}]`]), ...APRS_CHAIN]
+      const body = [...shell, new Set(['aprs-body'])]
+      const floor = winningValue(body, blockLonghand('min-height'), rules)
+      if (floor?.value !== '10em') out.push(`${vp}: .aprs-body min-height is ${JSON.stringify(floor)}`)
+      // No height of its own either: a content height (`max-content`) would size it past any floor's reach.
+      const height = winningValue(body, blockLonghand('height'), rules)
+      if (height !== null) out.push(`${vp}: .aprs-body declares a height, ${JSON.stringify(height)}`)
+      const valve = winningValue(shell, blockOverflowY, rules)
+      if (valve?.value !== 'auto') out.push(`${vp}: the APRS shell's overflow-y is ${JSON.stringify(valve)}`)
+      const display = winningValue(shell, blockDisplay, rules)
+      if (display?.value !== 'flex') out.push(`${vp}: the APRS shell's display is ${JSON.stringify(display)}`)
+    }
     return out
   }
-  it('the body floors at 10em, the shell scrolls, and the shell is a flex column', () => {
+  it('in every viewport bucket the body floors at 10em with no height of its own, the shell scrolls, and it is a flex column', () => {
     expect(fails(RULES)).toEqual([])
   })
   // THE CONTROLS: each plant, one at a time, must leave a red.
@@ -1921,6 +1933,9 @@ describe("APRS's body has a fixed 10em floor, and the shell it floors in scrolls
     ['a later, more specific content floor', () => [...RULES, ...parseRules('.aprs-cockpit .aprs-body { min-height: min-content }').map((r) => ({ ...r, order: 1e9 }))]],
     ['the valve outranked by a later rule', () => [...RULES, ...parseRules('.app .shell .layout.single.needed-panel.aprs-cockpit { overflow-y: hidden }').map((r) => ({ ...r, order: 1e9 }))]],
     ['the shell switched to display: block', () => [...RULES, ...parseRules('.app .layout.single.needed-panel.aprs-cockpit { display: block }').map((r) => ({ ...r, order: 1e9 }))]],
+    ['a content floor in the xs bucket alone', () => [...RULES, ...parseRules("[data-viewport='xs'] .aprs-body { min-height: min-content }").map((r) => ({ ...r, order: 1e9 }))]],
+    ['the shell switched to display: block in the sm bucket alone', () => [...RULES, ...parseRules("[data-viewport='sm'] .layout.single.needed-panel.aprs-cockpit { display: block }").map((r) => ({ ...r, order: 1e9 }))]],
+    ['a content height on the body', () => [...RULES, ...parseRules('.aprs-body { height: max-content }').map((r) => ({ ...r, order: 1e9 }))]],
   ]
   for (const [what, rules] of PLANTS) {
     it(`the control: ${what} goes red`, () => {
