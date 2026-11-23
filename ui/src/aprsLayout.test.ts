@@ -42,12 +42,11 @@ describe('APRS layout invariants', () => {
     expect(rule![2]).toMatch(/display:\s*contents/)
   })
 
-  it('the map cell can shrink: bounded row track and no hard min-height floor', () => {
+  it('the map cell shrinks: bounded row track (its floor and the valve: cockpit-shells.test.ts, as cascade winners)', () => {
     const body = /\.aprs-body\s*\{([^}]*)\}/.exec(css)
     expect(body, '.aprs-body rule must exist').not.toBeNull()
     // A bare `1fr` row keeps a min-content floor, which is the other way this overflows.
     expect(body![1]).toMatch(/grid-template-rows:\s*minmax\(0, 1fr\)/)
-    expect(body![1]).toMatch(/min-height:\s*0/)
 
     // A hard px floor on the map would push the grid past its parent on a short window —
     // the additive-floor clipping this codebase has already been bitten by (see

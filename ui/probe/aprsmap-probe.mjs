@@ -15,6 +15,11 @@
 //      and Stop TX and the latch are still on screen with the card open.
 // THE CONTROL, run every time: a planted rule that stops the toolbar wrapping (one 3000 px row) at the floor
 // must make check 3 fail. If it passes, the check cannot fail and the probe says so instead of passing.
+// AND THE BODY'S FLOOR (the app pinned at 150–175 % on screens where the header and the TX strip take most of the
+// shell): the body, the map and the rail, is at least 10em tall (its own em), and the map and the rail are both
+// drawn. It was 0 px where the two took the whole shell, the beacon's fields clipped where the TX strip stands
+// (900×600 at 175 %, and 1366×768 at the OS's 150 % with the app at 150 %, measured). ITS CONTROL: the floor
+// taken away (`min-height: 0`) at 900×600 / 175 % must leave the body under it.
 //
 // exit: 0 every check held · 1 a red, or a control that could not fail · 2 the page never drew APRS
 import { createServer } from 'vite'
@@ -23,7 +28,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
-import { CORE, metrics } from './sizes.mjs'
+import { CORE, FLOOR_150, metrics, offMatrix } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 const REAL_API = join(UI, 'src', 'api.ts')
@@ -185,6 +190,48 @@ function reds(tag, { before: m, after: a }) {
   return out
 }
 
+/** The body, the map and the rail, in layout px, at a screen with the app pinned at `scale`. */
+async function measureBody(size, scale, css = null) {
+  const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
+  const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
+  const call = (method, params) => browser.call(method, params, sessionId)
+  const evaluate = async (expression) => {
+    const r = await call('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true })
+    if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text)
+    return r.result.value
+  }
+  const BODY = `(() => { const shell = document.querySelector('main.aprs-cockpit'), body = shell?.querySelector(':scope > .aprs-body')
+    if (!body || !document.documentElement.getAttribute('data-viewport')) return null
+    const z = shell.getBoundingClientRect().height / shell.offsetHeight, h = (e) => e ? Math.round(e.getBoundingClientRect().height / z * 10) / 10 : null
+    return { body: h(body), map: h(body.querySelector('.aprs-map')), rail: h(body.querySelector('.aprs-rail')), floor: 10 * parseFloat(getComputedStyle(body).fontSize) } })()`
+  try {
+    await call('Emulation.setDeviceMetricsOverride', metrics(size))
+    await call('Page.navigate', { url: `${origin}/probe-blank` })
+    await sleep(300)
+    const ls = { 'nexus.workspace': 'dx', 'nexus.features.v1': FEATURES, 'tempo-theme': 'dark', 'nexus-ui-scale-mode': scale }
+    await evaluate(`localStorage.clear(); ${Object.entries(ls).map(([k, v]) => `localStorage.setItem(${JSON.stringify(k)}, ${JSON.stringify(v)})`).join(';')}; 1`)
+    await call('Page.navigate', { url: `${origin}/#aprs` })
+    let m = null
+    for (let i = 0; i < 120 && !m; i++) {
+      await sleep(250)
+      m = await evaluate(BODY).catch(() => null)
+    }
+    if (!m) return null
+    if (css) await evaluate(`(() => { const s = document.createElement('style'); s.textContent = ${JSON.stringify(css)}; document.head.appendChild(s); return 1 })()`)
+    let last = null
+    for (let i = 0; i < 40; i++) {
+      await sleep(250)
+      m = await evaluate(BODY)
+      if (last && JSON.stringify(m) === JSON.stringify(last)) break
+      last = m
+    }
+    return m
+  } finally {
+    await browser.call('Target.closeTarget', { targetId })
+  }
+}
+const BODY_SIZES = [[FLOOR_150, '150'], [offMatrix(900, 600), '175'], [offMatrix(900, 600), '150'], [CORE[0], '100']]
+
 let code = 0
 const red = (msg) => {
   console.error(`aprsmap-probe: RED — ${msg}`)
@@ -208,7 +255,17 @@ try {
   const caught = r ? reds(`${SIZES[0].name} (planted)`, r).filter((x) => x.includes('toolbar controls outside')) : []
   if (caught.length === 0) red('CONTROL FAILED — a toolbar forced onto one 3000 px row passed check 3; the check cannot fail')
   else console.log(`aprsmap-probe: CONTROL — ${caught[0]} (caught)`)
-  if (code === 0) console.log(`aprsmap-probe: PASS — the APRS map and its toolbar fit at ${SIZES.map((s) => s.name).join(', ')}, the map draws, the card opens inside it, Stop TX and the TX latch stay on screen, and the control was caught`)
+  for (const [size, scale] of BODY_SIZES) {
+    const b = await measureBody(size, scale)
+    const tag = `${size.name} at ${scale} %`
+    if (!b) red(`APRS at ${tag}: the body never drew`)
+    else if (b.body < b.floor - 0.5 || !(b.map > 0) || !(b.rail > 0)) red(`APRS at ${tag}: the body is ${b.body} layout px (map ${b.map}, rail ${b.rail}), under its 10em (${b.floor} px) floor or a part of it not drawn`)
+    else console.log(`aprsmap-probe: ${tag.padEnd(26)} body ${b.body} layout px, map ${b.map}, rail ${b.rail}`)
+  }
+  const bc = await measureBody(offMatrix(900, 600), '175', '.aprs-body { min-height: 0 !important }')
+  if (!bc || bc.body >= bc.floor - 0.5) red(`CONTROL FAILED — with the body's floor taken away the body at 900×600 / 175 % is ${bc?.body}; the floor check cannot fail`)
+  else console.log(`aprsmap-probe: CONTROL — the body's floor taken away at 900×600 / 175 %: ${bc.body} layout px (caught)`)
+  if (code === 0) console.log(`aprsmap-probe: PASS — the APRS map and its toolbar fit at ${SIZES.map((s) => s.name).join(', ')}, the map draws, the card opens inside it, Stop TX and the TX latch stay on screen, the body keeps its 10em floor where the app is pinned large, and the controls were caught`)
   process.exitCode = process.exitCode || code
 } catch (e) {
   if (!process.exitCode) {
