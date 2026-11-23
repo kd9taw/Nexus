@@ -5183,6 +5183,11 @@ fn an_over_in_any_slot_mode_never_keys_the_old_vfo_b() {
     for tier in [Tier::Msk144, Tier::Q65, Tier::Jt65, Tier::Fst4] {
         let engine = cq_engine_at(SplitMode::Rig, tier, 24.915, "12m", 1500.0);
         let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, Some(STALE_10M_VFO_B));
+        // JT65's and FST4's 60 s periods take up to 5000 ticks to reach an own boundary: the loop's
+        // clock starts 5 min ahead of the real one, on a minute, so a loaded machine running the
+        // ticks slowly never lets the real clock overtake it.
+        b.slot = ((now_unix_ms() + 300_000.0) / 60_000.0).ceil() * 60_000.0;
+        b.t = b.slot - 14_900.0;
         let (at, before) = keyed_after(&mut b, 5_000);
         assert!(
             b.radio.keyed() || !at.is_empty(),
