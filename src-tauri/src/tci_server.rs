@@ -494,7 +494,12 @@ impl TciBackend for EngineTci {
     fn release(&self, client: ClientId) {
         // From the key's owner, the graceful end of its own over (what it sent plays out) or of
         // its microphone key or Tune. From any other program: what is on the air
-        // stops, as for WSJT-X's Halt Tx, and holds until the operator arms.
+        // stops, as for WSJT-X's Halt Tx, and holds until the operator arms. Counted on the
+        // lock-free Stop TX first, as every stop from another thread is: whose key it ends is
+        // known only under the lock, and an over's split writes may hold that for seconds
+        // (`tempo_app::engine::StopTx`). An over of Nexus's own that a program's release meets
+        // there keys nothing, as Halt Tx would have stopped it.
+        tempo_app::engine::press_station_stop_tx();
         let halted = engine_lock(&self.engine).tci_release(client.get());
         if halted {
             self.log(

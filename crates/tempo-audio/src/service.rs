@@ -14271,14 +14271,17 @@ impl RadioLoop {
             // radio's keyer may still be sending the word before, and only a slot over moves VFO B,
             // which never keys while CW is sending. A refusal drops the message, as a refused key does.
             let word = match word {
-                Some(_)
-                    if starts
-                        && self
-                            .split_ready_for_a_non_slot_key(engine, rig, "CW")
-                            .is_err() =>
-                {
-                    engine_lock(engine).cw_key_refused();
-                    None
+                Some(text) if starts => {
+                    match self.split_ready_for_a_non_slot_key(engine, rig, "CW") {
+                        Err(_) => {
+                            engine_lock(engine).cw_key_refused();
+                            None
+                        }
+                        // ⛔ Stopped during the split writes: the word keys nothing, and the
+                        // loop's abort takes the rest.
+                        Ok(()) if engine_lock(engine).cw_abort_pending() => None,
+                        Ok(()) => Some(text),
+                    }
                 }
                 word => word,
             };
@@ -16381,6 +16384,12 @@ impl RadioLoop {
                     // key the radio refused: nothing keys and, as for any failed key, it is not
                     // tried again while it is held.
                     split_ready = self.split_ready_for_a_non_slot_key(engine, rig, "PTT");
+                    // ⛔ RELEASED DURING THE SPLIT WRITES: nothing keys. The press was read before
+                    // them, and they can take a second or more on a slow radio; the release that
+                    // came meanwhile is the operator's last word. The next tick sends the unkey.
+                    if split_ready.is_ok() && !engine_lock(engine).manual_ptt() {
+                        split_ready = Err("the PTT was released during the split writes".into());
+                    }
                     // Not keyed through `key_over`: an earlier key's refusal for the split is not
                     // this press's, whose own report follows.
                     self.key_refused_for_split = false;
@@ -17592,7 +17601,16 @@ impl RadioLoop {
                 self.fake_it_write_back_before_key(rig, now);
                 // ⛔ Never out of VFO B on the last over's TX dial: a refusal ends the tune below,
                 // as a refused key does, and asserts no PTT.
-                let split_ready = self.split_ready_for_a_non_slot_key(engine, rig, "tune");
+                let split_ready = self
+                    .split_ready_for_a_non_slot_key(engine, rig, "tune")
+                    // ⛔ Turned off during the split writes: nothing keys.
+                    .and_then(|()| {
+                        if engine_lock(engine).tuning() {
+                            Ok(())
+                        } else {
+                            Err("Tune was turned off during the split writes".to_string())
+                        }
+                    });
                 // Icom-native only: a plain-USB/LSB Icom takes TX audio from the MIC, so
                 // a keyed tune tone via the USB codec radiates ZERO RF ("red light, no
                 // signal"). Flip DATA mode on for the tune (this exact sequence — set DATA,

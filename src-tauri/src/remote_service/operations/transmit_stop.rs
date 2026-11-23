@@ -248,6 +248,11 @@ impl Authority {
 /// therefore rides the single guard below, and only the mast halt (a blocking socket write, with no
 /// Engine in it) is allowed a thread.
 pub(super) fn stop_station(engine: &crate::SharedEngine) {
+    // ⛔ COUNTED BEFORE THE ENGINE IS ASKED FOR, as the desktop's Stop TX is: the radio loop holds
+    // the engine through an over's key-time split writes and reads this count between them and
+    // just before the key, so the Stop keys nothing instead of waiting out the writes
+    // (`tempo_app::engine::StopTx`).
+    tempo_app::engine::press_station_stop_tx();
     match tempo_app::engine::engine_try_lock(engine) {
         Ok(mut e) => {
             let halt = stop(&mut e);
