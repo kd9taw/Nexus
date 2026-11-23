@@ -1475,6 +1475,52 @@ describe('RTTY: the waterfall and the tuning scope share one strip, side by side
   })
 })
 
+/** THE OPERATOR'S PICTURE GUARANTEE, RTTY's row only (2026-11-22, the operator's ruling on the 0 px picture). RTTY's
+ *  row floor is `max(<the shared yielding floor>, calc(var(--rtty-wf-head-h, 0px) + 40px))`: the second term is the
+ *  waterfall header's own height, measured onto the row (RttyCockpit useWaterfallHeadHeight), with 40 px of picture
+ *  under it, because the row is a size container and the header's lines never sized it (the picture was 0 px at 17
+ *  matrix sizes, measured). A measured height cannot be computed here, so the 30 % cap, the "resolves" check and the
+ *  divider's declared lower end hold for the SHARED term exactly as before; the second term must be exactly this form,
+ *  on RTTY's row alone (below); and rttyfit measures that the row honours max(shared, header + 40) within 1 px. The
+ *  divider is not left with dead travel where the second term binds: PaneSeam clamps to the range the layout honours
+ *  (`honouredRange`), measured. */
+const PICTURE_TERM = /^max\((.*), calc\(var\(--rtty-wf-head-h, 0px\) \+ 40px\)\)$/
+function sharedFloor(shell: string, value: string): string {
+  const m = PICTURE_TERM.exec(value)
+  if (shell !== 'rtty-cockpit') {
+    expect(m, `.${shell}'s strip floor carries RTTY's picture term: \`${value}\``).toBeNull()
+    return value
+  }
+  expect(m, `.rtty-wf-row's floor is \`${value}\`, not max(<the shared floor>, calc(var(--rtty-wf-head-h, 0px) + 40px))`).not.toBeNull()
+  return m![1]
+}
+/** Every (selector, property) in either sheet whose value reads the header's measured height. */
+function headVarUsers(rules: Rule[]): string[] {
+  const out: string[] = []
+  for (const r of rules) {
+    for (const decl of r.body.split(';')) {
+      const at = decl.indexOf(':')
+      if (at < 0 || !decl.slice(at + 1).includes('--rtty-wf-head-h')) continue
+      out.push(`${r.selector.trim()} / ${decl.slice(0, at).trim()}`)
+    }
+  }
+  return out
+}
+const PANES_SHEET = readFileSync(fileURLToPath(new URL('./cockpit-panes.css', import.meta.url)), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+
+describe("RTTY's picture term is RTTY's row's alone", () => {
+  it('nothing but `.rtty-wf-row`’s min-height reads the measured header height, in either sheet', () => {
+    expect(headVarUsers([...RULES, ...parseRules(PANES_SHEET)])).toEqual(['.rtty-wf-row / min-height'])
+  })
+  it('the controls: the term planted on another strip, or in another property of the row, is read as another user', () => {
+    const elsewhere = parseRules('.psk-cockpit .waterfall-wrap { min-height: calc(var(--rtty-wf-head-h, 0px) + 40px) }')
+    expect(headVarUsers([...RULES, ...elsewhere]), 'a planted strip went unseen').toContain('.psk-cockpit .waterfall-wrap / min-height')
+    const inRow = parseRules('.rtty-wf-row { flex-basis: calc(var(--rtty-wf-head-h, 0px) + 300px) }')
+    expect(headVarUsers([...RULES, ...inRow]), 'a planted property of the row went unseen').toContain('.rtty-wf-row / flex-basis')
+    expect(() => sharedFloor('psk-cockpit', 'max(8em, calc(var(--rtty-wf-head-h, 0px) + 40px))'), 'the strip check missed it').toThrow()
+  })
+})
+
 describe('the RTTY/PSK waterfall floor YIELDS (and is the lower end of its divider)', () => {
   // `.rtty-cockpit .waterfall-wrap` shares the strip shape with `.ph-scope-panel`, and
   // carried the same `min-height: 120px` — and until layout L6 RTTY gave the operator no drag
@@ -1491,7 +1537,7 @@ describe('the RTTY/PSK waterfall floor YIELDS (and is the lower end of its divid
       const win = winningValue(chain, blockLonghand('min-height'))
       expect(win, `.${shell} .waterfall-wrap: nothing declares min-height`).not.toBeNull()
       // Not "delete the floor" — at a normal window the strip must still be a strip.
-      const v = win!.value
+      const v = sharedFloor(shell, win!.value)
       expect(
         lengthPx(v, { fontPx: 14, vhEff: 768 }),
         `.${shell} .waterfall-wrap min-height is \`${v}\` — at a 768 window the floor must ` +
@@ -1500,7 +1546,7 @@ describe('the RTTY/PSK waterfall floor YIELDS (and is the lower end of its divid
     })
 
     it(`.${shell} never claims more than 30% of the effective viewport`, () => {
-      const v = winningValue(chain, blockLonghand('min-height'))!.value
+      const v = sharedFloor(shell, winningValue(chain, blockLonghand('min-height'))!.value)
       for (const vhEff of [1440, 768, 439, 384, 300]) {
         const floor = lengthPx(v, { fontPx: 14, vhEff })
         expect(floor, `min-height \`${v}\` is unreadable as a length`).not.toBeNull()
@@ -1645,8 +1691,10 @@ describe("the scope Splitter's declared range is the range the sheet HONOURS", (
         )
         const sheet = winningValue(chain, blockLonghand(prop))
         expect(sheet, `.${shell} .${strip}: nothing declares ${prop}`).not.toBeNull()
+        // RTTY's floor: the shared term, which the divider declares (the picture term is measured; see sharedFloor).
+        const value = prop === 'min-height' && strip === 'rtty-wf-row' ? sharedFloor('rtty-cockpit', sheet!.value) : sheet!.value
         for (const g of GEOMS) {
-          const want = lengthPx(sheet!.value, g)
+          const want = lengthPx(value, g)
           expect(want, `\`${sheet!.value}\` is unreadable as a length`).not.toBeNull()
           const got = declaredPx(props[end], g)
           expect(

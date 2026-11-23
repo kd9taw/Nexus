@@ -16,14 +16,27 @@
 //      does not scroll.
 // THE CONTROL, run every time: a planted 120 px margin under the waterfall strip at 1920×1080 / 150 % must
 // make check 1 fail. If it passes, the check cannot fail and the probe says so instead of passing.
+// AND THE PICTURE (screens of the matrix, the app at the fit and at 125–175 %): the waterfall's picture is at least 40
+// layout px tall (its canvas over the UI zoom). The row's floor was the ROW's: where the header wrapped onto 2–6 lines it
+// took most or all of it, and the picture was 0 px at 1920×1080 at the OS's 175 % with the app at 175 % and 17 more
+// sizes of the matrix (measured). The row's floor is bounded as well: exactly max(the shared floor, the header + 40),
+// within 1 px. ITS CONTROLS: the header's measured height taken away from the row's floor (`--rtty-wf-head-h: 0px`) at
+// 1366×768 / 175 % must leave a picture under 40, and a floor of header + 80 must not read as that bound.
+// AND THE DIVIDER TELLS THE TRUTH (four sizes, three where the picture's floor binds): after a resize, the waterfall
+// divider's aria-valuenow is the row's height within 1 px and inside its announced range. It measured the range once,
+// before the header's height reached the row, and announced a stale value where the floor binds.
+// AND THE OBSERVER SETTLES (four sizes, two of them where the header wraps once more as the row grows): the header's
+// height is written on the row at most twice a page. ITS CONTROL: a header that grows a line with every write (a
+// planted feedback that never settles) must be written more often.
 // AND THE WATERFALL TOOLBAR (the matrix's tightest RTTY, 1366×768 at 175 %, and the windows dragged below the matrix
 // at 150–175 %, where the toolbar wraps onto more lines than its row is tall): every control of the waterfall's header,
 // focused and revealed the layout contract's way (`focus({ preventScroll })` + `scrollIntoView({ block: 'nearest' })`),
 // is drawn inside the waterfall's row (`.rtty-wf-row`). Wrapped past the row, its last lines were drawn where the TX
 // strip stands, and five of them stayed under the strip at every scroll position (700×800 at 175 %, measured). Inside the
 // row is what it can own: what covers the row (a parked strip or dock) is the shells' scroll padding's to clear, which
-// stopvisible's Tab walk holds. ITS CONTROL: the waterfall's box let overflow again (`overflow: visible`) at 700×800 /
-// 175 % must leave a control outside the row.
+// stopvisible's Tab walk holds. ITS CONTROL: the waterfall's box let overflow again (`overflow: visible`, and the
+// picture's floor taken away, which alone now gives the header its room) at 700×800 / 175 % must leave a control
+// outside the row.
 //
 // exit: 0 every check held · 1 a red, or a control that could not fail · 2 the page never drew RTTY
 import { createServer } from 'vite'
@@ -32,7 +45,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chrome } from '../../remote/test/browser-runtime.mjs'
-import { FHD, FHD_125, FHD_150, FLOOR, LAPTOP, MID_1536, QHD, UHD_200, metrics, offMatrix } from './sizes.mjs'
+import { FHD, FHD_125, FHD_150, FHD_175, FLOOR, FLOOR_125, FLOOR_150, LAPTOP, MID_1536, QHD, UHD_200, metrics, offMatrix } from './sizes.mjs'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..')
 const REAL_API = join(UI, 'src', 'api.ts')
@@ -134,7 +147,7 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-async function measure([size, scale], extra = {}, css = null, after = null) {
+async function measure([size, scale], extra = {}, css = null, after = null, init = null, bounce = false) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -149,6 +162,10 @@ async function measure([size, scale], extra = {}, css = null, after = null) {
     await sleep(300)
     const ls = { 'nexus.workspace': 'dx', 'nexus.features.v1': FEATURES, 'tempo-theme': 'dark', ...(process.env.NEXUS_PROBE_LOCALE ? { 'nexus.locale': process.env.NEXUS_PROBE_LOCALE } : {}), ...(scale ? { 'nexus-ui-scale-mode': scale } : {}), ...extra }
     await evaluate(`localStorage.clear(); ${Object.entries(ls).map(([k, v]) => `localStorage.setItem(${JSON.stringify(k)}, ${JSON.stringify(v)})`).join(';')}; 1`)
+    if (init) {
+      await call('Page.enable', {})
+      await call('Page.addScriptToEvaluateOnNewDocument', { source: init })
+    }
     await call('Page.navigate', { url: `${origin}/#rtty` })
     let m = null
     for (let i = 0; i < 120 && !m; i++) {
@@ -163,6 +180,18 @@ async function measure([size, scale], extra = {}, css = null, after = null) {
       m = await evaluate(MEASURE)
       if (last && JSON.stringify(m) === JSON.stringify(last)) break
       last = m
+    }
+    if (bounce) {
+      // Resized away and back, as an operator dragging the window: what is read after must hold after a resize.
+      await call('Emulation.setDeviceMetricsOverride', { ...metrics(size), width: size.w + 37 })
+      await sleep(600)
+      await call('Emulation.setDeviceMetricsOverride', metrics(size))
+      for (let i = 0, last = null; i < 40; i++) {
+        await sleep(250)
+        m = await evaluate(MEASURE)
+        if (last && JSON.stringify(m) === JSON.stringify(last)) break
+        last = m
+      }
     }
     if (after) m.after = await evaluate(after)
     return m
@@ -187,6 +216,54 @@ const TOOLBAR = `(async () => {
   document.activeElement?.blur?.()
   return { n: ctl.length, bad }
 })()`
+/** The waterfall's picture, in layout px (its canvas's rendered height over the UI zoom). */
+const PICTURE = `(() => {
+  const shell = document.querySelector('main.rtty-cockpit'), row = shell?.querySelector('.rtty-wf-row'), c = row?.querySelector('.waterfall-canvas')
+  if (!c) return null
+  const z = shell.getBoundingClientRect().height / shell.offsetHeight
+  const head = row.querySelector(':scope > .waterfall-wrap > .panel-header')
+  // The floor the row's rule computes to, and its shared term alone (the header's term pushed far under it): a style
+  // read, no layout, restored at once.
+  const floor = parseFloat(getComputedStyle(row).minHeight)
+  const was = row.style.getPropertyValue('--rtty-wf-head-h')
+  row.style.setProperty('--rtty-wf-head-h', '-100000px')
+  const shared = parseFloat(getComputedStyle(row).minHeight)
+  row.style.setProperty('--rtty-wf-head-h', was)
+  return { pic: Math.round(c.getBoundingClientRect().height / z * 10) / 10, floor, shared,
+    head: Math.round(head.getBoundingClientRect().height / z * 100) / 100, row: Math.round(row.getBoundingClientRect().height / z * 10) / 10 }
+})()`
+/** 40 layout px, compared within half a pixel: the canvas is laid out on device pixels, and five windows off the matrix
+ *  measure it 39.9 (rounding, not a picture lost). */
+const PICTURE_MIN = 40
+/** Every value the page writes for the header's height on the row, from the document's start (a mutation observer). */
+const HEAD_WRITES = `(() => { const seen = (window.__headWrites = []); const last = new WeakMap()
+  new MutationObserver((ms) => { for (const m of ms) { const el = m.target
+    if (!(el instanceof HTMLElement) || !el.classList.contains('rtty-wf-row')) continue
+    const v = el.style.getPropertyValue('--rtty-wf-head-h'); if (v && v !== last.get(el)) { last.set(el, v); seen.push(v) } } })
+    .observe(document, { subtree: true, attributes: true, attributeFilter: ['style'] }) })()`
+/** THE OBSERVER SETTLES: a write sizes the row; where the taller row widens the tuning scope's square and the header
+ *  wraps once more, the observer writes once more, and the square's cap ends it there. At most 2 writes a page. */
+const SETTLE_MAX = 2
+/** The waterfall divider's announced value and range against the row it sizes, in layout px. */
+const DIVIDER = `(() => {
+  const shell = document.querySelector('main.rtty-cockpit'), row = shell?.querySelector(':scope > .rtty-wf-row'), sep = row?.nextElementSibling
+  if (!sep || sep.getAttribute('role') !== 'separator') return null
+  const z = shell.getBoundingClientRect().height / shell.offsetHeight
+  const n = (a) => (sep.hasAttribute(a) ? Number(sep.getAttribute(a)) : null)
+  return { now: n('aria-valuenow'), min: n('aria-valuemin'), max: n('aria-valuemax'), row: Math.round(row.getBoundingClientRect().height / z * 10) / 10 }
+})()`
+const DIVIDER_SIZES = [[FLOOR_150, '150'], [FHD_175, '175'], [LAPTOP, '175'], [FHD, null],
+  // Off the matrix, where the picture's floor stands above the divider's declared 45 % ceiling.
+  [offMatrix(900, 600), '175']]
+const SETTLE_SIZES = [[FLOOR_150, '150'], [FHD_175, '175'], [LAPTOP, '175'], [FHD, null]]
+/** Its control: a header that grows a line with every write (a planted feedback, ten lines at most) never settles. */
+const FEEDBACK = `(() => { let n = 0; new MutationObserver((ms) => { for (const m of ms) { const el = m.target
+    if (!(el instanceof HTMLElement) || !el.classList.contains('rtty-wf-row') || n >= 10) continue
+    const head = el.querySelector(':scope > .waterfall-wrap > .panel-header'); if (!head) continue
+    n++; const line = document.createElement('div'); line.style.cssText = 'flex: 0 0 100%; height: 12px'; head.appendChild(line) } })
+    .observe(document, { subtree: true, attributes: true, attributeFilter: ['style'] }) })()`
+const PICTURE_SIZES = [[FLOOR, null], [LAPTOP, null], [FHD, null], [LAPTOP, '125'], [LAPTOP, '150'], [LAPTOP, '175'], [FHD, '175'],
+  [FLOOR_125, '125'], [FLOOR_125, '175'], [FHD_175, '150'], [FHD_175, '175'], [FLOOR, '100']]
 const TOOLBAR_SIZES = [[LAPTOP, '175'], [offMatrix(700, 800), '175'], [offMatrix(900, 600), '175'], [offMatrix(900, 600), '150']]
 const tagOf = ([size, s]) => `${size.name} ${s ? `${s} %` : 'fit'}`
 /** Checks 1-3 for one page; `which` 0 = scope shown, 1 = hidden. */
@@ -233,16 +310,47 @@ try {
   const caught = m ? reds(tagOf(size), 0, m).filter((r) => r.includes('cockpit scrolls')) : []
   if (caught.length === 0) red(`CONTROL FAILED — a planted 120 px margin under the strip passed check 1 (cockpit scrolls ${m?.valve}); the check cannot fail`)
   else console.log(`rttyfit-probe: CONTROL — ${caught[0]} (caught)`)
+  for (const size of PICTURE_SIZES) {
+    const p = (await measure(size, {}, null, PICTURE))?.after
+    if (p == null) { red(`RTTY at ${tagOf(size)}: the waterfall's picture never drew`); continue }
+    const want = Math.max(p.shared, p.head + PICTURE_MIN)
+    if (p.pic < PICTURE_MIN - 0.5) red(`RTTY at ${tagOf(size)}: the waterfall's picture is ${p.pic} layout px, under ${PICTURE_MIN}`)
+    // THE OPERATOR'S PICTURE GUARANTEE, bounded: the row's floor is exactly max(shared floor, header + 40), within 1 px.
+    else if (Math.abs(p.floor - want) > 1) red(`RTTY at ${tagOf(size)}: the row's floor is ${p.floor} layout px, not max(shared ${p.shared}, header ${p.head} + ${PICTURE_MIN}) = ${want}`)
+    else console.log(`rttyfit-probe: ${tagOf(size).padEnd(22)} waterfall picture ${p.pic} layout px; row floor ${p.floor} = max(shared ${p.shared}, header ${p.head} + ${PICTURE_MIN})`)
+  }
+  const pc = (await measure([LAPTOP, '175'], {}, '.rtty-wf-row { --rtty-wf-head-h: 0px !important }', PICTURE))?.after
+  if (pc == null || pc.pic >= PICTURE_MIN - 0.5) red(`CONTROL FAILED — with the header's height taken from the row's floor, the picture at 1366×768 / 175 % is ${pc?.pic}; the picture check cannot fail`)
+  else console.log(`rttyfit-probe: CONTROL — the header's height taken from the row's floor at 1366×768 / 175 %: a ${pc.pic} px picture (caught)`)
+  const fc = (await measure([LAPTOP, '175'], {}, '.rtty-wf-row { min-height: calc(var(--rtty-wf-head-h, 0px) + 80px) !important }', PICTURE))?.after
+  const fwant = fc && Math.max(fc.shared, fc.head + PICTURE_MIN)
+  if (!fc || Math.abs(fc.floor - fwant) <= 1) red(`CONTROL FAILED — a row floor of header + 80 px read as max(shared, header + ${PICTURE_MIN}) at 1366×768 / 175 %; the floor's bound cannot fail`)
+  else console.log(`rttyfit-probe: CONTROL — a row floor of header + 80 px: ${fc.floor}, not ${fwant} (caught)`)
+  for (const size of DIVIDER_SIZES) {
+    const d = (await measure(size, {}, null, DIVIDER, null, true))?.after
+    if (!d || d.now == null) red(`RTTY at ${tagOf(size)}: the waterfall divider announces no value`)
+    else if (Math.abs(d.now - d.row) > 1 || d.now < d.min || d.now > d.max) red(`RTTY at ${tagOf(size)}: after a resize the waterfall divider announces ${d.now} (${d.min}–${d.max}) for a ${d.row} px row`)
+    else console.log(`rttyfit-probe: ${tagOf(size).padEnd(22)} after a resize the divider announces ${d.now} (${d.min}–${d.max}) for a ${d.row} px row`)
+  }
+  for (const size of SETTLE_SIZES) {
+    const w = (await measure(size, {}, null, 'window.__headWrites', HEAD_WRITES))?.after
+    if (!w) red(`RTTY at ${tagOf(size)}: the header's height was never written on the row`)
+    else if (w.length > SETTLE_MAX) red(`RTTY at ${tagOf(size)}: the header's height was written ${w.length} times (${w.join(', ')}), more than ${SETTLE_MAX}: the observer does not settle`)
+    else console.log(`rttyfit-probe: ${tagOf(size).padEnd(22)} header height written ${w.length}× (${w.join(', ')})`)
+  }
+  const fw = (await measure([LAPTOP, '175'], {}, null, 'window.__headWrites', HEAD_WRITES + ';' + FEEDBACK))?.after
+  if (!fw || fw.length <= SETTLE_MAX) red(`CONTROL FAILED — a header that grows with every write was written ${fw?.length} times at 1366×768 / 175 %; the settle check cannot fail`)
+  else console.log(`rttyfit-probe: CONTROL — a header that grows with every write: written ${fw.length} times at 1366×768 / 175 % (caught)`)
   for (const size of TOOLBAR_SIZES) {
     const t = (await measure(size, {}, null, TOOLBAR))?.after
     if (!t) red(`RTTY at ${tagOf(size)}: the waterfall's header never drew`)
     else if (t.bad.length) red(`RTTY at ${tagOf(size)}: ${t.bad.length} of the waterfall header's ${t.n} controls are drawn outside the waterfall's row once revealed (${t.bad.slice(0, 6).join(', ')})`)
     else console.log(`rttyfit-probe: ${tagOf(size).padEnd(22)} waterfall header: ${t.n} controls, each inside the waterfall's row once revealed`)
   }
-  const tc = (await measure([offMatrix(700, 800), '175'], {}, '.rtty-wf-row > .waterfall-wrap { overflow: visible !important }', TOOLBAR))?.after
+  const tc = (await measure([offMatrix(700, 800), '175'], {}, '.rtty-wf-row > .waterfall-wrap { overflow: visible !important } .rtty-wf-row { --rtty-wf-head-h: 0px !important }', TOOLBAR))?.after
   if (!tc?.bad.length) red(`CONTROL FAILED — with the waterfall's box letting its toolbar overflow, no header control was drawn outside the row at 700×800 / 175 %; the toolbar check cannot fail`)
   else console.log(`rttyfit-probe: CONTROL — the toolbar let overflow at 700×800 / 175 %: ${tc.bad.length} outside the row (caught)`)
-  if (code === 0) console.log('rttyfit-probe: PASS — RTTY scrolls no more than 1.21.0 did, at every size, its stop controls on screen wherever it does not scroll, every waterfall header control inside its row once revealed, and the controls were caught')
+  if (code === 0) console.log('rttyfit-probe: PASS — RTTY scrolls no more than 1.21.0 did, at every size, its stop controls on screen wherever it does not scroll, every waterfall header control inside its row once revealed, a waterfall picture of at least 40 layout px, the header’s observer settling within 2 writes, and the controls were caught')
   process.exitCode = process.exitCode || code
 } catch (e) {
   if (!process.exitCode) {

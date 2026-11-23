@@ -232,6 +232,11 @@ export interface StripSeamProps {
    *  changes with the station (CW's scope strip, 25 % or 40 % by whether the radio has a scope), so
    *  a reset under one default is not kept as a chosen height under the other. */
   resetClears?: boolean
+  /** Re-fit when the STRIP's own box changes, not only its container's: for a strip whose floor follows something
+   *  measured inside it (RTTY's row, whose floor is its waterfall header's height plus the picture's 40 px), so the
+   *  range the layout honours and the value announced are re-read when that floor moves the strip. Off by default: a
+   *  strip whose size only the divider and its container decide re-fits on the container's resizes, as before. */
+  watchStrip?: boolean
 }
 
 /** The container's CONTENT box along the axis, in CSS px: a flex item's % basis resolves against
@@ -318,7 +323,7 @@ function layoutBox(el: HTMLElement | null): HTMLElement | null {
   return b
 }
 
-function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, label, after = false, maxShare = 0.9, className, defaultOf, resetClears = false }: StripSeamProps) {
+function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, label, after = false, maxShare = 0.9, className, defaultOf, resetClears = false, watchStrip = false }: StripSeamProps) {
   // The variable lives on the strip's PARENT, so it inherits to the strip whatever box the strip is
   // laid out in; the box it is measured against is the flex container its % basis resolves in — the
   // same element, unless the parent generates no box (`layoutBox`).
@@ -376,6 +381,9 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
     if (honoured) {
       lo = Math.max(lo, honoured[0])
       hi = Math.min(hi, honoured[1])
+      // …and at its floor: where the layout's floor stands above the declared ceiling (RTTY's row, its picture floor
+      // over the 45 % ceiling on a window under the matrix), the strip IS that tall, and the range ends there.
+      if (honoured[0] > hi) hi = honoured[0]
     }
     // The layout wins a disagreement: past its ceiling the divider could not move at all.
     const of = defaultOfRef.current?.()
@@ -480,9 +488,9 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
     // follow the strip cost one more measure and no loop.
     const box = container()
     if (box && box !== el) for (const sib of [...Array.from(box.children), ...Array.from(el.children)]) if (sib !== strip.current) watch(sib)
-    if (ownSize && strip.current) ro.observe(strip.current)
+    if ((ownSize || watchStrip) && strip.current) ro.observe(strip.current)
     return () => ro.disconnect()
-  }, [strip, ownSize, after, findTries])
+  }, [strip, ownSize, after, findTries, watchStrip])
 
   const commit = (px: number) => {
     const b = box()

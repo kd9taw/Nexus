@@ -359,3 +359,6 @@ read the cascade, not the screen, so geometry, stacking and hit-testing are chec
   programmatic `focus()` uses `preventScroll` + `scrollIntoView({block:'nearest'})`.
 - Flex/grid growers must point at content that can actually stretch; a container that clips
   (`overflow:hidden`) may never have hard-floored descendants without an interposed scroller.
+- A strip's floor is a length in the sheet's units, never a measurement — except RTTY's waterfall row, which floors
+  at max(shared floor, its header's measured `--rtty-wf-head-h` + 40px); that term is pinned to `.rtty-wf-row` /
+  min-height alone (cockpit-shells.test.ts) and bounded in rttyfit (header of `cockpit-panes.css`).

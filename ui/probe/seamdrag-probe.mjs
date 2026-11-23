@@ -14,7 +14,7 @@
 // asserts:
 //   1. THE DIVIDER FOLLOWS THE POINTER: after each move it stands where the pointer is (±1.5 px), or, once it has
 //      stopped, it stopped at its range's end: it never moves again, and after the release it is still there and
-//      announces its maximum (aria-valuenow = aria-valuemax). FT, Tempo, SSTV, RTTY and CW.
+//      announces its maximum (aria-valuenow = aria-valuemax). FT, Tempo, SSTV, RTTY, CW, Phone, PSK, JTTY and JS8.
 //   2. NO "ResizeObserver loop" error during the drag.
 //   3. A HEADER CHANGE UNDER A HELD PRESS IS NOT LOST (the review of the fix): FT's waterfall held at its ceiling by a
 //      stored 85 %, the cockpit header 28 px taller; the press held without a move while the header goes back, then
@@ -46,6 +46,11 @@ const SCREENS = [
   ['SSTV', 'sstv', 'waterfall and picture height'],
   ['RTTY', 'rtty', 'waterfall height'],
   ['CW', 'cw', 'scope height'],
+  // Every other cockpit with a strip divider (PaneSeam): the same drag, since a change to the primitive reaches them all.
+  ['Phone', 'phone', 'scope height'],
+  ['PSK', 'psk', 'waterfall height'],
+  ['JTTY', 'jtty', 'waterfall height'],
+  ['JS8', 'js8', 'waterfall height'],
 ]
 const FEATURES = JSON.stringify({ profile: 'custom', enabled: { rtty: true, psk: true, sstv: true, js8: true, jtty: true, aprs: true, chat: true } })
 const MOVES = 12
@@ -231,7 +236,7 @@ try {
     console.error(`seamdrag-probe: CONTROL FAILED — the re-fits dropped during the press and check 3 held (${JSON.stringify(b)})`)
     code = Math.max(code, 1)
   } else console.log(`seamdrag-probe: control caught — re-fits dropped during the press left Stop TX at ${b.after}, ${b.control} with no press`)
-  if (code === 0) console.log('seamdrag-probe: PASS — FT, Tempo, SSTV, RTTY and CW dividers follow the pointer with no ResizeObserver loop, and a header change under a held press is not lost')
+  if (code === 0) console.log('seamdrag-probe: PASS — FT, Tempo, SSTV, RTTY, CW, Phone, PSK, JTTY and JS8 dividers follow the pointer with no ResizeObserver loop, and a header change under a held press is not lost')
   process.exitCode = code
 } finally {
   await browser.stop()

@@ -30632,6 +30632,12 @@ button.sat-chip:disabled {
   display: flex;
   gap: var(--space-2);
   container-type: size;
+  /* THE PICTURE'S FLOOR: the shared floor above, or the waterfall's header (its height measured onto the row,
+     RttyCockpit useWaterfallHeadHeight) and 40 px of picture under it, whichever is more. The row is a size container,
+     so the header's lines never sized it, and where they wrapped onto 2–6 lines the picture was 0 px (1920×1080 at the
+     OS's 175 % with the app at 175 %, measured). Where the header fits, the shared floor is the larger and nothing
+     moves. Over the scope's ceiling (`max-height`) where the two disagree: a floor wins. */
+  min-height: max(min(var(--rtty-strip-floor, 8em), calc(0.28 * var(--vh-eff, 100vh))), calc(var(--rtty-wf-head-h, 0px) + 40px));
 }
 .rtty-wf-row > .waterfall-wrap {
   flex: 1 1 0;
