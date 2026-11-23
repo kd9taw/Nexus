@@ -32482,10 +32482,10 @@ contact yourself."
             .tx6_message(text)
             .inspect_err(|_| self.cq_dir = before.clone())?;
         match &mut self.mode {
-            // The same over again is no new one: its repeat count stands.
-            Mode::Qso { station, .. } if station.pending.as_ref() != Some(&msg) => {
-                station.override_next(msg)
-            }
+            // ⚠️ The over changes and nothing else: the run's count of CQs stands, so a QSY, a
+            // Generate or a mode switch never restarts a run that `cq_call_cap` has stopped, and a
+            // run stopped there sends nothing new (Resend, or a new start, calls CQ again).
+            Mode::Qso { station, .. } if !station.stalled() => station.pending = Some(msg),
             Mode::FieldDay { station, .. } => station.call_typed_cq(msg),
             _ => {}
         }
@@ -32563,8 +32563,16 @@ contact yourself."
             words[1..].iter().find_map(|w| foreign(w))
         };
         let sender = named(typed).or_else(|| named(on_air)).or_else(|| {
-            if self.sends_free_text(on_air) {
+            let kind = self.frame_kind(on_air);
+            if kind == Some((0, 0))
+                || (kind.is_none() && matches!(Msg::parse(on_air), Msg::Other(_)))
+            {
                 return None;
+            }
+            // The DXpedition frame (`i3=0 n3=1`, `W9XYZ RR73; N0OTH <W1XYZ> -12`) is the Fox's:
+            // its sender is the hashed third call (`pack77_01`, `modes::wsjt77::pack`).
+            if kind == Some((0, 1)) {
+                return on_air.split_whitespace().nth(3).and_then(foreign);
             }
             let de = match Msg::parse(on_air) {
                 Msg::Cq { de, .. }
@@ -32584,17 +32592,19 @@ contact yourself."
         ))
     }
 
-    /// Whether `text` goes out as free text (`i3=0 n3=0`): on the 77-bit tiers read from the frame
-    /// the packer writes, on any other tier when it reads as no standard message.
-    fn sends_free_text(&self, text: &str) -> bool {
-        if matches!(
+    /// The 77-bit frame type the packer writes for `text`, `(i3, n3)` (`n3` read whatever `i3`
+    /// is; it means something only where `i3` is 0), or `None` on a tier that is not a 77-bit one
+    /// and where the packer writes no frame.
+    fn frame_kind(&self, text: &str) -> Option<(u8, u8)> {
+        if !matches!(
             self.app.tier(),
             Tier::Ft8 | Tier::Ft4 | Tier::Ft2 | Tier::Q65 | Tier::Msk144 | Tier::Fst4
         ) {
-            return modes::wsjt77::message_bits(text)
-                .is_some_and(|b| b[71..77].iter().all(|&x| x == 0));
+            return None;
         }
-        matches!(Msg::parse(text), Msg::Other(_))
+        let b = modes::wsjt77::message_bits(text)?;
+        let n = |r: std::ops::Range<usize>| b[r].iter().fold(0u8, |a, &x| a * 2 + x);
+        Some((n(74..77), n(71..74)))
     }
 
     /// The text a receiving station decodes from the frame `text` packs to on the 77-bit tiers
