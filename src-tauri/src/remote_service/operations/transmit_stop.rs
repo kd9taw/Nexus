@@ -248,6 +248,11 @@ impl Authority {
 /// therefore rides the single guard below, and only the mast halt (a blocking socket write, with no
 /// Engine in it) is allowed a thread.
 pub(super) fn stop_station(engine: &crate::SharedEngine) {
+    // ⛔ COUNTED BEFORE THE ENGINE IS ASKED FOR, as the desktop's Stop TX is: the radio loop holds
+    // the engine through an over's key-time split writes and reads this count between them and
+    // just before the key, so the Stop keys nothing instead of waiting out the writes
+    // (`tempo_app::engine::StopTx`).
+    tempo_app::engine::press_station_stop_tx();
     match tempo_app::engine::engine_try_lock(engine) {
         Ok(mut e) => {
             let halt = stop(&mut e);
@@ -455,6 +460,28 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, AtomicUsize};
     use std::time::{Duration, Instant};
+
+    /// ⛔ A REMOTE STOP IS COUNTED BEFORE IT WAITS FOR THE ENGINE. The radio loop holds the engine
+    /// through an over's key-time split writes, seconds on a slow radio, and reads the lock-free
+    /// Stop TX count between them and just before the key (`tempo_app::engine::StopTx`). A Remote
+    /// Stop that only waited for the lock landed after the key. Here the engine is held, as by
+    /// that tick, and the Stop is accepted: the count has moved before the lock is free.
+    #[test]
+    fn a_remote_stop_counts_on_the_lock_free_stop_before_it_waits_for_the_engine() {
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("KD9TAW", "EN52", 0),
+        ));
+        let stop = tempo_app::engine::engine_lock(&engine).stop_tx_handle();
+        tempo_app::engine::register_station_stop_tx(stop.clone());
+        let before = stop.presses();
+        let held = tempo_app::engine::engine_lock(&engine); // the radio loop's tick
+        stop_station(&engine);
+        assert!(
+            stop.presses() > before,
+            "the Remote Stop waited for the engine before the radio loop could see it"
+        );
+        drop(held);
+    }
 
     /// How many times [`fails_first`] ran.
     static RAN: AtomicUsize = AtomicUsize::new(0);

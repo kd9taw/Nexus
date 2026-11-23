@@ -4008,18 +4008,26 @@ impl StopTx {
 }
 
 /// The station's own engine's [`StopTx`], set once the app has built it
-/// ([`register_station_stop_tx`]).
-static STATION_STOP_TX: std::sync::OnceLock<StopTx> = std::sync::OnceLock::new();
+/// ([`register_station_stop_tx`]). A lock of its own, never the engine's, held only to clone.
+static STATION_STOP_TX: std::sync::Mutex<Option<StopTx>> = std::sync::Mutex::new(None);
 
-/// Make `stop` the one [`press_station_stop_tx`] presses: the app's own engine's, once, at start.
+/// Make `stop` the one [`press_station_stop_tx`] presses: the app's own engine's, at start.
 pub fn register_station_stop_tx(stop: StopTx) {
-    let _ = STATION_STOP_TX.set(stop);
+    *STATION_STOP_TX
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(stop);
 }
 
 /// Count a Stop TX press on the station's own engine without its lock, ahead of the
-/// [`Engine::halt_tx`] that waits for the lock. Nothing before the app has registered its engine.
+/// [`Engine::halt_tx`] that waits for the lock. Every stop the operator presses from another
+/// thread calls it first: the desktop's Stop TX, a Remote Stop, a TCI program's halt. Nothing
+/// before the app has registered its engine.
 pub fn press_station_stop_tx() {
-    if let Some(stop) = STATION_STOP_TX.get() {
+    let stop = STATION_STOP_TX
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    if let Some(stop) = stop {
         stop.press();
     }
 }
@@ -14102,6 +14110,12 @@ impl Engine {
         if pitch_hz > 0.0 {
             self.settings.cw_pitch_hz = pitch_hz.clamp(300.0, 1200.0);
         }
+    }
+
+    /// Whether a CW abort ([`Self::stop_cw`]) waits for the radio loop to take it: a word the loop
+    /// was about to key after its split writes keys nothing.
+    pub fn cw_abort_pending(&self) -> bool {
+        self.cw_abort
     }
 
     /// Abort CW in progress: the radio loop stops the rig and the queue is cleared.

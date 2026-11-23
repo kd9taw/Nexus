@@ -5434,3 +5434,79 @@ fn a_ptt_at_a_band_change_lets_go_and_writes_the_new_bands_split_before_its_key(
         "the PTT keyed without the 12 m split first: {before:?}"
     );
 }
+
+/// ⛔ A PTT, A TUNE OR A CW WORD LET GO OF DURING ITS SPLIT WRITES KEYS NOTHING. The radio left in its
+/// 10 m split, Nexus on 12 m, the radio at 300 ms a split write: the press writes split on, VFO B on
+/// the dial, its mode and split on last first, about 1.2 s, and the operator lets go (the PTT
+/// released, Tune turned off, CW stopped) 400 ms into them. It used to key anyway, for about a tick,
+/// once the writes were done. Now nothing keys.
+#[test]
+fn a_ptt_let_go_of_during_its_split_writes_keys_nothing() {
+    let_go_during_the_split_writes(
+        "PTT",
+        |e| e.set_ptt(true),
+        |e| e.set_ptt(false),
+        |l| l == "T 1",
+    );
+}
+
+/// [`a_ptt_let_go_of_during_its_split_writes_keys_nothing`] for Tune turned off.
+#[test]
+fn a_tune_turned_off_during_its_split_writes_keys_nothing() {
+    let_go_during_the_split_writes(
+        "Tune",
+        |e| e.set_tune(true),
+        |e| e.set_tune(false),
+        |l| l == "T 1",
+    );
+}
+
+/// [`a_ptt_let_go_of_during_its_split_writes_keys_nothing`] for a CW word stopped.
+#[test]
+fn a_cw_word_stopped_during_its_split_writes_keys_nothing() {
+    let_go_during_the_split_writes(
+        "a CW word",
+        |e| {
+            let mycall = e.settings().mycall.clone();
+            e.send_cw(&mycall);
+        },
+        |e| e.stop_cw(),
+        |l| l == "T 1" || l.starts_with("b "),
+    );
+}
+
+/// The scene of [`a_ptt_let_go_of_during_its_split_writes_keys_nothing`] for one key: `press`, then
+/// `release` 400 ms into the split writes, from another thread; `keys` tells its key on the wire.
+fn let_go_during_the_split_writes(
+    what: &str,
+    press: fn(&mut Engine),
+    release: fn(&mut Engine),
+    keys: fn(&str) -> bool,
+) {
+    let engine = engine_at(SplitMode::Rig, Tier::Ft8, 24.915, "12m", 1958.0);
+    let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, Some(STALE_10M_VFO_B));
+    b.rig.test_reply_deadline_ms = Some(2_000);
+    b.radio.vfos.lock().unwrap().split_write_delay_ms = 300;
+    {
+        let mut e = b.engine.lock().unwrap();
+        e.set_tx_enabled(true);
+        press(&mut e);
+    }
+    let engine = b.engine.clone();
+    let let_go = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        release(&mut engine.lock().unwrap());
+    });
+    let _ = b.ticks(3);
+    let_go.join().unwrap();
+    let _ = b.ticks(3);
+    let raw = b.radio.peer.lines.lock().unwrap().clone();
+    assert!(
+        raw.iter().any(|l| l == "I 24915000"),
+        "{what}: premise: the split writes ran: {raw:?}"
+    );
+    assert!(
+        !raw.iter().any(|l| keys(l)),
+        "{what}: keyed after it was let go of: {raw:?}"
+    );
+}
