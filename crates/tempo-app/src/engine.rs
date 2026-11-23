@@ -22592,6 +22592,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// free text as typed. WSJT-X keys a Tx box's text as it stands (`ui->tx5->currentText()`,
     /// `widgets/mainwindow.cpp:7903`), refused or not.
     pub fn override_next_tx_refusal(&self, dxcall: &str, text: &str) -> Option<String> {
+        let text = &self.tx_row_air_grid(text);
         let mycall = &self.settings.mycall;
         let row = QsoStation::answering(mycall, "", dxcall).tx_row(text);
         let on_air = QsoStation::on_air_form(mycall, dxcall, row).to_text();
@@ -32658,6 +32659,33 @@ contact yourself."
         None
     }
 
+    /// A Tx row with its last word, a six-character grid, cut to the four characters the packer
+    /// reads of it (`packjt77.f90` `pack77_1`, `is_grid4(w(nwords)(1:4))`), as WSJT-X sends such a
+    /// row and as Tx 6 sends one: the TX line then shows what goes out, and the row is not refused
+    /// for that difference ([`Self::row_reading_refusal`]). Only where the cut row packs to the
+    /// very frame the row does, so free text, whose every character goes out, is left whole, and
+    /// every other difference between a row and what it sends is still refused.
+    fn tx_row_air_grid(&self, text: &str) -> String {
+        let mut words: Vec<&str> = text.split_whitespace().collect();
+        let Some(&last) = words.last() else {
+            return text.to_string();
+        };
+        if words.len() < 2 || last.len() != 6 || !tempo_core::message::is_valid_grid(last) {
+            return text.to_string();
+        }
+        let grid4 = last[..4].to_uppercase();
+        *words.last_mut().expect("a last word") = &grid4;
+        let cut = words.join(" ");
+        let structured = self.frame_kind(text).is_some_and(|kind| kind != (0, 0));
+        let same_frame = modes::wsjt77::message_bits(text).is_some()
+            && modes::wsjt77::message_bits(text) == modes::wsjt77::message_bits(&cut);
+        if structured && same_frame {
+            cut
+        } else {
+            text.to_string()
+        }
+    }
+
     /// The other station's call `text` names where `CQ`, `QRZ` or `DE` names the caller, as the
     /// refusal [`Self::sender_refusal`] gives, or `None`.
     fn named_foreign(&self, text: &str, mycall: &str) -> Option<String> {
@@ -32864,6 +32892,8 @@ contact yourself."
         dxgrid: Option<&str>,
         text: &str,
     ) -> Result<(), String> {
+        // A six-character grid goes out, and shows, as its four ([`Self::tx_row_air_grid`]).
+        let text = &self.tx_row_air_grid(text);
         // ⛔ A press that works nobody arms nothing: our own call, or a tier that answers no
         // station. Answering is a TX commitment: it arms TX and asks for the current period. On
         // a receive-only tier there is no over to send; on a beacon tier (WSPR, FST4W) the armed

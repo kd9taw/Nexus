@@ -623,3 +623,31 @@ fn a_tx_row_that_would_go_out_as_another_message_is_refused_at_the_press() {
         assert_eq!(keyed(&mut e, 0).as_deref(), Some(sent), "{row}");
     }
 }
+
+/// A Tx row typed with a six-character grid goes out with the four the packer reads of it, as
+/// WSJT-X sends it and as Tx 6 does, and the TX line shows the four: the one difference between
+/// a row and what it sends that is not refused. CONTROLS: a row whose other words would change on
+/// the air is refused as before, six-character grid or not, and nothing keys.
+#[test]
+fn a_tx_row_with_a_six_character_grid_goes_out_with_four() {
+    for (row, sent) in [
+        ("W1AW K1ABC FN31AB", "W1AW K1ABC FN31"),
+        ("W1AW K1ABC R FN31ab", "W1AW K1ABC R FN31"),
+    ] {
+        let mut e = station(Tier::Ft8);
+        e.override_next_tx_checked("W1AW", Some("FN31"), row)
+            .unwrap_or_else(|why| panic!("{row}: {why}"));
+        assert_eq!(tx_now(&e).as_deref(), Some(sent), "{row}: the TX line");
+        assert_eq!(keyed(&mut e, 0).as_deref(), Some(sent), "{row}: the over");
+        assert_eq!(ft8_bits(sent), ft8_bits(row), "{row}: the same frame");
+    }
+    for row in ["CQ W1XYZ K1ABC FN31AB", "W1AW K1ABC/QRP FN31AB"] {
+        let mut e = station(Tier::Ft8);
+        assert!(
+            e.override_next_tx_checked("W1AW", Some("FN31"), row)
+                .is_err(),
+            "{row}: still refused"
+        );
+        assert_eq!(keyed(&mut e, 0), None, "{row}: nothing keys");
+    }
+}
