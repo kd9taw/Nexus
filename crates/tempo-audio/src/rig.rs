@@ -2663,8 +2663,8 @@ impl Rig {
                     tempo_core::applog::info(
                         "tx",
                         &format!(
-                            "Split Operation: the radio does not take split off (RPRT {code}); \
-                             taken as a link that cannot control split, transmitting as before"
+                            "Split Operation: this radio did not take split off (RPRT {code}); \
+                             keying as before"
                         ),
                     );
                 }

@@ -5699,7 +5699,7 @@ fn fake_it_and_none_never_touch_the_split_off_the_digital_screens() {
 /// answer" (`RPRT -5`), and a link that answers none in time at all. The over keys nothing, TX
 /// stops, and the refused key's line says it was the split.
 #[test]
-fn fake_it_keys_nothing_when_the_radio_never_answers_split_off() {
+fn no_answer_to_split_off_keys_nothing() {
     for (what, no_answer) in [("RPRT -5", true), ("no answer in time", false)] {
         let engine = cq_engine_at(SplitMode::FakeIt, Tier::Ft8, 24.915, "12m", 1958.0);
         let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, Some(STALE_10M_VFO_B));
@@ -5736,7 +5736,7 @@ fn fake_it_keys_nothing_when_the_radio_never_answers_split_off() {
 /// split, so the overs key as they always did, and split off is asked once on the connection, not
 /// before every over. (Its split, if any, is the radio's own: Nexus could not have changed it.)
 #[test]
-fn fake_it_and_none_key_as_before_on_a_radio_that_refuses_split_off() {
+fn a_rejected_split_off_still_keys_logged_once() {
     for split in [SplitMode::FakeIt, SplitMode::None] {
         let engine = cq_engine_at(split, Tier::Ft8, 24.915, "12m", 1958.0);
         let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, None);
