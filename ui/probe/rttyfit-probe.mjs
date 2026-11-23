@@ -22,6 +22,9 @@
 // sizes of the matrix (measured). The row's floor is bounded as well: exactly max(the shared floor, the header + 40),
 // within 1 px. ITS CONTROLS: the header's measured height taken away from the row's floor (`--rtty-wf-head-h: 0px`) at
 // 1366×768 / 175 % must leave a picture under 40, and a floor of header + 80 must not read as that bound.
+// AND THE DIVIDER TELLS THE TRUTH (four sizes, three where the picture's floor binds): after a resize, the waterfall
+// divider's aria-valuenow is the row's height within 1 px and inside its announced range. It measured the range once,
+// before the header's height reached the row, and announced a stale value where the floor binds.
 // AND THE OBSERVER SETTLES (four sizes, two of them where the header wraps once more as the row grows): the header's
 // height is written on the row at most twice a page. ITS CONTROL: a header that grows a line with every write (a
 // planted feedback that never settles) must be written more often.
@@ -144,7 +147,7 @@ await server.listen()
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`
 const browser = await chrome()
 
-async function measure([size, scale], extra = {}, css = null, after = null, init = null) {
+async function measure([size, scale], extra = {}, css = null, after = null, init = null, bounce = false) {
   const { targetId } = await browser.call('Target.createTarget', { url: 'about:blank' })
   const { sessionId } = await browser.call('Target.attachToTarget', { targetId, flatten: true })
   const call = (method, params) => browser.call(method, params, sessionId)
@@ -177,6 +180,18 @@ async function measure([size, scale], extra = {}, css = null, after = null, init
       m = await evaluate(MEASURE)
       if (last && JSON.stringify(m) === JSON.stringify(last)) break
       last = m
+    }
+    if (bounce) {
+      // Resized away and back, as an operator dragging the window: what is read after must hold after a resize.
+      await call('Emulation.setDeviceMetricsOverride', { ...metrics(size), width: size.w + 37 })
+      await sleep(600)
+      await call('Emulation.setDeviceMetricsOverride', metrics(size))
+      for (let i = 0, last = null; i < 40; i++) {
+        await sleep(250)
+        m = await evaluate(MEASURE)
+        if (last && JSON.stringify(m) === JSON.stringify(last)) break
+        last = m
+      }
     }
     if (after) m.after = await evaluate(after)
     return m
@@ -217,6 +232,8 @@ const PICTURE = `(() => {
   return { pic: Math.round(c.getBoundingClientRect().height / z * 10) / 10, floor, shared,
     head: Math.round(head.getBoundingClientRect().height / z * 100) / 100, row: Math.round(row.getBoundingClientRect().height / z * 10) / 10 }
 })()`
+/** 40 layout px, compared within half a pixel: the canvas is laid out on device pixels, and five windows off the matrix
+ *  measure it 39.9 (rounding, not a picture lost). */
 const PICTURE_MIN = 40
 /** Every value the page writes for the header's height on the row, from the document's start (a mutation observer). */
 const HEAD_WRITES = `(() => { const seen = (window.__headWrites = []); const last = new WeakMap()
@@ -227,6 +244,15 @@ const HEAD_WRITES = `(() => { const seen = (window.__headWrites = []); const las
 /** THE OBSERVER SETTLES: a write sizes the row; where the taller row widens the tuning scope's square and the header
  *  wraps once more, the observer writes once more, and the square's cap ends it there. At most 2 writes a page. */
 const SETTLE_MAX = 2
+/** The waterfall divider's announced value and range against the row it sizes, in layout px. */
+const DIVIDER = `(() => {
+  const shell = document.querySelector('main.rtty-cockpit'), row = shell?.querySelector(':scope > .rtty-wf-row'), sep = row?.nextElementSibling
+  if (!sep || sep.getAttribute('role') !== 'separator') return null
+  const z = shell.getBoundingClientRect().height / shell.offsetHeight
+  const n = (a) => (sep.hasAttribute(a) ? Number(sep.getAttribute(a)) : null)
+  return { now: n('aria-valuenow'), min: n('aria-valuemin'), max: n('aria-valuemax'), row: Math.round(row.getBoundingClientRect().height / z * 10) / 10 }
+})()`
+const DIVIDER_SIZES = [[FLOOR_150, '150'], [FHD_175, '175'], [LAPTOP, '175'], [FHD, null]]
 const SETTLE_SIZES = [[FLOOR_150, '150'], [FHD_175, '175'], [LAPTOP, '175'], [FHD, null]]
 /** Its control: a header that grows a line with every write (a planted feedback, ten lines at most) never settles. */
 const FEEDBACK = `(() => { let n = 0; new MutationObserver((ms) => { for (const m of ms) { const el = m.target
@@ -286,18 +312,24 @@ try {
     const p = (await measure(size, {}, null, PICTURE))?.after
     if (p == null) { red(`RTTY at ${tagOf(size)}: the waterfall's picture never drew`); continue }
     const want = Math.max(p.shared, p.head + PICTURE_MIN)
-    if (p.pic < PICTURE_MIN) red(`RTTY at ${tagOf(size)}: the waterfall's picture is ${p.pic} layout px, under ${PICTURE_MIN}`)
+    if (p.pic < PICTURE_MIN - 0.5) red(`RTTY at ${tagOf(size)}: the waterfall's picture is ${p.pic} layout px, under ${PICTURE_MIN}`)
     // THE OPERATOR'S PICTURE GUARANTEE, bounded: the row's floor is exactly max(shared floor, header + 40), within 1 px.
     else if (Math.abs(p.floor - want) > 1) red(`RTTY at ${tagOf(size)}: the row's floor is ${p.floor} layout px, not max(shared ${p.shared}, header ${p.head} + ${PICTURE_MIN}) = ${want}`)
     else console.log(`rttyfit-probe: ${tagOf(size).padEnd(22)} waterfall picture ${p.pic} layout px; row floor ${p.floor} = max(shared ${p.shared}, header ${p.head} + ${PICTURE_MIN})`)
   }
   const pc = (await measure([LAPTOP, '175'], {}, '.rtty-wf-row { --rtty-wf-head-h: 0px !important }', PICTURE))?.after
-  if (pc == null || pc.pic >= PICTURE_MIN) red(`CONTROL FAILED — with the header's height taken from the row's floor, the picture at 1366×768 / 175 % is ${pc?.pic}; the picture check cannot fail`)
+  if (pc == null || pc.pic >= PICTURE_MIN - 0.5) red(`CONTROL FAILED — with the header's height taken from the row's floor, the picture at 1366×768 / 175 % is ${pc?.pic}; the picture check cannot fail`)
   else console.log(`rttyfit-probe: CONTROL — the header's height taken from the row's floor at 1366×768 / 175 %: a ${pc.pic} px picture (caught)`)
   const fc = (await measure([LAPTOP, '175'], {}, '.rtty-wf-row { min-height: calc(var(--rtty-wf-head-h, 0px) + 80px) !important }', PICTURE))?.after
   const fwant = fc && Math.max(fc.shared, fc.head + PICTURE_MIN)
   if (!fc || Math.abs(fc.floor - fwant) <= 1) red(`CONTROL FAILED — a row floor of header + 80 px read as max(shared, header + ${PICTURE_MIN}) at 1366×768 / 175 %; the floor's bound cannot fail`)
   else console.log(`rttyfit-probe: CONTROL — a row floor of header + 80 px: ${fc.floor}, not ${fwant} (caught)`)
+  for (const size of DIVIDER_SIZES) {
+    const d = (await measure(size, {}, null, DIVIDER, null, true))?.after
+    if (!d || d.now == null) red(`RTTY at ${tagOf(size)}: the waterfall divider announces no value`)
+    else if (Math.abs(d.now - d.row) > 1 || d.now < d.min || d.now > d.max) red(`RTTY at ${tagOf(size)}: after a resize the waterfall divider announces ${d.now} (${d.min}–${d.max}) for a ${d.row} px row`)
+    else console.log(`rttyfit-probe: ${tagOf(size).padEnd(22)} after a resize the divider announces ${d.now} (${d.min}–${d.max}) for a ${d.row} px row`)
+  }
   for (const size of SETTLE_SIZES) {
     const w = (await measure(size, {}, null, 'window.__headWrites', HEAD_WRITES))?.after
     if (!w) red(`RTTY at ${tagOf(size)}: the header's height was never written on the row`)

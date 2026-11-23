@@ -1241,6 +1241,8 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           axis="y"
           varName="--rtty-wf-h"
           strip={wfRef}
+          // The row's floor follows its waterfall header (useWaterfallHeadHeight): re-read the range when it moves the row.
+          watchStrip
           storageKey="nexus.split.rtty.waterfall"
           min={WATERFALL_SPLIT_MIN}
           max={WATERFALL_SPLIT_MAX}
