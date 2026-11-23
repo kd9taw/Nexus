@@ -381,6 +381,9 @@ function StripSeam({ axis, varName, strip, storageKey, min, max, defaultPct, lab
     if (honoured) {
       lo = Math.max(lo, honoured[0])
       hi = Math.min(hi, honoured[1])
+      // …and at its floor: where the layout's floor stands above the declared ceiling (RTTY's row, its picture floor
+      // over the 45 % ceiling on a window under the matrix), the strip IS that tall, and the range ends there.
+      if (honoured[0] > hi) hi = honoured[0]
     }
     // The layout wins a disagreement: past its ceiling the divider could not move at all.
     const of = defaultOfRef.current?.()

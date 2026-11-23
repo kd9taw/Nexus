@@ -252,7 +252,9 @@ const DIVIDER = `(() => {
   const n = (a) => (sep.hasAttribute(a) ? Number(sep.getAttribute(a)) : null)
   return { now: n('aria-valuenow'), min: n('aria-valuemin'), max: n('aria-valuemax'), row: Math.round(row.getBoundingClientRect().height / z * 10) / 10 }
 })()`
-const DIVIDER_SIZES = [[FLOOR_150, '150'], [FHD_175, '175'], [LAPTOP, '175'], [FHD, null]]
+const DIVIDER_SIZES = [[FLOOR_150, '150'], [FHD_175, '175'], [LAPTOP, '175'], [FHD, null],
+  // Off the matrix, where the picture's floor stands above the divider's declared 45 % ceiling.
+  [offMatrix(900, 600), '175']]
 const SETTLE_SIZES = [[FLOOR_150, '150'], [FHD_175, '175'], [LAPTOP, '175'], [FHD, null]]
 /** Its control: a header that grows a line with every write (a planted feedback, ten lines at most) never settles. */
 const FEEDBACK = `(() => { let n = 0; new MutationObserver((ms) => { for (const m of ms) { const el = m.target
