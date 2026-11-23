@@ -5284,7 +5284,7 @@ fn the_pre_set_waits_for_cw_and_the_pc_microphone() {
 // band change, a radio switch ───────────────────────────────────────────────────────────────────
 
 /// ⛔ A LATE START NEVER PLAYS PAST ITS PERIOD EITHER. FT2 on 12 m, the radio at 1.1 s a split write,
-/// Call CQ 100 ms into this station's own slot, right after connecting: the four cold writes take
+/// Call CQ 200 ms into this station's own slot, nothing pre-set yet: the four cold writes take
 /// about 4.4 s, so the key comes past FT2's 3.75 s period, and nothing plays. It used to play the
 /// whole over from the key, in the other station's period.
 #[test]
@@ -5292,8 +5292,10 @@ fn a_late_start_whose_split_writes_run_past_its_period_plays_nothing() {
     let engine = engine_at(SplitMode::Rig, Tier::Ft2, 24.915, "12m", 1958.0);
     let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, Some(STALE_10M_VFO_B));
     b.rig.test_reply_deadline_ms = Some(3_000);
-    b.radio.vfos.lock().unwrap().split_write_delay_ms = 1_100;
+    // The loop running a moment first, as it always is before Call CQ, then the slow radio.
     b.t = b.slot + 100.0;
+    let _ = b.ticks(5);
+    b.radio.vfos.lock().unwrap().split_write_delay_ms = 1_100;
     b.call_cq_now();
     let started = std::time::Instant::now();
     let key = b.ticks_to_key(5);

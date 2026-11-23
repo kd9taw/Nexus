@@ -8632,7 +8632,9 @@ impl RadioLoop {
         } else if rig.tx_split_held {
             crate::slot::vfo_b_to_the_rx_dial(rig, dial).map_err(|e| e.to_string())
         } else {
-            Ok(())
+            // The loop believes it holds a split this link never took (a rebuild replaced the
+            // rig): the radio may be in any split, so the dial's own goes on first.
+            self.rig_split_on_the_dial(engine, rig)
         }
     }
 
@@ -8649,14 +8651,19 @@ impl RadioLoop {
         engine: &Arc<Mutex<Engine>>,
         rig: &mut Rig,
     ) -> Result<(), String> {
-        let (at, md) = {
+        let (at, md, stop) = {
             let eng = engine_lock(engine);
-            (SplitLetGo::of(&eng), eng.rig_mode_effective())
+            (
+                SplitLetGo::of(&eng),
+                eng.rig_mode_effective(),
+                eng.stop_tx_handle(),
+            )
         };
         if !at.ft_rig || at.cluster_active || !rig.has_control() {
             return Ok(());
         }
-        let (sent, engaged) = crate::slot::rig_split_on_the_dial(rig, at.dial, &md);
+        let stops = stop.presses();
+        let (sent, engaged) = crate::slot::rig_split_on_the_dial(rig, at.dial, &md, (&stop, stops));
         if engaged {
             self.hold_rig_split(at.dial);
         }
@@ -8757,8 +8764,8 @@ impl RadioLoop {
     /// before it, the lead and the settle, with TX on by then) run ahead of that key, and the key
     /// came late by the writes' length, up to about 4 s on a 2.5 s link: an FT8 or FT4 over lost
     /// that much of its start on the slot clock, a slow-link FT4 one so much that it did not decode.
-    /// Now the key writes the TX dial itself, under its own budget, and a radio too slow for that is
-    /// refused at the key as it was before the pre-set existed; the pre-set goes on a later tick.
+    /// Now the key writes the TX dial itself and keys after its last answer, late by only its own
+    /// writes, its audio on the slot clock; the pre-set goes on a later tick.
     ///
     /// Never on a tick that opened the CAT
     /// link (`reconnected`: it may have spent a connect timeout) or with the link closed, on a radio
@@ -8774,8 +8781,8 @@ impl RadioLoop {
     /// never pre-set.
     ///
     /// FT2 HOLDS SPLIT BUT NEVER PRE-SETS: its 3.75 s slot is shorter than the lead, so the lead is
-    /// never met, and its key writes everything inside its budget. A radio slow to move VFO B can
-    /// still key the first over after a band change late, its audio trimmed on the slot clock.
+    /// never met, and its key writes everything itself. A radio slow to move VFO B keys the first
+    /// over after a band change late, only what fits in its period played (`slot::key_decision`).
     fn preset_rig_split_due(
         &mut self,
         eng: &Engine,
@@ -8837,8 +8844,8 @@ impl RadioLoop {
     /// Run a due pre-set ([`Self::preset_rig_split_due`]). A split the radio took, or VFO B written,
     /// is held as after an over that engaged it, so the loop lets go of it where it lets go of any.
     /// One the radio did not take is tried once more at a later quiet point, then given up: the
-    /// over's key writes everything again, inside its own budget, and keys nothing if the radio
-    /// is still slower than that.
+    /// over's key writes everything again, and keys after the last answer, or nothing if the radio
+    /// refuses a write or never answers it.
     fn preset_rig_split(&mut self, rig: &mut Rig, dial: u64, tx_dial: u64, md: &str) {
         let (sent, engaged) = crate::slot::preset_rig_split(rig, dial, tx_dial, md);
         if engaged {
@@ -9759,6 +9766,9 @@ impl RadioLoop {
         self.audio_rig_split = false;
         self.rig_split_restore = None; // the OLD radio's split is not the new one's to restore
         self.rig_split_put_back = None;
+        // The new radio's split is owed for the dial, even on the same band: its link may already
+        // be open (the pool's handoff), so no new connection arms it.
+        self.split_preset_seen_dial = 0;
         self.last_rig_poll = 0.0; // poll the new rig's health/mode/S-meter immediately
         self.last_freq_poll = 0.0;
         self.last_smeter_poll = 0.0;
@@ -18199,11 +18209,15 @@ impl RadioLoop {
             let deficit_ms = (need_ms - room_ms).max(0.0);
             // The decision is kept: the key's own lateness is measured from it (below).
             let period_ms = self.cur_slot_secs * 1000.0;
-            let decided = on_slot_clock.then(|| {
-                let reread_ms = now_unix_ms() - self.clock_offset_ms as f64;
-                crate::slot::KeyDecision::now(reread_ms, now, period_ms)
-            });
-            let starts_now = match decided {
+            // Every tier but JS8 measures its key's lateness from here (`slot::key_decision`), once
+            // the loop knows its period (FT8 and FT4 as they always did).
+            let decided = (eng.tier() != tempo_app::dto::Tier::Js8
+                && (on_slot_clock || period_ms > 0.0))
+                .then(|| {
+                    let reread_ms = now_unix_ms() - self.clock_offset_ms as f64;
+                    crate::slot::KeyDecision::now(reread_ms, now, period_ms)
+                });
+            let starts_now = match decided.filter(|_| on_slot_clock) {
                 Some(d) => crate::slot::wsjtx_may_key_at(d.into_slot_ms, period_ms),
                 None => deficit_ms <= 0.0,
             };
@@ -18234,6 +18248,8 @@ impl RadioLoop {
                         // Split Operation: the engine reduced this over's audio —
                         // move the TX dial before the carrier keys (same as the
                         // boundary path).
+                        let stop = eng.stop_tx_handle();
+                        let stops = stop.presses();
                         let split = crate::slot::apply_tx_dial_shift(&mut eng, rig);
                         self.hold_fake_it_restore(split.fake_it_restore, split.fake_it_tx_dial);
                         if split.rig_split_engaged {
@@ -18245,17 +18261,20 @@ impl RadioLoop {
                         let asked = Instant::now();
                         // A TX dial the radio did not take keys nothing and halts TX, as at the
                         // boundary (`slot::apply_tx_dial_shift`).
-                        if let Some(why) = &split.refused {
+                        if let Some(why) = split.refused.as_ref().filter(|_| !split.stopped) {
                             eng.halt_tx_for_refused_split(why, split.split_off_unconfirmed);
                         }
                         // A key the radio refuses plays nothing here and halts TX, as at the
-                        // boundary (`slot::slot_key_failure`). Nexus's own audio, as there.
+                        // boundary (`slot::slot_key_failure`). Nexus's own audio, as there. A Stop
+                        // TX pressed during the writes keys nothing (`StopTx`).
                         self.mark_tci_nexus_key(true);
                         let keyed = split.refused.is_none()
+                            && stop.presses() == stops
                             && crate::slot::key_slot_transmitter(&mut eng, rig, backend, held);
                         self.mark_tci_nexus_key(false);
-                        // ⭐ AN FT8/FT4 KEY THE RADIO ANSWERED PAST THE END OF ITS SLOT IS NOT
-                        // PLAYED, as at the boundary (`slot::unkey_a_key_past_its_period`): Fake It's
+                        // ⭐ A KEY THE RADIO ANSWERED PAST THE END OF ITS SLOT IS NOT PLAYED, in
+                        // every tier but JS8, as at the boundary (`slot::unkey_a_key_past_its_period`,
+                        // `slot::key_decision`): Fake It's
                         // write-back, Split Operation's commands and the key all come after the
                         // decision, and on a slow link they took the carrier into the other
                         // station's period, where the rest of the over went out. Only that over is
@@ -18280,20 +18299,30 @@ impl RadioLoop {
                                     keyed_ms,
                                     now,
                                     crate::slot::slot_amp_delay_ms(&eng, held),
+                                    decided,
                                 );
                                 self.tx_until_ms = Some(over.tx_until_ms);
                                 self.slot_audio_stop =
                                     over.audio_until_ms.map(|a| (a, over.tx_until_ms));
                             } else {
                                 let mut secs = 0.0f32;
+                                // ⛔ Never past the period's end (`slot::key_decision`): what is left
+                                // of it at the key, measured from the decision, caps the samples.
+                                let mut room = decided.map_or(usize::MAX, |d| {
+                                    (d.left_of_its_period(period_ms) / 1000.0
+                                        * tempo_fast::SAMPLE_RATE as f64)
+                                        as usize
+                                });
                                 // The amplifier TX delay, what the over's own lead-in leaves of it.
                                 let shortfall = crate::slot::amp_shortfall_samples(
                                     &waves,
                                     crate::slot::slot_amp_delay_ms(&eng, held),
-                                );
+                                )
+                                .min(room);
                                 if shortfall > 0 {
                                     secs += shortfall as f32 / tempo_fast::SAMPLE_RATE;
                                     backend.play(&vec![0.0; shortfall]);
+                                    room -= shortfall;
                                 }
                                 let last = waves.len() - 1;
                                 for (i, w) in waves.iter().enumerate() {
@@ -18312,12 +18341,18 @@ impl RadioLoop {
                                             w2.iter().rposition(|&x| x != 0.0).map_or(0, |p| p + 1);
                                         w2 = &w2[..end];
                                     }
+                                    let w2 = &w2[..w2.len().min(room)];
+                                    room -= w2.len();
                                     secs += w2.len() as f32 / tempo_fast::SAMPLE_RATE;
                                     backend.play(w2);
                                 }
                                 backend.mark_unit_end();
-                                self.tx_until_ms =
-                                    Some(now + secs as f64 * 1000.0 + crate::slot::TX_TAIL_MS);
+                                // Bounded by the period as a boundary over's hold is.
+                                self.tx_until_ms = Some(crate::slot::tx_deadline_ms(
+                                    now,
+                                    secs as f64 * 1000.0,
+                                    period_ms,
+                                ));
                             }
                             self.rx.clear(); // our just-started carrier must not be decoded
                                              // A SLOT over: TX Off must let this one finish (see `slot_tx_until_ms`).

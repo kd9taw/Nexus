@@ -68,7 +68,7 @@ fn played(backend: MockBackend, over: KeyedOver) -> Played {
 
 fn keyed_over(eng: &Engine, waves: &[Vec<f32>], keyed: f64, amp_ms: f64) -> Played {
     let mut backend = MockBackend::new();
-    let over = play_keyed_over(eng, &mut backend, waves, keyed, keyed, amp_ms);
+    let over = play_keyed_over(eng, &mut backend, waves, keyed, keyed, amp_ms, None);
     played(backend, over)
 }
 

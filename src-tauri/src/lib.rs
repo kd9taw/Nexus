@@ -31443,8 +31443,14 @@ fn atu_bypass(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
 }
 
 /// Stop transmitting now: drop any queued frames and clear the TX indicator.
+///
+/// ⛔ COUNTED BEFORE THE ENGINE'S LOCK IS ASKED FOR: the radio loop holds it through an over's
+/// key-time CAT (Split Operation's writes, seconds on a slow radio), and reads the count between
+/// those writes and just before the key, so the stop keys nothing instead of landing after the
+/// key (`tempo_app::engine::StopTx`). The halt itself follows under the lock.
 #[tauri::command(async)]
 fn halt_tx(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+    tempo_app::engine::press_station_stop_tx();
     let mut eng = engine_lock(&state);
     eng.halt_tx();
     Ok(eng.snapshot())
@@ -53491,6 +53497,8 @@ pub fn run() {
             return;
         }
     };
+    // Stop TX counted without the engine's lock reaches this engine (`StopTx`).
+    tempo_app::engine::register_station_stop_tx(launched.stop_tx_handle());
     let engine: SharedEngine = Arc::new(Mutex::new(launched));
     #[cfg(feature = "radio")]
     {
