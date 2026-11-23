@@ -329,21 +329,9 @@ async function tabWalk(p) {
 }
 /** THE TAB WALK'S KNOWN REDS, each pinned to ONE row and the controls it names, never a class: the row passes only while
  *  what Tab leaves hidden there is those controls or fewer, so a new control, or the same defect on any other row, is a
- *  red. Each waits on a fix of its own, and comes out when that lands.
- *  · RTTY at 700×800 at 175 %, plain, the dock folded: the waterfall's toolbar wraps onto more lines than its row
- *    (`.rtty-wf-row`, a size container, so its content does not size it) is tall, and the buttons on its last lines are
- *    drawn where the TX strip stands, in its own place or parked, at every scroll position. No scroll can clear them; it
- *    waits on the toolbar's lines sizing the row (the same on main before the Tab walk covered RTTY).
- *  · APRS at 900×600 at 175 %, plain: the header and the TX strip take the whole shell, and its body (the map and the
- *    rail with the beacon's and the message's fields) is crushed to 0 px instead of being floored and scrolled to, so
- *    the rail is a scroller 0 px tall: the message's To and Text fields and Send message are clipped out of sight,
- *    where the TX strip stands, at every scroll position. It waits on APRS's body taking a floor (the same on main). */
-const TAB_KNOWN = [
-  { row: 'RTTY 700×800 175 en folded', names: ['Waterfall zero (base', 'Scrolls down', '◭', '⏸', 'Hide Waterfall'],
-    why: "RTTY's waterfall toolbar wraps past its row and under the TX strip", control: true },
-  { row: 'APRS 900×600 175 en', names: ['To', 'Text', 'Send message'],
-    why: "APRS's body is crushed to 0 px under the header and the TX strip, its rail's fields clipped out of sight" },
-]
+ *  red. Each waits on a fix of its own, and comes out when that lands. None is pinned now: RTTY's waterfall toolbar
+ *  (700×800 at 175 %, folded) and APRS's body (900×600 at 175 %) both had one, and both came out with their fixes. */
+const TAB_KNOWN = []
 const tabRow = (label, sz, scale, loc, folded) => `${label} ${sz} ${scale} ${loc}${folded ? ' folded' : ''}`
 /** A hidden entry's control name: `surface:name@y` without the surface and the y. */
 const bareName = (h) => h.slice(h.indexOf(':') + 1).replace(/@-?\d+$/, '')
@@ -359,7 +347,7 @@ const tabVerdict = (row, hidden, overlap) => {
   const known = all.length ? knownTab(row, all) : null
   return { red: all.length > 0 && !known, known }
 }
-/** The known-red control (on the entry marked `control`, RTTY's): one more control planted beside the toolbar's hidden
+/** The known-red control (on an entry marked `control`): one more control planted beside the toolbar's hidden
  *  ones must make the row red. The pin's matching is the same for every entry. */
 let knownControl = null
 const TAB_SIZES = (W, H) => W <= 1366 && H <= 800
