@@ -3180,6 +3180,38 @@ mod tests {
         );
     }
 
+    /// ⛔ STOP TX IS CHECKED ONCE MORE JUST BEFORE THE KEY, not only between Split Operation = Rig's
+    /// writes. Fake It's dial write goes through none of those checks: on a radio that takes 300 ms
+    /// to answer it, Stop TX pressed 100 ms in (counted without the engine's lock) leaves the write
+    /// to finish and keys nothing.
+    #[test]
+    fn stop_tx_after_the_last_split_check_still_keys_nothing() {
+        let (addr, log) = scripted_rigctld(|line| {
+            if line.starts_with("F ") {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+            }
+            Some("RPRT 0\n".to_string())
+        });
+        let mut rig = Rig::rigctld(&addr);
+        let eng = split_cq_engine(tempo_app::settings::SplitMode::FakeIt);
+        let stop = eng.stop_tx_handle();
+        let press = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            stop.press();
+        });
+        let (act, backend, _eng, sent) = over_through(eng, &mut rig, &log);
+        press.join().unwrap();
+        assert!(
+            !sent.iter().any(|l| l == "T 1"),
+            "keyed after Stop TX: {sent:?}"
+        );
+        assert_eq!(sent, ["F 14073000"], "the dial write, and nothing after it");
+        assert!(
+            backend.played.is_empty() && !act.tx_this_slot,
+            "the over went out"
+        );
+    }
+
     #[test]
     fn a_fast_key_on_split_still_plays_its_over_on_time() {
         // Control: the same split answered at once. The FT8 over keyed on the boundary plays whole

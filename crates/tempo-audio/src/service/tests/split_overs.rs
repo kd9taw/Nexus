@@ -5398,3 +5398,39 @@ fn a_radio_switch_on_the_same_band_owes_the_pre_set() {
         "no pre-set after the switch: {after:?}"
     );
 }
+
+/// ⛔ A PTT ON THE TICK OF A BAND CHANGE LETS GO OF THE OLD BAND'S SPLIT AND WRITES THE NEW ONE'S
+/// BEFORE ITS KEY. The PTT is applied ahead of the loop's quiet point in the tick, so it finds the
+/// 10 m hold still standing with the dial already on 12 m (`RadioLoop::ready_held_rig_split`): it
+/// turns split off, then writes split on, VFO B on the 12 m dial, its mode and split on last, and
+/// only then keys, on 12 m. (A Tune is applied after the quiet point, which lets go first.)
+#[test]
+fn a_ptt_at_a_band_change_lets_go_and_writes_the_new_bands_split_before_its_key() {
+    let engine = cq_engine_at(SplitMode::Rig, Tier::Ft8, 28.074, "10m", 1008.0);
+    let mut b = hamlib_bench_on(engine, FT8_10M_DIAL, Some(STALE_10M_VFO_B));
+    let _ = b.overs(1);
+    assert!(b.state.audio_rig_split, "premise: held on 10 m");
+    b.radio.vfos.lock().unwrap().tx_at_key.clear();
+    b.radio.peer.lines.lock().unwrap().clear();
+    {
+        let mut e = b.engine.lock().unwrap();
+        e.set_frequency(24.915, "12m", "USB");
+        e.set_tx_enabled(true);
+        e.set_ptt(true);
+    }
+    let (at, before) = keyed_after(&mut b, 50);
+    assert_eq!(
+        at.first(),
+        Some(&FT8_12M_DIAL),
+        "the PTT keyed off 12 m: {before:?}"
+    );
+    assert_eq!(
+        before.first().map(String::as_str),
+        Some("S 0 VFOA"),
+        "premise: the 10 m split let go before the key: {before:?}"
+    );
+    assert!(
+        ends_with_xit_0_on(&before, FT8_12M_DIAL),
+        "the PTT keyed without the 12 m split first: {before:?}"
+    );
+}
