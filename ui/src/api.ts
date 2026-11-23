@@ -1564,9 +1564,10 @@ export async function redecode(): Promise<AppSnapshot> {
 }
 
 /** Start a CQ run; `dir` = a directed token ("DX"/"NA"/"POTA"/…) or null for a
- * plain CQ (clears a sticky directed token). */
-export async function startCq(dir: string | null): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('start_cq', { dir })
+ * plain CQ (clears a sticky directed token). `text` = the CQ typed in the Tx6 row, which the
+ * station sends as typed, grid included, as WSJT-X keys its Tx6 box (`dir` is then its direction). */
+export async function startCq(dir: string | null, text?: string): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('start_cq', { dir, text })
 }
 
 /** The Operate strip's Call CQ on this computer (`Engine::start_running_with_cq`), and the Tx6 row's

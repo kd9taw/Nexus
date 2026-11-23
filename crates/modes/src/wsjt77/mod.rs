@@ -239,6 +239,13 @@ pub fn ft4_refusal(msg: &str) -> Option<Refusal> {
     refusal(&ft4_message(msg)?)
 }
 
+/// The 77 message bits `genft8` and `genft4` pack `msg` to (one bit a byte), or `None` where they
+/// call it a bad message. The text a receiving station decodes is these bits unpacked, which is
+/// WSJT-X's `msgsent`, the text its TX line shows.
+pub fn message_bits(msg: &str) -> Option<[u8; 77]> {
+    pack::pack(&c_message(msg)?).ok().flatten()
+}
+
 fn refusal(msg37: &[u8; 37]) -> Option<Refusal> {
     if pack::reads_unassigned(msg37) {
         return Some(Refusal::NoFrame);

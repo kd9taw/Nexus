@@ -4747,6 +4747,11 @@ pub struct Engine {
     /// contact. None = plain CQ. Sticky until the operator starts a plain run
     /// (stock: the edited Tx6 text persists the same way).
     cq_dir: Option<String>,
+    /// The Tx6 row's text as the packer sends it ([`Self::start_cq_as_typed`]), for the run's
+    /// FIRST CQ only: [`Self::set_mode`] takes it, and the return to CQ after a contact or Clear DX
+    /// builds the CQ again from [`Self::cq_dir`] and Settings, as WSJT-X's `genCQMsg` rewrites its
+    /// Tx6 box then. `None` everywhere else.
+    cq_typed: Option<Msg>,
     /// TX dial shift (Hz) for the over poll_tx just generated under WSJT-X
     /// Split Operation — the audio was reduced into 1500–2000 Hz and the loop
     /// must move the TX dial by this much before keying. 0 = no shift.
@@ -8069,6 +8074,7 @@ impl Engine {
             hrd_purged_since_take: false,
             hrd_link_up: None,
             cq_dir: None,
+            cq_typed: None,
             last_wire_decodes: Vec::new(),
             tx_dial_shift_hz: 0,
             prebuilt_over: None,
@@ -20842,7 +20848,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 station: Box::new({
                     let mut s = QsoStation::calling_cq(&mycall, &mygrid);
                     s.cq_call_cap = self.cq_call_budget();
-                    if let Some(d) = &self.cq_dir {
+                    if let Some(typed) = self.cq_typed.take() {
+                        // The Tx6 row's text, as the packer sends it.
+                        s.override_next(typed);
+                    } else if let Some(d) = &self.cq_dir {
                         // Directed run: "CQ DX <me> <grid>" instead of plain.
                         s.set_cq_dir(d);
                     }
@@ -32402,12 +32411,105 @@ contact yourself."
         self.set_mode("qso-run")
     }
 
-    /// Start a CQ run with the Tx6 row's text. Today only the direction word is taken from it, as
-    /// the cockpit has done, and the rest of the CQ is built from Settings.
+    /// Start a CQ run with the Tx6 row's text, sent AS TYPED, as WSJT-X does.
+    ///
+    /// ⭐ WSJT-X keys the text of its Tx6 box, whatever it is: `guiUpdate` reads `ui->tx6->text()`
+    /// for the over (`widgets/mainwindow.cpp` 7801, 7904) and packs it, a CQ or free text alike.
+    /// Nexus used to take only the direction word out of the row and build the rest from
+    /// Settings, so a grid typed there never went out, and it refused a row that was no CQ. Both
+    /// now go out as typed. The direction is WSJT-X's `m_CQtype` (`on_tx6_editingFinished`,
+    /// 10075-10086): the second word, when it is a word a CQ can carry. It is all of the row that
+    /// outlives the first CQ: the return to CQ after a contact and Clear DX build the CQ again
+    /// from it and Settings, as WSJT-X's `genCQMsg` (9466, from `genStdMsgs` 9566) rewrites Tx6
+    /// when a caller is answered (9444) and on Clear DX (9830).
+    ///
+    /// What is shown and logged is what the packer sends: a six-character grid goes out as the
+    /// four `pack77_1` reads, and free text as the 13 characters a free-text frame holds.
+    ///
+    /// ⚠️ Refused, with the reason, before anything changes: a row the encoder cannot send (WSJT-X
+    /// would key its all-zero frame; Nexus never keys one), an empty row (WSJT-X stops TX on one,
+    /// 7802-7803), and a CQ that names a call other than ours. That last is the one deliberate
+    /// difference from WSJT-X: a CQ goes out under this station's own call only. Every gate a CQ
+    /// run passes still applies: the run's own checks in [`Self::set_mode`], and the licence,
+    /// identity and Enable Tx gates at the key.
     pub fn start_cq_as_typed(&mut self, text: &str) -> Result<(), String> {
-        let words: Vec<String> = text.split_whitespace().map(str::to_uppercase).collect();
-        let dir = (words.len() >= 4 && words[0] == "CQ").then(|| words[1].clone());
-        self.start_cq(dir.as_deref())
+        use tempo_core::message::{is_callsign, is_cq_dir, is_valid_grid};
+        let mut words: Vec<String> = text.split_whitespace().map(str::to_uppercase).collect();
+        if words.is_empty() {
+            return Err("Tx 6 is empty, so nothing goes out.".into());
+        }
+        // A six-character grid ending a CQ is the four the packer reads of it (`packjt77.f90`
+        // `pack77_1`, `is_grid4(w(nwords)(1:4))`): cut here, so a tier whose text is not read
+        // back from the 77-bit packer shows the same four.
+        let n = words.len();
+        if words[0] == "CQ" && n > 2 && words[n - 1].len() == 6 && is_valid_grid(&words[n - 1]) {
+            words[n - 1].truncate(4);
+        }
+        let typed = words.join(" ");
+        let mycall = self.settings.mycall.clone();
+        // A CQ under our own call only: a word after CQ that is somebody else's callsign
+        // (`CQ DX W1XYZ FN42`, `CQ W1XYZ POTA`) would call CQ as that station.
+        let foreign = words[0] == "CQ"
+            && words[1..].iter().any(|w| {
+                is_callsign(w)
+                    && !is_valid_grid(w)
+                    && w != "RR73"
+                    && !w.eq_ignore_ascii_case(&mycall)
+            });
+        if foreign {
+            return Err(format!(
+                "Tx 6 calls CQ as another station: \"{typed}\". A CQ goes out under your own call, {}.",
+                mycall.to_uppercase()
+            ));
+        }
+        if let Some(why) = self.ft_refusal(&typed) {
+            return Err(why);
+        }
+        // What the packer sends, read back, as WSJT-X's TX line shows `msgsent`.
+        let on_air = self.tx6_packed_text(&typed).ok_or_else(|| {
+            format!("\"{typed}\" cannot be encoded, so nothing goes out. Tx 6 takes plain letters, digits and punctuation.")
+        })?;
+        let msg = match Msg::parse(&on_air) {
+            Msg::Cq { de, .. } if !de.eq_ignore_ascii_case(&mycall) => {
+                return Err(format!(
+                    "Tx 6 calls CQ as another station: \"{typed}\". A CQ goes out under your own call, {}.",
+                    mycall.to_uppercase()
+                ));
+            }
+            cq @ Msg::Cq { .. } => cq,
+            _ => Msg::Other(on_air),
+        };
+        // `m_CQtype`: a row of one word leaves it as it was (`t.indexOf(" ")>0`, 10078).
+        if words.len() > 1 {
+            self.cq_dir = Some(words[1].clone()).filter(|t| is_cq_dir(t));
+        }
+        self.cq_typed = Some(msg);
+        let started = self.set_mode("qso-run");
+        // A refused start leaves no typed CQ behind for a later one.
+        self.cq_typed = None;
+        started
+    }
+
+    /// The text a receiving station decodes from the frame `text` packs to on the 77-bit tiers
+    /// (FT8, FT4, FT2, Q65, MSK144, FST4), or `None` where the packer writes no frame of it. On
+    /// any other tier, and where the frame carries a hashed call it cannot read back, `text`.
+    fn tx6_packed_text(&self, text: &str) -> Option<String> {
+        if !matches!(
+            self.app.tier(),
+            Tier::Ft8 | Tier::Ft4 | Tier::Ft2 | Tier::Q65 | Tier::Msk144 | Tier::Fst4
+        ) {
+            return Some(text.to_string());
+        }
+        let bits = modes::wsjt77::message_bits(text)?.map(|b| b as i8);
+        let on_air = tempo_fast::unpack77(&bits)?.trim().to_string();
+        if on_air.is_empty() {
+            return None;
+        }
+        Some(if on_air.contains("<...>") {
+            text.to_string()
+        } else {
+            on_air
+        })
     }
 
     /// The Operate strip's Call CQ: a plain CQ run ([`Self::start_cq`]), but one:

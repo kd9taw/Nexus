@@ -267,6 +267,8 @@ export function clampOffsetHz(hz: number): number {
 
 /** A valid directed-CQ token: 1–4 letters, OR exactly 3 digits (contest/zone CQ). */
 const CQ_TOKEN_RE = /^([A-Z]{1,4}|\d{3})$/
+/** The grid a Tx6 CQ may end in: four characters, or six (the station sends the first four). */
+const GRID_TX6_RE = /^[A-R]{2}[0-9]{2}([A-X]{2})?$/
 
 /**
  * Parse the Tx6 text and extract a directed CQ token for `startCq(dir)`.
@@ -327,9 +329,30 @@ export function cqDirFromText(
   // Optional trailing GRID (must be valid 4-char grid shape, not a callsign fragment)
   const remainder = parts.slice(callIdx + 1)
   if (remainder.length > 1) return undefined // too many trailing parts
-  if (remainder.length === 1 && !GRID4_RE.test(remainder[0])) return undefined
+  // A six-character grid is accepted: the packer reads its first four, and the station sends and
+  // shows those four, as WSJT-X does with a Tx6 typed that way.
+  if (remainder.length === 1 && !GRID_TX6_RE.test(remainder[0])) return undefined
 
   return token
+}
+
+/**
+ * WSJT-X's CQ type of an edited Tx6 (`m_CQtype`, set by `on_tx6_editingFinished`,
+ * mainwindow.cpp 10075-10086): the row's second word when it is a word a CQ carries (1–4
+ * letters, or the three digits the packer takes), else `null`, a plain CQ. `undefined` for a row
+ * with no space after its first word, which leaves the type as it was, as in WSJT-X. Free text
+ * has one too: `TNX QSO 73` is `QSO`, as WSJT-X reads it.
+ */
+export function cqTypeFromTx6(text: string): string | null | undefined {
+  const t = text.toUpperCase()
+  if (t.indexOf(' ') <= 0) return undefined
+  const t1 = t.split(' ')[1]
+  return CQ_TOKEN_RE.test(t1) ? t1 : null
+}
+
+/** WSJT-X's `genCQMsg` (mainwindow.cpp 9466): the generated CQ with the CQ type before the call. */
+export function cqWithType(cq: string, type: string | null): string {
+  return type && cq.startsWith('CQ ') ? `CQ ${type} ${cq.slice(3)}` : cq
 }
 
 /**

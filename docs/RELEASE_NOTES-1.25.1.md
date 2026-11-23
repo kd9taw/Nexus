@@ -21,6 +21,8 @@ overs refused, with TX turned off.
 - **A CQ DX, CQ POTA or CQ FD shows and logs the 4-character grid it sends.** With a 6-character grid in Settings,
   the TX line, Band Activity, ALL.TXT and the message to GridTracker or JTAlert showed all six, though only four
   ever went on the air. What goes on the air is unchanged.
+- **Tx 6 is sent as you typed it,** as in WSJT-X, until a station answers, you change band or you press Generate Std
+  Msgs; then it returns to your call and grid with your CQ word kept. A Tx 6 that is not a CQ goes out as free text.
 - **Tab no longer lands on a control you cannot see** behind the bottom controls, on the FT, CW, Phone,
   RTTY, PSK, JTTY, JS8, SSTV and Tempo screens.
 - **RTTY's waterfall keeps a picture and its buttons on a small or scaled screen,** and **APRS keeps its map and
@@ -42,6 +44,8 @@ overs refused, with TX turned off.
   close Nexus. Before, an old split was put back.
 - **Off the digital screens, your own split is put back as before,** but only when its transmit frequency is on the band
   you are on.
+- **A Tx 6 that is not a CQ is now sent as free text,** as WSJT-X sends it. 1.25.0 refused it. A CQ under a call other
+  than yours is still refused.
 
 ## Security
 

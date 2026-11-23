@@ -38,6 +38,8 @@ import { bandLabelForMhz } from '../band'
 import {
   cqDirFromText,
   cqSuggestionFromText,
+  cqTypeFromTx6,
+  cqWithType,
   genStdMessages,
   snrForCall,
   stdMessageList,
@@ -669,10 +671,16 @@ export function OperateCockpit({
   // it; Generate Std Msgs resets the edit and re-baselines (stock behavior).
   const [tx5, setTx5] = useState('')
   const tx5Edited = useRef(false)
-  // Tx6 free text: same auto-track pattern as Tx5, but follows msgs.tx6
-  // (the CQ message) until the operator edits it for a directed CQ.
+  // Tx6: same auto-track pattern as Tx5, but follows the generated CQ until the operator edits
+  // it. ⭐ WSJT-X's Tx6 is sent AS TYPED, and an edit leaves one thing behind it, its CQ type
+  // (`m_CQtype`, the second word: `on_tx6_editingFinished`, mainwindow.cpp 10075-10086). Each
+  // time WSJT-X runs `genStdMsgs` (9566) its `genCQMsg` (9466) writes Tx6 again as that type, our
+  // call and four characters of our grid: when a caller is answered (`processMessage`, 9444), on
+  // Clear DX (9830), on Generate Std Msgs (10505), and on a band or frequency change (12520,
+  // 13858). `regenTx6` is that rewrite, at each of those points below.
   const [tx6, setTx6] = useState('')
   const tx6Edited = useRef(false)
+  const [cqType, setCqType] = useState<string | null>(null)
   // Locally picked "next" row (0-based) until qso.txNow confirms one.
   const [localNext, setLocalNext] = useState<number | null>(null)
   // #204 — THE CALLSIGN CARD'S DISMISSAL. The call the operator last cleared, so the card can
@@ -973,9 +981,17 @@ export function OperateCockpit({
   useEffect(() => {
     if (!tx5Edited.current) setTx5(msgs.tx5)
   }, [msgs.tx5])
+  const genTx6 = cqWithType(msgs.tx6, cqType)
   useEffect(() => {
-    if (!tx6Edited.current) setTx6(msgs.tx6)
-  }, [msgs.tx6])
+    if (!tx6Edited.current) setTx6(genTx6)
+  }, [genTx6])
+  // Read through a ref: `clearDx` is created once.
+  const genTx6Ref = useRef(genTx6)
+  genTx6Ref.current = genTx6
+  const regenTx6 = () => {
+    tx6Edited.current = false
+    setTx6(genTx6Ref.current)
+  }
 
   const handleTx5 = (v: string) => {
     tx5Edited.current = true
@@ -996,30 +1012,26 @@ export function OperateCockpit({
   const handleTx6 = (v: string) => {
     tx6Edited.current = true
     setTx6(v)
+    const type = cqTypeFromTx6(v)
+    if (type !== undefined) setCqType(type)
   }
   const handleGenerate = () => {
     tx5Edited.current = false
     setTx5(msgs.tx5)
-    tx6Edited.current = false
-    setTx6(msgs.tx6)
+    regenTx6()
   }
   const clearDx = useCallback(() => {
     setDxCall('')
     setDxGrid('')
     tx5Edited.current = false
     setTx5('')
-    // ⚠️ TX6 IS DELIBERATELY NOT CLEARED. It is the CQ message, and it has nothing to do with
-    // the DX call this clears — the stock option is "Clear DX call and grid after logging",
-    // and that is exactly what it promises. Wiping Tx6 here reset the operator's DIRECTED CQ
-    // after every single contact: type "CQ DX KR4FQG EM64", work one station, and the next CQ
-    // went out bare (reported 2026-08-23: "it will work for one call, then revert back to just
-    // CQ unless I go back to Classic and change it again").
-    //
-    // WSJT-X keeps the two apart for the same reason: editing Tx6 sets `m_CQtype`
-    // (`mainwindow.cpp on_tx6_editingFinished`), a member the DX-clear never touches, so a
-    // directed CQ persists across contacts until the operator edits it back. `cqDirFromText`
-    // re-reads this field on every Tx6 fire, so keeping the text IS keeping the direction —
-    // and clearing it back to a plain CQ stays one edit away.
+    // ⚠️ TX6 KEEPS ITS DIRECTION. WSJT-X's clear runs `genStdMsgs` (`clearDX`, mainwindow.cpp
+    // 9830), which writes Tx6 again from `m_CQtype`, a member the clear never touches: the CQ
+    // word typed stays, and the call and grid are ours from Settings. Blanking Tx6 here once reset
+    // the operator's DIRECTED CQ after every single contact: type "CQ DX KR4FQG EM64", work one
+    // station, and the next CQ went out bare (reported 2026-08-23: "it will work for one call,
+    // then revert back to just CQ unless I go back to Classic and change it again").
+    regenTx6()
     setLocalNext(null)
     // #204 — AND THE CALLSIGN CARD, which is the half that was missing. Two owners, so two
     // moves: `selectedCall` is backend state and rounds through the app (`selectPeer(null)`),
@@ -1075,8 +1087,19 @@ export function OperateCockpit({
     bandTickSeen.current = snap.bandChangeTick
     if (seen == null || snap.bandChangeTick == null || snap.bandChangeTick === seen) return
     if (!snap.qso?.dxcall) clearDx()
+    else regenTx6()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snap.bandChangeTick])
+
+  // A frequency change rewrites Tx6 as WSJT-X's does (`genCQMsg` on a new nominal frequency,
+  // mainwindow.cpp 12520, only while not keyed; and `setRig`, 13858).
+  const dialSeen = useRef(snap.radio.dialMhz)
+  useEffect(() => {
+    if (snap.radio.dialMhz === dialSeen.current || snap.radio.transmitting) return
+    dialSeen.current = snap.radio.dialMhz
+    regenTx6()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snap.radio.dialMhz, snap.radio.transmitting])
 
   // A retarget/abandon makes a remembered Tx-slot pick meaningless — without
   // this the next-dot stayed lit on a stale row of the NEW station's panel.
@@ -1103,6 +1126,9 @@ export function OperateCockpit({
       lastDx.current = dx
       setLocalNext(null)
       if (dx) {
+        // A station worked is WSJT-X's `processMessage`, whose `genStdMsgs` writes Tx6 again
+        // (mainwindow.cpp 9444): the typed CQ went out until a station answered it.
+        regenTx6()
         // The contest's sequencer names no grid: a box already holding this station (the click
         // that started it) keeps the grid that click put there; another station's is cleared.
         if (snap.qso || dxCall.trim().toUpperCase() !== dx.toUpperCase()) setDxGrid(grid)
@@ -1160,29 +1186,27 @@ export function OperateCockpit({
         void startRunning().then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
         return
       }
-      const dir = cqDirFromText(tx6, snap.mycall)
-      // ⭐ #254 — A MALFORMED CQ IS REFUSED, NOT REPLACED.
-      //
-      // `dir === undefined` means the Tx6 text is not a CQ in WSJT-X's grammar
-      // (`CQ [TOKEN] MYCALL [GRID4]`). This used to fall back to `startCq(null)` — a PLAIN
-      // CQ — while the box went on showing what the operator had typed, so "CQ W9ABC POTA"
-      // put a bare CQ on the air and said nothing. That breaks the transmit path's plainest
-      // rule: never transmit a message different from the one shown.
-      //
-      // Operator decision 2026-09-14: WARN ONLY. The grammar is WSJT-X's and is not widened,
-      // and nothing is auto-rewritten — we refuse before anything keys and name the form that
-      // would work when `cqSuggestionFromText` can derive one from the operator's OWN words.
-      if (dir === undefined) {
-        refuseMalformedCq()
-        return
-      }
       if (contestCqTyped) {
+        // The contest's Running takes only the direction of the CQ typed here, and a row that is
+        // no CQ in WSJT-X's grammar is refused, with the form that would work where one can be
+        // derived from the operator's own words.
+        const dir = cqDirFromText(tx6, snap.mycall)
+        if (dir === undefined) {
+          refuseMalformedCq()
+          return
+        }
         setLocalNext(5)
         void startRunning(dir).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
         return
       }
+      // ⭐ TX6 GOES OUT AS TYPED, as WSJT-X keys the text of its Tx6 box (`guiUpdate`,
+      // mainwindow.cpp 7801, 7904): a CQ with the grid typed, and a row that is no CQ as the free
+      // text it is. The station sends and shows what the packer makes of it, and refuses, with
+      // its reason, a CQ under another call and a row it cannot encode. (This replaces the
+      // refusal of any row outside the CQ grammar, the operator's 2026-09-14 decision, reversed
+      // by the operator to match WSJT-X.)
       setLocalNext(5)
-      void startCq(dir).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
+      void startCq(null, tx6).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
       return
     }
     // Tx1–Tx5 work nobody on a beacon or receive-only tier (their buttons are disabled; Alt+1..5

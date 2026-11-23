@@ -33144,16 +33144,23 @@ fn redecode(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
 }
 
 /// Start a CQ run; `dir` = a directed-CQ token ("DX"/"NA"/"POTA"/…) or None
-/// for a plain CQ (also clears a sticky directed token). `afar`: as [`set_tx_enabled`]'s.
+/// for a plain CQ (also clears a sticky directed token). `text`: the CQ typed in the Tx6 row,
+/// which is sent as typed and stands in for `dir`
+/// ([`tempo_app::engine::Engine::start_cq_as_typed`]); a caller that sends none (the Remote page)
+/// gets the CQ built from Settings. `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
 fn start_cq(
     state: State<'_, SharedEngine>,
     dir: Option<String>,
+    text: Option<String>,
     afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
-    eng.start_cq(dir.as_deref())?;
+    match text.as_deref() {
+        Some(typed) => eng.start_cq_as_typed(typed)?,
+        None => eng.start_cq(dir.as_deref())?,
+    }
     command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
