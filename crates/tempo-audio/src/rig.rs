@@ -717,6 +717,11 @@ pub struct Rig {
     /// key, so it keyed nothing and TX halted: the radio loop lets go of the split at its next quiet
     /// point, as after any over, though TX turned off alone no longer lets go of it.
     pub(crate) split_refused_at_key: bool,
+    /// Slot overs in a row dropped because their Split Operation = Rig writes, every one taken
+    /// (`RPRT 0`), ran past the budget before the key (`slot::apply_tx_dial_shift`): each kept what
+    /// the radio confirmed and left TX on. Ended by an over whose writes fit, by any other refusal,
+    /// and when the radio loop lets go of the split.
+    pub(crate) split_late_drops: u8,
     /// The TX dial and TX mode the radio last confirmed (`RPRT 0`) for Nexus's held Rig split on this
     /// connection, so an over whose split writes change nothing sends none of them. Forgotten by
     /// anything that may have moved VFO B or the dial: a new or dropped connection
@@ -1032,6 +1037,7 @@ impl Rig {
             tx_split_held: false,
             split_release_pending: false,
             split_refused_at_key: false,
+            split_late_drops: 0,
             split_confirmed: None,
             slow_transport: false,
             network_chain: false,
