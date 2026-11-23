@@ -318,6 +318,13 @@ describe('a focused control is never left behind the parked keep row', () => {
     expect(main().style.getPropertyValue('--cockpit-txdock-keep-h'), 'in layout px, RTTY’s row is not cleared').toBe('156px')
   })
 
+  it('…and the shell’s own bottom padding under the row, rendered: a sticky row parks that far above the foot', () => {
+    injectSheet(SHEET + ' main.layout { padding-bottom: 12px }')
+    shellH = FITS - 1
+    render(<Shell />)
+    expect(main().style.getPropertyValue('--cockpit-txdock-keep-h'), 'the padding’s 21 rendered px at 175 % are left behind the row').toBe(`${Math.ceil(156 + 12 * 1.75)}px`)
+  })
+
   it('a notice standing on the parked row keeps to the column right of Stop TX, in layout px', () => {
     boxes['op-btn'] = { ...box(100, 52), left: 339, right: 497, width: 158 }
     boxes['cockpit-txdock-keep'] = { ...box(300, 156), left: 24, right: 876, width: 852 }
@@ -349,6 +356,29 @@ describe('a focused control is never left behind the parked keep row', () => {
     main().scrollTop = 500
     focusOn('key-b', 90)
     expect(main().scrollTop).toBeCloseTo(500 + (120.5 - 233.5) / 1.75, 3)
+  })
+
+  it('with the strip parked right on the keep row, a control BEFORE it behind the two is centred in the room above the strip', () => {
+    // Scrolled to the foot, a control before the strip (the header, the scope) meets it held at its bottom offset,
+    // 233..300, on the row: no room between. The room above is 50..233, its middle 141.5; the control's centre 300.
+    boxes['cockpit-txstrip'] = box(233, 67)
+    mountFolded()
+    main().scrollTop = 500
+    boxes['scope-key'] = box(280, 40)
+    const el = document.createElement('button')
+    el.className = 'scope-key'
+    main().insertBefore(el, main().firstChild)
+    tabTo(el)
+    flush()
+    expect(main().scrollTop).toBeCloseTo(500 + (300 - 141.5) / 1.75, 3)
+  })
+
+  it('the control: a dock row AFTER the strip is never sent above it, where the strip would cover it', () => {
+    boxes['cockpit-txstrip'] = box(233, 67)
+    mountFolded()
+    main().scrollTop = 500
+    focusOn('key-e', 280, 40)
+    expect(main().scrollTop).toBe(500)
   })
 
   it('a control already in sight does not move the shell', () => {

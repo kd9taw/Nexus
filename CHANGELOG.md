@@ -5,6 +5,14 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **CW, Phone, RTTY, PSK, JTTY and JS8: Tab no longer lands on a control hidden behind the folded send row.** On a small window, where these screens fold the bottom dock down to its send row (with Stop and Send), pressing Tab could move to a control that sat just behind that row, or behind the TX strip resting on it, so you could not see what Enter or Space would press. The screen now scrolls far enough to bring the focused control into view. Stop TX stays where it was.
+- **Screen readers name the club event fields.** In Settings ▸ Contesting, the Event name, Host port and Join event at boxes of the club event section were read out as just "edit text" or "spin button", with no name. Each is now named by the words beside it, as the other Settings fields are. Clicking those words now also puts the cursor in the box.
+- **Logbook: the Add form no longer scrolls sideways on a 1366×768 screen.** With an IOTA reference filled in, the Add form on a 1366×768 laptop at 100 % could be dragged sideways, because the date box kept a minimum width left over from when it was the system's date picker. It is a plain text box now and takes the same width as the boxes beside it, which holds a whole date.
+- **FT: Tab no longer lands on a control hidden behind the QSO strip.** On a small window (a 1366×768 laptop at 150 % or 175 % display scaling with Nexus pinned at 100 %), pressing Tab could move to a button that sat just behind the line with Stop TX parked at the bottom of the FT screen, such as Fast, Norm and Deep or Hound, so you could not see what Enter or Space would press. The screen now scrolls far enough to bring every control clear of that line. Stop TX stays where it was.
+
 ## [1.25.0] — 2026-11-22
 
 ### Added

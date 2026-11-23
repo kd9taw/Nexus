@@ -62,9 +62,9 @@ const rest = () => strip().style.getPropertyValue('--cockpit-ftstrip-rest')
  *  1366×768 at 175 %, Chrome). */
 const exact = (layoutPx: number) => `${Math.round(layoutPx * 100) / 100}px`
 /** The strip in its shell, as OperateCockpit draws it (the shell is what the scroll padding goes on). */
-function InShell() {
+function InShell({ padBottom }: { padBottom?: string }) {
   return (
-    <main className="layout single operate-cockpit">
+    <main className="layout single operate-cockpit" style={padBottom ? { paddingBottom: padBottom } : undefined}>
       <Strip />
     </main>
   )
@@ -112,6 +112,14 @@ describe("FT's strip parks only its first line, the line with Stop TX", () => {
     const shell = document.querySelector<HTMLElement>('main')!
     const reach = (LINE_BOTTOM - STRIP.top) / ZOOM
     expect(shell.style.getPropertyValue('--cockpit-ftstrip-park-h'), 'what parks is not cleared by a focus').toBe(`${Math.ceil(reach * ZOOM)}px`)
+  })
+
+  it('…and the shell’s own bottom padding under it, where the sticky line parks, so the last controls above it scroll clear', () => {
+    stub()
+    render(<InShell padBottom="12px" />)
+    const shell = document.querySelector<HTMLElement>('main')!
+    const reach = (LINE_BOTTOM - STRIP.top) / ZOOM
+    expect(shell.style.getPropertyValue('--cockpit-ftstrip-park-h'), 'the parked line stands the padding above the foot').toBe(`${Math.ceil((reach + 12) * ZOOM)}px`)
   })
 
   it('a strip that draws an alarm cell parks through its line where both lines fit the scrollport', () => {

@@ -16203,7 +16203,7 @@ export function SettingsPanel({
               <p className="settings-note">{t('settings.fdClub.host.note')}</p>
             )}
             <div className="settings-grid">
-              <div className="settings-field">
+              <label className="settings-field">
                 <span className="settings-label">{t('settings.fdClub.eventName.label')}</span>
                 <input
                   className="settings-input"
@@ -16211,8 +16211,8 @@ export function SettingsPanel({
                   onChange={(e) => update('fdEventName', e.target.value)}
                 />
                 <span className="settings-hint">{t('settings.fdClub.eventName.hint')}</span>
-              </div>
-              <div className="settings-field">
+              </label>
+              <label className="settings-field">
                 <span className="settings-label">{t('settings.fdClub.hostPort.label')}</span>
                 <input
                   className="settings-input mono"
@@ -16228,10 +16228,10 @@ export function SettingsPanel({
                   }}
                 />
                 <span className="settings-hint">{t('settings.fdClub.hostPort.hint')}</span>
-              </div>
+              </label>
             </div>
             <div className="settings-grid">
-              <div className="settings-field">
+              <label className="settings-field">
                 <span className="settings-label">{t('settings.fdClub.join.label')}</span>
                 <input data-setting="fdJoinAddr"
                   className="settings-input mono"
@@ -16245,7 +16245,7 @@ export function SettingsPanel({
                     ? t('settings.fdClub.join.hostingHint')
                     : t('settings.fdClub.join.hint')}
                 </span>
-              </div>
+              </label>
             </div>
             <div className="settings-field">
               <button
