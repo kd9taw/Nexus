@@ -66446,9 +66446,16 @@ mod tests {
         let reply = pst.local_addr().expect("its port").port() + 1;
         let heard = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
         let log = heard.clone();
+        // The link sends from its reply socket, the port above the fake's: only that is the link.
+        // The fake's port is an ephemeral one any process on this machine may still be sending
+        // to, and a stray datagram recorded as the link's fails a test of what the link sent.
+        let link_at = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, reply));
         std::thread::spawn(move || {
             let mut buf = [0u8; 256];
-            while let Ok((n, _)) = pst.recv_from(&mut buf) {
+            while let Ok((n, from)) = pst.recv_from(&mut buf) {
+                if from != link_at {
+                    continue;
+                }
                 let d = String::from_utf8_lossy(&buf[..n]).to_string();
                 let answer: Option<&[u8]> = match d.as_str() {
                     "<PST>AZ?</PST>" => Some(b"AZ:100.0\r"),

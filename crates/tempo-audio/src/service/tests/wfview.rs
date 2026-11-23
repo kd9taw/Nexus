@@ -1321,8 +1321,12 @@ fn test_cat_asks_a_waiting_network_address_again_at_once() {
         let said = engine.lock().unwrap().snapshot().radio.cat_detail.clone();
         (opens, said)
     };
-    let waiting = format!("127.0.0.1:{}", free_port());
-    let matching = free_port();
+    // Both addresses are held, bound and never listened on, for the whole test, so a connect
+    // there is refused as at a free port. A port let go after its draw can be handed to another
+    // test's fake wfview meanwhile, and the station then shares that wfview instead of waiting.
+    let (waiting_port, _waiting_held) = unlistened_port();
+    let (matching, _matching_held) = unlistened_port();
+    let waiting = format!("127.0.0.1:{waiting_port}");
     assert_eq!(
         [
             press(waiting.clone(), free_port()),
