@@ -22,7 +22,8 @@ overs refused, with TX turned off.
   the TX line, Band Activity, ALL.TXT and the message to GridTracker or JTAlert showed all six, though only four
   ever went on the air. What goes on the air is unchanged.
 - **Tx 6 is sent as you typed it,** as in WSJT-X, until a station answers, you change band or you press Generate Std
-  Msgs; then it returns to your call and grid with your CQ word kept. A Tx 6 that is not a CQ goes out as free text.
+  Msgs; then it returns to your call and grid with your CQ word kept. Call CQ sends Tx 6 too. A Tx 6 that is not a
+  CQ goes out as free text.
 - **Tab no longer lands on a control you cannot see** behind the bottom controls, on the FT, CW, Phone,
   RTTY, PSK, JTTY, JS8, SSTV and Tempo screens.
 - **RTTY's waterfall keeps a picture and its buttons on a small or scaled screen,** and **APRS keeps its map and

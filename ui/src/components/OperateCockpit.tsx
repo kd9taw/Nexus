@@ -36,8 +36,6 @@ import { useLogAnswer } from '../features/logSource'
 import { contestDupe } from '../features/contestDupe'
 import { bandLabelForMhz } from '../band'
 import {
-  cqDirFromText,
-  cqSuggestionFromText,
   cqTypeFromTx6,
   cqWithType,
   genStdMessages,
@@ -1160,21 +1158,9 @@ export function OperateCockpit({
   const rowTexts = stdMessageList({ ...msgs, tx5, tx6: contestCq ?? tx6 })
   const nextIndex = txRowIndex(rowTexts, snap.qso?.txNow ?? snap.contestTxNow) ?? localNext
 
-  /** #254's refusal of a Tx6 text that is not a CQ in WSJT-X's grammar, naming the form that
-   *  would work when `cqSuggestionFromText` can derive one from the operator's own words. */
-  const refuseMalformedCq = () => {
-    const fix = cqSuggestionFromText(tx6, snap.mycall)
-    pushToast(
-      fix
-        ? t('operate.tx.cq.malformed.try', { fix })
-        : t('operate.tx.cq.malformed', { mycall: snap.mycall.toUpperCase() }),
-      'error',
-    )
-  }
-
   /** Fire Tx row n (1-based).
-   * Tx6 = Call CQ — parse the editable Tx6 text for a directed token and call
-   * startCq(dir | null) directly; apply the returned snapshot via onSnap.
+   * Tx6 = Call CQ — the editable Tx6 text goes to the station whole, sent as typed;
+   * apply the returned snapshot via onSnap.
    * Tx1–Tx5 force the row's text as the next transmission to the DX. */
   const txWorksNobody = isBeacon(tier) || isRxOnly(tier)
   const doTx = (n: number) => {
@@ -1187,16 +1173,10 @@ export function OperateCockpit({
         return
       }
       if (contestCqTyped) {
-        // The contest's Running takes only the direction of the CQ typed here, and a row that is
-        // no CQ in WSJT-X's grammar is refused, with the form that would work where one can be
-        // derived from the operator's own words.
-        const dir = cqDirFromText(tx6, snap.mycall)
-        if (dir === undefined) {
-          refuseMalformedCq()
-          return
-        }
+        // A contest WSJT-X has no activity for: WSJT-X is in its normal mode and keys Tx6 as
+        // typed, so the contest's Running calls the row's text (`Engine::start_running_as_typed`).
         setLocalNext(5)
-        void startRunning(dir).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
+        void startRunning(null, tx6).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
         return
       }
       // ⭐ TX6 GOES OUT AS TYPED, as WSJT-X keys the text of its Tx6 box (`guiUpdate`,
@@ -2192,25 +2172,13 @@ export function OperateCockpit({
           onSetHoldTxFreq={onSetHoldTxFreq}
           onSetMode={onSetModeFromStrip}
           onCallCq={() => {
-            // The labelled "Call CQ" is always a PLAIN run — it also clears a
-            // sticky directed token so a leftover "CQ DX" can't surprise.
-            // This computer's strip asks for it by its own verb: the contest's Running while a
-            // contest runs, which the station refuses with its reason when the contest cannot
-            // start. A control that keys must not fail silently, so the reason is shown.
-            //
-            // Where WSJT-X has no activity for the running contest, Call CQ calls the CQ typed in
-            // Tx6, as WSJT-X's CQ is its Tx6 then: the direction rides along, and a Tx6 that is no
-            // CQ is refused as Tx 6 refuses it.
-            let dir: string | null = null
-            if (contestCqTyped) {
-              const typed = cqDirFromText(tx6, snap.mycall)
-              if (typed === undefined) {
-                refuseMalformedCq()
-                return
-              }
-              dir = typed
-            }
-            void startRunning(dir).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
+            // ⭐ CALL CQ SENDS TX6, as WSJT-X's does: calling CQ there IS transmitting the Tx6 box
+            // (`m_ntx = 6`, then `ui->tx6->text()`, mainwindow.cpp 7801), as typed or as
+            // `genCQMsg` last wrote it. The row's text goes with the strip's own verb, which the
+            // station reads: outside a contest it is the run's first over; in a contest WSJT-X has
+            // no activity for, the contest's Running calls it; in one it has an activity for, the
+            // row shows the activity's CQ and that is called. A refusal is shown with its reason.
+            void startRunning(null, tx6).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
           }}
           onResend={onResend}
           onFreetext={onFreetext}

@@ -12,7 +12,7 @@
 //! regenerated one. These tests hold the engine to that: what the screen shows, what keys, and the
 //! 77 bits the packer makes of the typed text. The box itself is the cockpit's (its own tests).
 
-use super::contest_ft_messages_tests::{air_form, bits77, keyed};
+use super::contest_ft_messages_tests::{air_form, bits77, engine_for, keyed};
 use super::*;
 
 const ME: &str = "K1ABC";
@@ -313,4 +313,67 @@ fn a_plain_start_after_a_typed_one_calls_the_settings_cq() {
     assert_eq!(tx_now(&e).as_deref(), Some("CQ K1ABC FN31"));
     e.start_cq(Some("DX")).expect("a directed run");
     assert_eq!(tx_now(&e).as_deref(), Some("CQ DX K1ABC FN31"));
+}
+
+/// ⭐ CALL CQ IS TX6. In WSJT-X calling CQ is transmitting the Tx6 box (`m_ntx = 6`, then
+/// `ui->tx6->text()`, mainwindow.cpp 7801), so the strip's Call CQ sends the row's text as Tx 6
+/// does: outside a contest, the typed CQ and free text alike.
+#[test]
+fn call_cq_outside_a_contest_sends_tx6_as_typed() {
+    for (typed, on_air) in [
+        ("CQ DX K1ABC FN42", "CQ DX K1ABC FN42"),
+        ("CQ K1ABC FN31", "CQ K1ABC FN31"),
+        ("TNX QSO 73", "TNX QSO 73"),
+    ] {
+        let mut e = station(Tier::Ft8);
+        e.start_running_as_typed(typed).expect("a run");
+        assert_eq!(keyed(&mut e, 0).as_deref(), Some(on_air), "{typed}");
+    }
+    let mut e = station(Tier::Ft8);
+    assert!(
+        e.start_running_as_typed("CQ DX W1XYZ FN42").is_err(),
+        "another call"
+    );
+    assert_eq!(keyed(&mut e, 0), None);
+}
+
+/// In a contest WSJT-X has no activity for, WSJT-X is in its normal mode and keys Tx6 as typed:
+/// the contest's Running calls the row's text, grid and all, and the contact is the contest's.
+/// The CQ word stays the Running's direction, which the CQ after a contact is built from.
+#[test]
+fn in_a_contest_wsjtx_has_no_activity_for_the_running_calls_tx6_as_typed() {
+    let mut e = engine_for("txqp", SETTINGS_GRID);
+    e.set_tier(Tier::Ft8);
+    assert!(e.contest_cq_typed(), "premise: the row is the operator's");
+    e.start_running_as_typed("CQ QP K1ABC FN42")
+        .expect("the run starts");
+    assert!(
+        matches!(e.mode, Mode::FieldDay { .. }),
+        "the contest's Running"
+    );
+    assert_eq!(keyed(&mut e, 0).as_deref(), Some("CQ QP K1ABC FN42"));
+    assert_eq!(
+        e.cq_dir.as_deref(),
+        Some("QP"),
+        "the CQ word, for the CQ after a contact"
+    );
+    // The Contest screen's Running, entered again, calls the CQ rebuilt from that word.
+    e.set_mode("fieldday-sp").expect("S&P");
+    e.set_mode("fieldday-run").expect("Running");
+    assert_eq!(keyed(&mut e, 2).as_deref(), Some("CQ QP K1ABC FN31"));
+    // A CQ under another call is refused there too, and leaves the direction as it was.
+    assert!(e.start_running_as_typed("CQ QP W1XYZ FN42").is_err());
+    assert_eq!(e.cq_dir.as_deref(), Some("QP"));
+}
+
+/// In a contest WSJT-X has an activity for, Tx6 is the activity's CQ (`genCQMsg` writes
+/// `CQ FD <call> <grid4>`, mainwindow.cpp 9504-9527), which the cockpit shows read-only: that is
+/// what Call CQ calls, whatever text comes with it.
+#[test]
+fn in_a_contest_wsjtx_has_an_activity_for_call_cq_calls_the_activitys_cq() {
+    let mut e = engine_for("arrlfd", SETTINGS_GRID);
+    e.set_tier(Tier::Ft8);
+    e.start_running_as_typed("CQ DX K1ABC FN42")
+        .expect("the run starts");
+    assert_eq!(keyed(&mut e, 0).as_deref(), Some("CQ FD K1ABC FN31"));
 }

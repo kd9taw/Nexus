@@ -1573,10 +1573,12 @@ export async function startCq(dir: string | null, text?: string): Promise<AppSna
 /** The Operate strip's Call CQ on this computer (`Engine::start_running_with_cq`), and the Tx6 row's
  * while a contest runs (`snap.contestCq`, `snap.contestCqTyped`). `dir` is the direction of the CQ
  * typed in Tx6, which the contest's Running calls where WSJT-X has no activity for the contest
- * (`snap.contestCqTyped`); null for a plain CQ. Outside a contest the row, and the Remote page
- * always, call `startCq`, which sends the CQ they show. */
-export async function startRunning(dir: string | null = null): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('start_running', { dir })
+ * (`snap.contestCqTyped`); null for a plain CQ. `text` = the Tx6 row's text, which Call CQ calls as
+ * typed, as WSJT-X's Call CQ keys its Tx6 (`Engine::start_running_as_typed`); it stands in for `dir`.
+ * Outside a contest the row, and the Remote page always, call `startCq`, which sends the CQ they
+ * show. */
+export async function startRunning(dir: string | null = null, text?: string): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('start_running', { dir, text })
 }
 
 /** The Operate strip's S&P on this computer (`Engine::start_search_and_pounce`). The Remote page's

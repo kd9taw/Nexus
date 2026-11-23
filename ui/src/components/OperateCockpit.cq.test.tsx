@@ -21,7 +21,7 @@ import { OPERATE_PANELS, panelStateIn } from '../features/panelState'
 import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/panelState'
 
 const startCq = vi.fn(async () => null)
-const startRunning = vi.fn(async (_dir?: string | null): Promise<null> => null)
+const startRunning = vi.fn(async (_dir?: string | null, _text?: string): Promise<null> => null)
 const pushToast = vi.fn()
 
 vi.mock('../api', () => ({
@@ -36,7 +36,7 @@ vi.mock('../api', () => ({
   redecode: vi.fn(async () => null),
   clearDxCall: vi.fn(async () => null),
   startCq: (...a: unknown[]) => startCq(...(a as [])),
-  startRunning: (...a: unknown[]) => startRunning(...(a as [string | null])),
+  startRunning: (...a: unknown[]) => startRunning(...(a as [string | null, string | undefined])),
   startQsoRecording: vi.fn(async () => null),
   stopQsoRecording: vi.fn(async () => null),
   setSkipTx1: vi.fn(async () => null),
@@ -324,6 +324,16 @@ describe("the strip's Call CQ", () => {
     expect(startCq).not.toHaveBeenCalled()
   })
 
+  // Calling CQ IS sending Tx6 in WSJT-X (mainwindow.cpp 7801): the row's text goes with it.
+  it('sends Tx6, as generated or as typed', async () => {
+    renderCockpit()
+    fireEvent.click(stripButton('Call CQ'))
+    await waitFor(() => expect(startRunning).toHaveBeenCalledWith(null, `CQ ${MYCALL} EN61`))
+    fireEvent.change(cqField(), { target: { value: `CQ DX ${MYCALL} FN42` } })
+    fireEvent.click(stripButton('Call CQ'))
+    await waitFor(() => expect(startRunning).toHaveBeenCalledWith(null, `CQ DX ${MYCALL} FN42`))
+  })
+
   it('says why when the run is refused', async () => {
     const why = 'Set your Field Day class and ARRL/RAC section in Settings first'
     startRunning.mockImplementation(async () => {
@@ -394,8 +404,8 @@ describe('the Tx6 row while a contest runs', () => {
 
 // WHERE WSJT-X HAS NO ACTIVITY FOR THE RUNNING CONTEST, TX6 IS THE OPERATOR'S OWN, as in WSJT-X's
 // normal mode ("What I typed, like WSJT-X"): the row stays editable, and on this computer Tx 6 and
-// Call CQ hand the direction typed there to the contest's Running (`contestCqTyped`), so the contact
-// stays the contest's. A Tx6 that is no CQ is refused by both, as #254 refuses it.
+// Call CQ hand the row's text to the contest's Running (`contestCqTyped`), which sends it as typed,
+// as WSJT-X keys its Tx6 there, so the contact stays the contest's.
 describe('the Tx6 row in a contest WSJT-X has no activity for', () => {
   const tx6Box = () => document.querySelector('.txp-cq-field input') as HTMLInputElement
   const typedContest = () => ({ ...makeSnap(), contestCqTyped: true }) as AppSnapshot
@@ -411,14 +421,14 @@ describe('the Tx6 row in a contest WSJT-X has no activity for', () => {
     expect(tx6Box().readOnly).toBe(false)
     expect(tx6Box().value, 'the generated CQ, until edited').toBe(`CQ ${MYCALL} EN61`)
     callCq(`CQ QP ${MYCALL} EN61`)
-    await waitFor(() => expect(startRunning).toHaveBeenCalledWith('QP'))
+    await waitFor(() => expect(startRunning).toHaveBeenCalledWith(null, `CQ QP ${MYCALL} EN61`))
     expect(startCq, 'the contact stays the contest’s').not.toHaveBeenCalled()
   })
 
-  it('a plain Tx6 calls the Running with no direction', async () => {
+  it('a plain Tx6 goes to the Running as typed', async () => {
     renderCockpit(typedContest())
     callCq(`CQ ${MYCALL} EN61`)
-    await waitFor(() => expect(startRunning).toHaveBeenCalledWith(null))
+    await waitFor(() => expect(startRunning).toHaveBeenCalledWith(null, `CQ ${MYCALL} EN61`))
     expect(startCq).not.toHaveBeenCalled()
   })
 
@@ -426,24 +436,25 @@ describe('the Tx6 row in a contest WSJT-X has no activity for', () => {
     renderCockpit(typedContest())
     fireEvent.change(tx6Box(), { target: { value: `CQ TEST ${MYCALL} EN61` } })
     fireEvent.click(callCqButton())
-    await waitFor(() => expect(startRunning).toHaveBeenCalledWith('TEST'))
+    await waitFor(() => expect(startRunning).toHaveBeenCalledWith(null, `CQ TEST ${MYCALL} EN61`))
   })
 
-  it('a Tx6 that is no CQ is refused, by Tx 6 and by Call CQ alike', async () => {
+  it('a Tx6 that is no CQ goes to the Running too, by Tx 6 and by Call CQ alike', async () => {
     renderCockpit(typedContest())
     callCq(`CQ ${MYCALL} POTA`)
-    await waitFor(() => expect(pushToast).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(startRunning).toHaveBeenCalledTimes(1))
     fireEvent.click(callCqButton())
-    await waitFor(() => expect(pushToast).toHaveBeenCalledTimes(2))
-    expect(startRunning, 'nothing different from the row goes on the air').not.toHaveBeenCalled()
+    await waitFor(() => expect(startRunning).toHaveBeenCalledTimes(2))
+    expect(startRunning).toHaveBeenLastCalledWith(null, `CQ ${MYCALL} POTA`)
     expect(startCq).not.toHaveBeenCalled()
+    expect(pushToast).not.toHaveBeenCalled()
   })
 
-  it('outside such a contest Call CQ stays plain, whatever Tx6 says', async () => {
+  it('outside such a contest Call CQ sends Tx6 too', async () => {
     renderCockpit()
     fireEvent.change(tx6Box(), { target: { value: `CQ QP ${MYCALL} EN61` } })
     fireEvent.click(callCqButton())
-    await waitFor(() => expect(startRunning).toHaveBeenCalledWith(null))
+    await waitFor(() => expect(startRunning).toHaveBeenCalledWith(null, `CQ QP ${MYCALL} EN61`))
   })
 })
 

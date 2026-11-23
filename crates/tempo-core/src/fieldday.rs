@@ -4753,6 +4753,16 @@ impl FieldDayStation {
         }
     }
 
+    /// Call the operator's Tx6 text as the NEXT CQ, as typed, where WSJT-X has no activity for the
+    /// contest and keys its Tx6 box as it stands. Only a station calling CQ takes it; the CQ after
+    /// a contact is [`Self::cq`] again ([`rearm`](Self::rearm)), as WSJT-X's `genCQMsg` writes its
+    /// Tx6 again then.
+    pub fn call_typed_cq(&mut self, msg: Msg) {
+        if self.state == FdState::CallingCq {
+            self.pending = Some(msg);
+        }
+    }
+
     /// The grid this station sends outside Field Day (`sent_grid`).
     fn air_grid(&self) -> String {
         sent_grid(self.log.session.field("GRID"), &self.mygrid)
@@ -7266,6 +7276,33 @@ mod tests {
             FdState::AwaitExchange,
             "a double-click answers a directed FD CQ"
         );
+    }
+
+    /// The operator's typed Tx6 is the next CQ of a station calling CQ, and only of one; after a
+    /// contact the station calls its own CQ again, as WSJT-X's `genCQMsg` writes Tx6 again then.
+    #[test]
+    fn a_typed_cq_is_called_once_and_the_rearm_calls_the_stations_own() {
+        let mut run = FieldDayStation::running(
+            "W9XYZ",
+            "EN37",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20M",
+        );
+        let own = run.outgoing().expect("a CQ");
+        run.call_typed_cq(Msg::Other("TNX QSO 73".into()));
+        assert_eq!(run.outgoing(), Some(Msg::Other("TNX QSO 73".into())));
+        run.observe(&[dec("W9XYZ K2DEF 2A IL")], 0);
+        assert_eq!(run.state, FdState::AwaitConfirm, "premise: a caller");
+        let answer = run.outgoing();
+        run.call_typed_cq(Msg::Other("TNX".into()));
+        assert_eq!(
+            run.outgoing(),
+            answer,
+            "a station in a contact keeps its over"
+        );
+        run.observe(&[dec("W9XYZ K2DEF RR73")], 1);
+        run.rearm(true);
+        assert_eq!(run.outgoing(), Some(own), "its own CQ after the contact");
     }
 
     #[test]

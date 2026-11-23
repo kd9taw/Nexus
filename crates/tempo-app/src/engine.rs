@@ -32433,6 +32433,17 @@ contact yourself."
     /// run passes still applies: the run's own checks in [`Self::set_mode`], and the licence,
     /// identity and Enable Tx gates at the key.
     pub fn start_cq_as_typed(&mut self, text: &str) -> Result<(), String> {
+        let msg = self.tx6_message(text)?;
+        self.cq_typed = Some(msg);
+        let started = self.set_mode("qso-run");
+        // A refused start leaves no typed CQ behind for a later one.
+        self.cq_typed = None;
+        started
+    }
+
+    /// The over the Tx6 row's `text` makes ([`Self::start_cq_as_typed`]), as the packer sends it,
+    /// or the refusal; on success the row's CQ word is [`Self::cq_dir`], WSJT-X's `m_CQtype`.
+    fn tx6_message(&mut self, text: &str) -> Result<Msg, String> {
         use tempo_core::message::{is_callsign, is_cq_dir, is_valid_grid};
         let mut words: Vec<String> = text.split_whitespace().map(str::to_uppercase).collect();
         if words.is_empty() {
@@ -32483,11 +32494,7 @@ contact yourself."
         if words.len() > 1 {
             self.cq_dir = Some(words[1].clone()).filter(|t| is_cq_dir(t));
         }
-        self.cq_typed = Some(msg);
-        let started = self.set_mode("qso-run");
-        // A refused start leaves no typed CQ behind for a later one.
-        self.cq_typed = None;
-        started
+        Ok(msg)
     }
 
     /// The text a receiving station decodes from the frame `text` packs to on the 77-bit tiers
@@ -32530,6 +32537,41 @@ contact yourself."
     /// everywhere else.
     pub fn start_running(&mut self) -> Result<(), String> {
         self.start_running_with_cq(None)
+    }
+
+    /// The Operate strip's Call CQ and the Tx6 row with the row's `text`: calling CQ IS sending
+    /// Tx6 in WSJT-X (`on_txb6_clicked` and Call CQ both key `ui->tx6->text()`, mainwindow.cpp
+    /// 7801), so the CQ the row shows is the one called, as typed ([`Self::start_cq_as_typed`]).
+    ///
+    /// - **Outside a contest** the row's text is the run's first over.
+    /// - **In a contest WSJT-X has no activity for** ([`Self::contest_cq_typed`]) WSJT-X is in its
+    ///   normal mode, where Tx6 goes out as typed too: the contest's Running calls the row's text
+    ///   first, and after each contact the CQ rebuilt from its CQ word, as `genCQMsg` rewrites Tx6
+    ///   (9466).
+    /// - **In a contest WSJT-X has an activity for**, the row shows the activity's CQ (`CQ FD`,
+    ///   `CQ TEST`), read-only, and that is called ([`Self::start_running`]); `text` is not read.
+    pub fn start_running_as_typed(&mut self, text: &str) -> Result<(), String> {
+        if self.contest_ft_messages().is_none() {
+            return self.start_cq_as_typed(text);
+        }
+        if !self.contest_cq_typed() {
+            return self.start_running();
+        }
+        let before = self.cq_dir.clone();
+        let msg = match self.tx6_message(text) {
+            Ok(msg) => msg,
+            Err(why) => {
+                self.cq_dir = before;
+                return Err(why);
+            }
+        };
+        let dir = self.cq_dir.clone();
+        self.cq_dir = before;
+        self.start_running_with_cq(Some(dir.as_deref().unwrap_or("")))?;
+        if let Mode::FieldDay { station, .. } = &mut self.mode {
+            station.call_typed_cq(msg);
+        }
+        Ok(())
     }
 
     /// [`Self::start_running`] with the direction of the CQ typed in the Tx6 row (`None` for a
