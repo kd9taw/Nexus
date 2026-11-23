@@ -535,3 +535,56 @@ fn a_tx6_rewritten_mid_run_is_keyed_at_the_next_over() {
     e.rewrite_cq("CQ DX K1ABC FN31").expect("no-op");
     assert_eq!(tx_now(&e), None);
 }
+
+/// ⛔ The DXpedition frame (`i3=0 n3=1`) is the Fox's, sent by its hashed third call: typed with
+/// another station's call there it would go out as that Fox, so Tx 6, a Tx-slot press and a
+/// logger's FreeText each refuse it. From our own call it goes out.
+#[test]
+fn the_dxpedition_frame_never_goes_out_as_another_station() {
+    let fox = "W9XYZ RR73; N0OTH <W1XYZ> -12";
+    assert_eq!(
+        air_form(fox).0,
+        "i3=0 n3=1",
+        "premise: the DXpedition frame"
+    );
+    let mut e = station(Tier::Ft8);
+    assert!(e.start_cq_as_typed(fox).is_err(), "Tx 6");
+    assert_eq!(keyed(&mut e, 0), None);
+    let mut e = station(Tier::Ft8);
+    assert!(
+        e.override_next_tx_checked("W9XYZ", None, fox).is_err(),
+        "a Tx-slot press"
+    );
+    assert_eq!(keyed(&mut e, 0), None);
+    let mut e = station(Tier::Ft8);
+    e.start_cq(None).expect("a run");
+    e.set_tx_enabled_by_operator(true);
+    assert!(e.udp_free_text(fox, true).is_err(), "a logger's FreeText");
+    assert_eq!(keyed(&mut e, 0).as_deref(), Some("CQ K1ABC FN31"));
+    // CONTROL: our own call as the Fox.
+    let mut e = station(Tier::Ft8);
+    e.start_cq_as_typed("W9XYZ RR73; N0OTH <K1ABC> -12")
+        .expect("our own frame");
+}
+
+/// A rewritten box changes the over and nothing else: a run that `CQ max calls` stopped stays
+/// stopped through a QSY, a Generate or a mode switch, and one still calling keeps its count.
+#[test]
+fn a_rewrite_keeps_the_runs_count_of_cqs() {
+    let mut e = station(Tier::Ft8);
+    let mut s = e.settings().clone();
+    s.cq_max_calls = Some(2);
+    e.apply_settings(s);
+    e.start_cq_as_typed("CQ DX K1ABC FN42").expect("a run");
+    assert_eq!(keyed(&mut e, 0).as_deref(), Some("CQ DX K1ABC FN42"));
+    e.rewrite_cq("CQ DX K1ABC FN31").expect("rewritten");
+    assert_eq!(
+        keyed(&mut e, 2).as_deref(),
+        Some("CQ DX K1ABC FN31"),
+        "the second CQ, rewritten"
+    );
+    e.rewrite_cq("CQ DX K1ABC FN31")
+        .expect("a rewrite at the cap");
+    assert_eq!(keyed(&mut e, 4), None, "two CQs, and no more");
+    assert_eq!(keyed(&mut e, 6), None);
+}
