@@ -456,6 +456,28 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize};
     use std::time::{Duration, Instant};
 
+    /// ⛔ A REMOTE STOP IS COUNTED BEFORE IT WAITS FOR THE ENGINE. The radio loop holds the engine
+    /// through an over's key-time split writes, seconds on a slow radio, and reads the lock-free
+    /// Stop TX count between them and just before the key (`tempo_app::engine::StopTx`). A Remote
+    /// Stop that only waited for the lock landed after the key. Here the engine is held, as by
+    /// that tick, and the Stop is accepted: the count has moved before the lock is free.
+    #[test]
+    fn a_remote_stop_counts_on_the_lock_free_stop_before_it_waits_for_the_engine() {
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("KD9TAW", "EN52", 0),
+        ));
+        let stop = tempo_app::engine::engine_lock(&engine).stop_tx_handle();
+        tempo_app::engine::register_station_stop_tx(stop.clone());
+        let before = stop.presses();
+        let held = tempo_app::engine::engine_lock(&engine); // the radio loop's tick
+        stop_station(&engine);
+        assert!(
+            stop.presses() > before,
+            "the Remote Stop waited for the engine before the radio loop could see it"
+        );
+        drop(held);
+    }
+
     /// How many times [`fails_first`] ran.
     static RAN: AtomicUsize = AtomicUsize::new(0);
     /// The test has pressed its second Stop. The first run waits for it before it panics, so that
