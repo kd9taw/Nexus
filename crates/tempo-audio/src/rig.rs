@@ -84,6 +84,18 @@ const PTT_DEADLINE_MS: u64 = FAST_LINK_DEADLINE_MS;
 /// can take that long to answer a key that works. The release keeps [`PTT_DEADLINE_MS`].
 const NETWORK_KEY_DEADLINE_MS: u64 = SLOW_LINK_DEADLINE_MS;
 
+/// Reply deadline (ms) for a RELEASE on a link whose daemon sends an unanswered unkey twice
+/// ([`Rig::set_unkey_retried`]): Nexus's own CI-V daemon on a virtual port (wfview's), which waits
+/// `civ::broker::VIRTUAL_PORT_DEADLINE` (1 s) a try. Its "no answer" (`RPRT -5`) comes at about
+/// 2 s, plus the engine's 30 ms read granularity; this leaves about 470 ms of margin, and since the
+/// deadline is looked at between [`SOCKET_READ_TIMEOUT_MS`] reads, the last read ends at 2.5 s. So a
+/// radio that never answers PTT off is heard saying so, and a slot over halts, as WSJT-X does after
+/// Hamlib's retries; any answer faster than that is taken as it comes.
+///
+/// ⚠️ THE COST: a radio that never answers holds the radio loop that long on each release: once at
+/// the over's end, and again at each idle self-heal unkey while the radio stays silent.
+pub(crate) const RETRIED_RELEASE_DEADLINE_MS: u64 = SLOW_LINK_DEADLINE_MS;
+
 /// How long a connection may go on owing late answers before it is given up and the next command
 /// opens a new one ([`Rig::command_lines`]). Counted from the first answer that went owed and is
 /// still owed without a break (not from the release), and acted on only once a RELEASE has gone
@@ -733,6 +745,9 @@ pub struct Rig {
     /// key-down that waits for the link ([`Self::key_awaiting_answer`]) waits
     /// [`NETWORK_KEY_DEADLINE_MS`] for its answer instead of [`PTT_DEADLINE_MS`].
     network_chain: bool,
+    /// True when this link's daemon sends an unanswered unkey once more before it answers
+    /// ([`Self::set_unkey_retried`]): a release then waits [`RETRIED_RELEASE_DEADLINE_MS`].
+    unkey_retried: bool,
     /// Answers still owed on `stream` by ordered lines (a key, a release, a stop) whose deadline
     /// passed with the line sent ([`Self::command_lines`]): one terminator each
     /// ([`ends_an_answer`]). Zero whenever `stream` is `None`.
@@ -1031,6 +1046,7 @@ impl Rig {
             split_confirmed: None,
             slow_transport: false,
             network_chain: false,
+            unkey_retried: false,
             owed_replies: 0,
             owed_since: None,
             owed_key_down: false,
@@ -1065,9 +1081,16 @@ impl Rig {
     }
     /// Mark this CAT link as reaching the radio over the network, so a key-down that waits for
     /// the link ([`Self::key_awaiting_answer`]) waits [`NETWORK_KEY_DEADLINE_MS`] for its answer.
-    /// Every release keeps [`PTT_DEADLINE_MS`].
+    /// A release is not moved by this ([`Self::set_unkey_retried`] is what moves it).
     pub fn set_network_chain(&mut self, network: bool) {
         self.network_chain = network;
+    }
+    /// Mark this CAT link's daemon as one that sends an unanswered unkey once more before it
+    /// answers (Nexus's CI-V daemon on a virtual port), so a release waits
+    /// [`RETRIED_RELEASE_DEADLINE_MS`] for its answer: long enough to hear that daemon's own "no
+    /// answer" after both tries. Every other link's release keeps [`PTT_DEADLINE_MS`].
+    pub fn set_unkey_retried(&mut self, retried: bool) {
+        self.unkey_retried = retried;
     }
     /// Name the (verb, token) pairs this link must never send (#381, #385). Everything else is
     /// sent as before, so a power or a switch the radio's driver maps correctly still goes out.
@@ -1971,11 +1994,14 @@ impl Rig {
                     // not a refusal ([`no_answer_in_time`]): a slow radio keys and answers late.
                     // Nor is Hamlib's own "the rig did not answer" ([`ptt_reply`]). A key-down
                     // asked to wait for the link ([`Self::key_awaiting_answer`]) waits a network
-                    // chain's window; a release never does. A missed deadline keeps the
+                    // chain's window; a release waits longer only where the daemon tries an
+                    // unanswered unkey twice ([`Self::set_unkey_retried`]). A missed deadline keeps the
                     // connection, so the release goes out behind the key
                     // ([`Self::command_lines`]).
                     let deadline = if on && link_window && self.network_chain {
                         NETWORK_KEY_DEADLINE_MS
+                    } else if !on && self.unkey_retried {
+                        RETRIED_RELEASE_DEADLINE_MS
                     } else {
                         PTT_DEADLINE_MS
                     };
@@ -4799,6 +4825,35 @@ mod tests {
         let mut slot = Rig::rigctld(&slot_addr);
         slot.set_network_chain(true);
         assert!(slot.ptt(true).is_err_and(|e| deadline_passed(&e)));
+    }
+
+    /// On a link whose daemon tries an unanswered unkey twice ([`Rig::set_unkey_retried`]) the
+    /// release waits for both: a `T 0` answered `RPRT -5` at 2 s is heard, as Hamlib's own "the rig
+    /// did not answer", which halts a slot over. Controls: the same answer on any other link is
+    /// past the release's 700 ms deadline, and the key keeps its own deadline on this link.
+    #[test]
+    fn a_release_on_a_link_that_retries_the_unkey_waits_for_both_tries() {
+        let late = || {
+            mock_rigctld_paced(|_| Some((Duration::from_millis(2_000), "RPRT -5\n".to_string())))
+        };
+        let (addr, _) = late();
+        let mut retried = Rig::rigctld(&addr);
+        retried.set_unkey_retried(true);
+        let unkey = retried.ptt(false);
+        assert!(
+            unkey
+                .as_ref()
+                .is_err_and(|e| no_answer_in_time(e) && !deadline_passed(e)),
+            "{unkey:?}"
+        );
+        assert!(crate::slot::slot_unkey_failure(&unkey, true).is_some());
+        let (addr, _) = late();
+        let mut other = Rig::rigctld(&addr);
+        assert!(other.ptt(false).is_err_and(|e| deadline_passed(&e)));
+        let (addr, _) = late();
+        let mut key = Rig::rigctld(&addr);
+        key.set_unkey_retried(true);
+        assert!(key.ptt(true).is_err_and(|e| deadline_passed(&e)));
     }
 
     #[test]

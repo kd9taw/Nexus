@@ -22404,6 +22404,9 @@ fn open_cat(
                     || t.is_slow_serial_link(),
             ); // network chains + the native daemon + the TCI client (a write waits for the SDR program's report) + slow serial links (Xiegu / vintage Kenwood / any rig ≤ 19200 baud) get the long deadline
             rig.set_network_chain(network); // a key-down waits the network window
+                                            // Nexus's CI-V daemon on a virtual port tries an unanswered unkey twice; the release
+                                            // waits for both, so a radio that never answers PTT off is heard saying so.
+            rig.set_unkey_retried(matches!(&proc, CatDaemon::Native(d) if d.retries_unkey()));
             let mut probe = finish_cat_open(&mut rig, t);
             // Say WHICH backend this result came from — a native-CI-V radio silently
             // falling back to rigctld otherwise reads as "native was tested and failed".
