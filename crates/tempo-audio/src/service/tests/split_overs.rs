@@ -616,6 +616,10 @@ struct Vfos {
     refuse_m: bool,
     /// Where the radio transmitted from at each key (`T 1`): VFO B in split, else VFO A (Hz).
     tx_at_key: Vec<u64>,
+    /// A split off (`S 0`) was taken more than 200 ms before the next key, while receiving.
+    split_off_while_receiving: bool,
+    /// When the last split off was taken.
+    split_off_at: Option<std::time::Instant>,
 }
 
 struct Hamlib {
@@ -687,6 +691,10 @@ fn hamlib_bench_on(engine: Arc<Mutex<Engine>>, dial: u64, own_split: Option<u64>
                 k.store(true, Ordering::SeqCst);
                 let on = if v.split { v.b } else { radio.dial };
                 v.tx_at_key.push(on);
+                if let Some(at) = v.split_off_at.take() {
+                    v.split_off_while_receiving |=
+                        at.elapsed() > std::time::Duration::from_millis(200);
+                }
                 ok()
             }
             "T 0" => {
@@ -730,6 +738,9 @@ fn hamlib_bench_on(engine: Arc<Mutex<Engine>>, dial: u64, own_split: Option<u64>
             _ if line.starts_with("S 0") && v.refuse_split_off => Some("RPRT -9\n".to_string()),
             _ if line.starts_with("S ") => {
                 v.split = line.split_whitespace().nth(1) == Some("1");
+                if !v.split {
+                    v.split_off_at = Some(std::time::Instant::now());
+                }
                 ok()
             }
             _ if (line.starts_with("I ") || line.starts_with("X "))
@@ -5509,4 +5520,180 @@ fn let_go_during_the_split_writes(
         !raw.iter().any(|l| keys(l)),
         "{what}: keyed after it was let go of: {raw:?}"
     );
+}
+
+// ── Split Operation Fake It or None: the radio's split turned off on the digital screens ───────
+// With Split Operation Fake It or None, Nexus transmits from the radio's one VFO. A radio still in
+// a split it was left in (an earlier session, another program, its own SPLIT key) transmits from
+// its VFO B instead, on whatever band that is. So on the digital screens Nexus turns split off
+// (`S 0 VFOA`), confirmed on this connection, before any key: at connect and every band change
+// while it receives, on entering the digital screens, and at the key when it is not yet confirmed.
+// The CW and Phone screens are the operator's own, and their split is never touched.
+
+/// Every split write the radio was sent before its first key, and where that key went out.
+fn first_key_of(b: &mut Bench<Hamlib>, n: usize) -> (Vec<u64>, Vec<String>) {
+    keyed_after(b, n)
+}
+
+/// ⛔ THE FIRST OVER IN FAKE IT OR NONE NEVER GOES OUT OF THE OLD VFO B. The radio left in its 10 m
+/// split, Nexus on 12 m with Split Operation Fake It and then None, the TX offset at 1958 Hz: split
+/// off goes, and is confirmed, before the over keys, and the radio transmits on 12 m. It used to
+/// key with nothing written, out of the 10 m VFO B.
+#[test]
+fn fake_it_and_none_turn_a_left_split_off_before_the_first_over() {
+    for split in [SplitMode::FakeIt, SplitMode::None] {
+        let engine = cq_engine_at(split, Tier::Ft8, 24.915, "12m", 1958.0);
+        let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, Some(STALE_10M_VFO_B));
+        let (at, before) = first_key_of(&mut b, 1_500);
+        assert_eq!(
+            at.first(),
+            Some(&FT8_12M_DIAL),
+            "{split:?}: keyed off 12 m: {before:?}"
+        );
+        assert!(
+            before.iter().any(|l| l == "S 0 VFOA"),
+            "{split:?}: keyed with split not turned off: {before:?}"
+        );
+        // While it received, not at the key.
+        assert!(
+            b.radio.vfos.lock().unwrap().split_off_while_receiving,
+            "{split:?}: split turned off only at the key: {before:?}"
+        );
+    }
+}
+
+/// ⛔ A LATE START RIGHT AFTER CONNECTING TURNS THE SPLIT OFF AT THE KEY. Fake It and None on 12 m,
+/// the radio left in its 10 m split, Call CQ 2 s into this station's own slot on the first tick:
+/// nothing could go while receiving, so the key's own tick turns split off, confirmed, before it
+/// keys, and the radio transmits on 12 m.
+#[test]
+fn fake_it_and_none_turn_a_left_split_off_at_a_late_start_key() {
+    for split in [SplitMode::FakeIt, SplitMode::None] {
+        let engine = engine_at(split, Tier::Ft8, 24.915, "12m", 1958.0);
+        let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, Some(STALE_10M_VFO_B));
+        b.t = b.slot + 2_000.0;
+        b.call_cq_now();
+        let (at, before) = first_key_of(&mut b, 100);
+        assert_eq!(
+            at.first(),
+            Some(&FT8_12M_DIAL),
+            "{split:?}: keyed off 12 m: {before:?}"
+        );
+        assert!(
+            before.iter().any(|l| l == "S 0 VFOA"),
+            "{split:?}: keyed with split not turned off: {before:?}"
+        );
+    }
+}
+
+/// ⛔ …AND NEITHER DO TUNE OR THE PTT, right after connecting, before anything has gone while the
+/// station receives: split off first, then the key, on 12 m.
+#[test]
+fn fake_it_and_none_turn_a_left_split_off_before_a_tune_or_the_ptt() {
+    type Press = fn(&mut Engine);
+    let presses: [(&str, Press); 2] =
+        [("Tune", |e| e.set_tune(true)), ("PTT", |e| e.set_ptt(true))];
+    for split in [SplitMode::FakeIt, SplitMode::None] {
+        for (what, press) in presses {
+            let engine = engine_at(split, Tier::Ft8, 24.915, "12m", 1958.0);
+            let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, Some(STALE_10M_VFO_B));
+            {
+                let mut e = b.engine.lock().unwrap();
+                e.set_tx_enabled(true);
+                press(&mut e);
+            }
+            let (at, before) = first_key_of(&mut b, 50);
+            assert_eq!(
+                at.first(),
+                Some(&FT8_12M_DIAL),
+                "{split:?}, {what}: keyed off 12 m: {before:?}"
+            );
+            assert!(
+                before.iter().any(|l| l == "S 0 VFOA"),
+                "{split:?}, {what}: keyed with split not turned off: {before:?}"
+            );
+        }
+    }
+}
+
+/// ⛔ A BAND CHANGE TURNS SPLIT OFF AGAIN. Fake It on 10 m, a first over; the radio is then put back
+/// in split with VFO B on 10 m (its own SPLIT key) and the band changes to 12 m: split off goes
+/// again before the 12 m over keys, which goes out on 12 m.
+#[test]
+fn fake_it_turns_split_off_again_after_a_band_change() {
+    let engine = cq_engine_at(SplitMode::FakeIt, Tier::Ft8, 28.074, "10m", 1958.0);
+    let mut b = hamlib_bench_on(engine, FT8_10M_DIAL, None);
+    let _ = b.overs(1);
+    {
+        let mut v = b.radio.vfos.lock().unwrap();
+        v.split = true;
+        v.b = STALE_10M_VFO_B;
+        v.tx_at_key.clear();
+    }
+    b.radio.peer.lines.lock().unwrap().clear();
+    b.engine.lock().unwrap().set_frequency(24.915, "12m", "USB");
+    b.call_cq_now();
+    let (at, before) = first_key_of(&mut b, 1_600);
+    assert_eq!(
+        at.first(),
+        Some(&FT8_12M_DIAL),
+        "keyed off 12 m: {before:?}"
+    );
+    assert!(
+        before.iter().any(|l| l == "S 0 VFOA"),
+        "keyed with split not turned off after the band change: {before:?}"
+    );
+}
+
+/// ⛔ THE CW AND PHONE SCREENS' SPLIT IS THE OPERATOR'S. Fake It and None, the radio in the
+/// operator's own split on the Phone and then the CW screen: seconds of receiving and a PTT write
+/// no split command at all, and the PTT goes out of VFO B, as the operator set it.
+#[test]
+fn fake_it_and_none_never_touch_the_split_off_the_digital_screens() {
+    for split in [SplitMode::FakeIt, SplitMode::None] {
+        for screen in ["phone", "cw"] {
+            let engine = engine_at(split, Tier::Ft8, 24.915, "12m", 1958.0);
+            let operators_vfo_b = 24_920_000;
+            let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, Some(operators_vfo_b));
+            {
+                let mut e = b.engine.lock().unwrap();
+                e.set_operating_mode(screen, false);
+                e.set_tx_enabled(true);
+            }
+            let quiet = b.ticks(300);
+            b.engine.lock().unwrap().set_ptt(true);
+            let keyed = b.ticks(20);
+            let all: Vec<&String> = quiet.iter().chain(&keyed).collect();
+            assert!(
+                !all.iter().any(|l| l.starts_with('S')),
+                "{split:?} on {screen}: the operator's split touched: {all:?}"
+            );
+            let v = b.radio.vfos.lock().unwrap();
+            assert!(v.split, "{split:?} on {screen}: split turned off");
+        }
+    }
+}
+
+/// ⛔ A SPLIT OFF THE RADIO REJECTS KEYS NOTHING, AND SAYS WHY. Fake It on 12 m, the radio left in its
+/// 10 m split and refusing `S 0`: the over keys nothing, TX stops, and the refused key's line says
+/// it was the split.
+#[test]
+fn fake_it_keys_nothing_when_the_radio_rejects_split_off() {
+    let engine = cq_engine_at(SplitMode::FakeIt, Tier::Ft8, 24.915, "12m", 1958.0);
+    let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, Some(STALE_10M_VFO_B));
+    b.radio.vfos.lock().unwrap().refuse_split_off = true;
+    let w = b.ticks(900);
+    assert!(!w.iter().any(|l| l == "T 1"), "keyed: {w:?}");
+    assert!(
+        w.iter().any(|l| l == "S 0 VFOA"),
+        "premise: split off asked: {w:?}"
+    );
+    let e = b.engine.lock().unwrap();
+    assert!(!e.tx_enabled(), "TX still on");
+    let refused = e
+        .snapshot()
+        .radio
+        .slot_key_refused
+        .expect("nothing says why the over was not sent");
+    assert!(refused.split_failed, "not told as the split: {refused:?}");
 }
