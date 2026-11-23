@@ -12893,13 +12893,6 @@ export const EN = {
   'operate.tx.tx6.contest.hint': "The contest's CQ — Tx 6 calls it as Call CQ does",
   'operate.tx.callCq.title': 'Call CQ (Alt+6)',
   'operate.tx.send.title': 'Send this as the next transmission (Alt+{{n}})',
-  // #254 — a Tx6 text that is not a CQ in WSJT-X's grammar is refused before anything keys,
-  // never quietly replaced by a plain CQ. The first form is used when the operator's own
-  // words re-order into a valid CQ; the second when they do not.
-  'operate.tx.cq.malformed.try': 'Nothing sent — that is not a CQ Nexus can call. Try: {{fix}}',
-  'operate.tx.cq.malformed':
-    'Nothing sent — that is not a CQ Nexus can call. The form is CQ, an optional direction word, then {{mycall}} and your grid.',
-
   // ══════════════════════════════════════════════════════════════════════════════════════
   // THE KEYBOARD AND PICTURE COCKPITS — RTTY, PSK and SSTV.
   // ══════════════════════════════════════════════════════════════════════════════════════

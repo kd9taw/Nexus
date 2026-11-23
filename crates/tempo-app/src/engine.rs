@@ -22595,9 +22595,18 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let mycall = &self.settings.mycall;
         let row = QsoStation::answering(mycall, "", dxcall).tx_row(text);
         let on_air = QsoStation::on_air_form(mycall, dxcall, row).to_text();
-        // ⛔ …and never an over sent as another station ([`Self::sender_refusal`]).
-        self.ft_refusal(&on_air)
-            .or_else(|| self.sender_refusal(text, &on_air))
+        // ⛔ …and never an over sent as another station ([`Self::sender_refusal`]). A row under one
+        // of this station's own calls (a row a screen drew before the call was saved, another
+        // profile's call) is not another station's: the key-time call check refuses it, and says
+        // why in its own words ([`ft_over_call_refusal`]).
+        let own_call = Msg::parse(&on_air)
+            .sender()
+            .is_some_and(|de| self.is_own_call(de));
+        self.ft_refusal(&on_air).or_else(|| {
+            (!own_call)
+                .then(|| self.sender_refusal(text, &on_air))
+                .flatten()
+        })
     }
 
     // ----- command delegates ----------------------------------------------
@@ -32590,6 +32599,17 @@ contact yourself."
         Some(format!(
             "\"{typed}\" would go out as {sender}, not as your call {mycall}, so nothing goes out."
         ))
+    }
+
+    /// `call` is one of this station's own calls, compared by base call as the key-time call
+    /// check compares them ([`ft_over_call_refusal`]): the call it transmits under, the call its
+    /// sequencer was made with, a stored profile's, or one it transmitted under before.
+    fn is_own_call(&self, call: &str) -> bool {
+        let own = |c: &str| !c.trim().is_empty() && same_call(call, c);
+        own(&self.settings.mycall)
+            || matches!(&self.mode, Mode::Qso { station, .. } if own(&station.mycall))
+            || self.settings.station_profiles.iter().any(|p| own(&p.call))
+            || self.former_calls.iter().any(|c| own(c))
     }
 
     /// The 77-bit frame type the packer writes for `text`, `(i3, n3)` (`n3` read whatever `i3`

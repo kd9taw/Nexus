@@ -2962,6 +2962,12 @@ const NO_OFF_HALF: &[(&str, &str)] = &[
         "sstv_send",
         "Whether the call goes in the picture is part of what is sent, not a switch.",
     ),
+    (
+        "start_cq",
+        "Its `rewrite` says the text is the Tx6 box written again mid-run, which a run calling CQ \
+         keys at its next over and nothing else reads, not a switch: the run is stopped by Stop TX \
+         and Enable TX.",
+    ),
 ];
 
 #[test]
