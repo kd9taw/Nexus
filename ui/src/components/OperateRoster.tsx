@@ -464,7 +464,7 @@ export function OperateRoster({
   // a newly needed station still rises to the top). A newly heard station joins at the bottom while
   // held, and one that drops off the list (aged out, filtered) leaves it. A column the operator
   // sorts by takes effect at once and becomes the order held. Touch: a tap's pointerdown holds it
-  // the same way. Display only: the double-click still works the station of the row it lands on.
+  // the same way. Display only: which station a double-click works is settled below (the row its first click landed on).
   const [holding, setHolding] = useState(false)
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const hold = () => {
@@ -492,6 +492,19 @@ export function OperateRoster({
     held.current = holding ? { sort, calls: out.map((r) => r.s.call) } : null
     return out
   }, [sorted, holding, sort])
+
+  // THE ROW A DOUBLE-CLICK WORKS IS THE ROW ITS FIRST CLICK LANDED ON (operator report, 1.25.0: a double-click
+  // worked the row above or below). The hold above keeps the ORDER still, but the grid itself can still move
+  // between the two clicks: the first click selects the row, and whatever changes height above the grid then (the
+  // filter bar re-wrapping, which the Spot button's fixed width now prevents; a pane above it growing) slides
+  // another row under the pointer, so the second click and the double-click land on that one. A double-click is
+  // one gesture, aimed at what the operator saw under the pointer when it began, so the first click's row is
+  // recorded and the gesture acts on it: the second click does not re-select, and the double-click (and its Alt
+  // ignore) takes that station. Acting on it rather than ignoring the gesture: it is the station the operator
+  // aimed at, the one the first click already selected and the Spot button and tooltip already name, so the
+  // selection, the work and what the operator read all agree. If that station has left the roster in between,
+  // the double-click does nothing.
+  const firstClick = useRef<string | null>(null)
 
   // #357 — the Park column takes room only while it has something to say: a station on the roster
   // is at a park, or the operator has sorted by it (so the sort they picked stays on screen). With
@@ -712,15 +725,21 @@ export function OperateRoster({
                 style={{
                   opacity: s.call === selectedCall || s.call === workingCall ? 1 : freshness(age),
                 }}
-                onClick={() => {
+                onClick={(e) => {
+                  // detail is the browser's click count: 1 begins a gesture, 2+ continues the one begun.
+                  if (e.detail <= 1 || firstClick.current == null) firstClick.current = s.call
+                  else if (firstClick.current !== s.call) return
                   roving.setActive(i)
                   onSelect(s.call)
                 }}
                 onDoubleClick={(e) => {
+                  const first = firstClick.current
+                  const st = first == null || first === s.call ? s : rows.find((r) => r.s.call === first)?.s
+                  if (!st) return
                   if (e.altKey) {
-                    if (onToggleIgnore) { onToggleIgnore(s.call); return }
+                    if (onToggleIgnore) { onToggleIgnore(st.call); return }
                   }
-                  onCall(s.call, s.grid ?? undefined, undefined, undefined, s.freqHz ?? undefined)
+                  onCall(st.call, st.grid ?? undefined, undefined, undefined, st.freqHz ?? undefined)
                 }}
                 title={
                   ignoredRow
