@@ -641,6 +641,18 @@ fn a_tx_row_with_a_six_character_grid_goes_out_with_four() {
         assert_eq!(keyed(&mut e, 0).as_deref(), Some(sent), "{row}: the over");
         assert_eq!(ft8_bits(sent), ft8_bits(row), "{row}: the same frame");
     }
+    // A six-character grid the frame carries whole, or one that is free text, is not cut: the EU
+    // VHF exchange (`i3=5`) sends all six, and free text sends every character typed.
+    for (row, kind) in [
+        ("<W1AW> <K1ABC> 570001 FN31AB", "i3=5"),
+        ("TNX FN31AB", "i3=0 n3=0"),
+    ] {
+        assert_eq!(air_form(row).0, kind, "premise: {row}");
+        let mut e = station(Tier::Ft8);
+        e.override_next_tx_checked("W1AW", Some("FN31"), row)
+            .unwrap_or_else(|why| panic!("{row}: {why}"));
+        assert_eq!(keyed(&mut e, 0).as_deref(), Some(row), "{row}: keys whole");
+    }
     for row in ["CQ W1XYZ K1ABC FN31AB", "W1AW K1ABC/QRP FN31AB"] {
         let mut e = station(Tier::Ft8);
         assert!(
