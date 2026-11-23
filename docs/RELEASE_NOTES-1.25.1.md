@@ -50,4 +50,8 @@ overs refused, with TX turned off.
 The split fix has been tested in software only, not yet on the air. Please tell us how it
 works on yours, especially on a slow radio such as the FTDX10.
 
+A Halt TX sent from a logger such as JTAlert or GridTracker can still land a moment late if a slow radio
+is in the middle of its split commands; Stop TX in Nexus, Nexus Remote and TCI are immediate. This is
+being fixed in the next update.
+
 **The full list of changes is in the CHANGELOG.**
