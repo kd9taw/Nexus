@@ -7157,9 +7157,8 @@ export interface SlotAudioLost {
   at: number
 }
 
-/** The last slot over the station dropped with TX left on: an FT8 or FT4 over the radio keyed only
- *  after its period had ended, or one whose split commands came too late (mirror of the Rust
- *  SlotOverDropped). The words are the UI's, in
+/** The last FT8 or FT4 over the station dropped because the radio keyed it only after its period
+ *  had ended (mirror of the Rust SlotOverDropped). The words are the UI's, in
  *  features/slotOverDropped.ts. */
 export interface SlotOverDropped {
   /** When it happened (unix seconds). */
@@ -7168,9 +7167,6 @@ export interface SlotOverDropped {
   late: string
   /** How many in a row, this one included. */
   count: number
-  /** Dropped before its key: the radio took Split operation's commands, too slowly (`late` is how
-   *  long it took). Absent from an older station. */
-  splitLate?: boolean
 }
 
 /** What Parsec presence mode knows (mirror of the Rust ParsecPresenceDto). Tokens only — the

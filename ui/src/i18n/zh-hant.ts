@@ -547,8 +547,6 @@ export const ZH_HANT: PartialCatalog = {
   "shell.lane.slotAudioLost.detail": "承載某次發射音訊至電台的路由（Flex DAX 或 TCI）在該次發射中途於 {{time}} UTC 中斷，因此其餘部分會靜默發出。Nexus 就此結束該次發射並關閉發射。請再按 TX On（開啟 TX）以繼續。",
   "shell.lane.slotOverDropped.message": "本次發射丟棄——電台鍵控過晚",
   "shell.lane.slotOverDropped.detail": "此次發射被丟棄：電台僅在 {{time}} UTC 鍵控，即你的時隙結束後 {{late}}（CAT 較慢），因此 Nexus 立即解除鍵控且未傳送任何內容，並保持發射開啟以等待你的下一次發射。分頻操作會在每次鍵控前向電台傳送指令，在慢速 CAT 鏈路上可能耗時數秒：若此情況持續，請檢查設定中的 CAT 鏈路與分頻操作。",
-  "shell.lane.slotOverDropped.splitLate.message": "本次發射丟棄——分頻指令過慢",
-  "shell.lane.slotOverDropped.splitLate.detail": "此次發射在鍵控前被丟棄：{{time}} UTC 時電台用了 {{late}} 才確認分頻操作的指令，超過了 Nexus 在鍵控前允許的時間，因此未傳送任何內容。發射保持開啟，電台已接受的設定會保留，你的下一次發射所需指令更少。若連續三次因此被丟棄，發射將關閉：請檢查設定中的 CAT 鏈路與分頻操作。",
   "shell.lane.pttRefused.message": "PTT 被拒",
   "shell.lane.pttRefused.detail": "Nexus 未在 {{time}} UTC 鍵控本次 {{mode}} 發射：電台仍按 Nexus 所設從其經 DAX 接收發射音訊，而非來自麥克風，因此你的語音不會發出。未傳送任何內容。鬆開 PTT，Nexus 會在片刻內將電台切回麥克風輸入；隨後再次按下 PTT。",
   "shell.lane.txWatchdog.detail": "發射已關閉。按 TX On 可再次發射。",

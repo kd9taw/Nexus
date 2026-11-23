@@ -37,19 +37,4 @@ describe('the status lane after a dropped FT8/FT4 over', () => {
       expect(lane!.detail).toContain('left TX on')
     }
   })
-
-  it('says a split too slow to key in time dropped the over before its key, TX still on', () => {
-    const lane = slotOverDroppedLane({ at: AT, late: '0.77 s', count: 1, splitLate: true })
-    expect(lane!.tier).toBe('warning')
-    expect(lane!.message).toBe(EN['shell.lane.slotOverDropped.splitLate.message'])
-    expect(lane!.message).not.toContain('STOPPED')
-    expect(lane!.detail).toBe(
-      EN['shell.lane.slotOverDropped.splitLate.detail']
-        .replace('{{time}}', '14:32:05')
-        .replace('{{late}}', '0.77 s'),
-    )
-    expect(lane!.detail).toContain('took 0.77 s to confirm')
-    expect(lane!.detail).toContain('TX stays on')
-    expect(lane!.detail).not.toMatch(/\{\{/)
-  })
 })

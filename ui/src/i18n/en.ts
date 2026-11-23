@@ -14827,11 +14827,6 @@ export const EN = {
   'shell.lane.slotOverDropped.message': 'OVER DROPPED — RADIO KEYED LATE',
   'shell.lane.slotOverDropped.detail':
     'This over was dropped: the radio keyed only at {{time}} UTC, {{late}} after your period had ended (slow CAT), so Nexus unkeyed it at once and sent nothing, and left TX on for your next over. Split operation sends the radio its commands before each key, which on a slow CAT link can take seconds: if this keeps happening, check the CAT link and Split operation in Settings.',
-  // A slot over dropped BEFORE its key: Split operation's commands were all taken, too slowly.
-  // TX stays on; three in a row turn it off. `{{late}}` is how long the radio took ("0.77 s").
-  'shell.lane.slotOverDropped.splitLate.message': 'OVER DROPPED — SPLIT COMMANDS TOO SLOW',
-  'shell.lane.slotOverDropped.splitLate.detail':
-    'This over was dropped before it keyed: at {{time}} UTC the radio took {{late}} to confirm the Split operation commands, longer than Nexus allows before a key, so nothing was sent. TX stays on, and what the radio took is kept, so your next over needs fewer commands. If three overs in a row are dropped this way, TX turns off: check the CAT link and Split operation in Settings.',
   // The operator's PTT press that Nexus's own Flex client kept off the air: right after a digital
   // mode, or native audio going off, the radio still took its transmit audio from the DAX Nexus had
   // set, not the mic, so the voice would not have gone out. TX stays on; the next press answers anew.

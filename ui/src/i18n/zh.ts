@@ -545,8 +545,6 @@ export const ZH: PartialCatalog = {
   "shell.lane.slotAudioLost.detail": "承载某次发射音频至电台的路由（Flex DAX 或 TCI）在该次发射中途于 {{time}} UTC 中断，因此其余部分会静默发出。Nexus 就此结束该次发射并关闭发射。请再按 TX On（开启 TX）以继续。",
   "shell.lane.slotOverDropped.message": "本次发射丢弃——电台键控过晚",
   "shell.lane.slotOverDropped.detail": "此次发射被丢弃：电台仅在 {{time}} UTC 键控，即你的时隙结束后 {{late}}（CAT 较慢），因此 Nexus 立即解除键控且未发送任何内容，并保持发射开启以等待你的下一次发射。分频操作会在每次键控前向电台发送指令，在慢速 CAT 链路上可能耗时数秒：若此情况持续，请检查设置中的 CAT 链路与分频操作。",
-  "shell.lane.slotOverDropped.splitLate.message": "本次发射丢弃——分频指令过慢",
-  "shell.lane.slotOverDropped.splitLate.detail": "此次发射在键控前被丢弃：{{time}} UTC 时电台用了 {{late}} 才确认分频操作的指令，超过了 Nexus 在键控前允许的时间，因此未发送任何内容。发射保持开启，电台已接受的设置会保留，你的下一次发射所需指令更少。若连续三次因此被丢弃，发射将关闭：请检查设置中的 CAT 链路与分频操作。",
   "shell.lane.pttRefused.message": "PTT 被拒",
   "shell.lane.pttRefused.detail": "Nexus 未在 {{time}} UTC 键控本次 {{mode}} 发射：电台仍按 Nexus 所设从其经 DAX 接收发射音频，而非来自麦克风，因此你的语音不会发出。未发送任何内容。松开 PTT，Nexus 会在片刻内将电台切回麦克风输入；随后再次按下 PTT。",
   "shell.lane.txWatchdog.detail": "发射已关闭。按 TX On 可再次发射。",

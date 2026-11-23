@@ -717,11 +717,6 @@ pub struct Rig {
     /// key, so it keyed nothing and TX halted: the radio loop lets go of the split at its next quiet
     /// point, as after any over, though TX turned off alone no longer lets go of it.
     pub(crate) split_refused_at_key: bool,
-    /// Slot overs in a row dropped because their Split Operation = Rig writes, every one taken
-    /// (`RPRT 0`), ran past the budget before the key (`slot::apply_tx_dial_shift`): each kept what
-    /// the radio confirmed and left TX on. Ended by an over whose writes fit, by any other refusal,
-    /// and when the radio loop lets go of the split.
-    pub(crate) split_late_drops: u8,
     /// The TX dial and TX mode the radio last confirmed (`RPRT 0`) for Nexus's held Rig split on this
     /// connection, so an over whose split writes change nothing sends none of them. Forgotten by
     /// anything that may have moved VFO B or the dial: a new or dropped connection
@@ -783,10 +778,6 @@ pub struct Rig {
     /// whose commands must take seconds and still be answered inside it. PTT keeps its own.
     #[cfg(test)]
     pub(crate) test_reply_deadline_ms: Option<u64>,
-    /// A test's own total budget (ms) for the split writes before a key, in place of
-    /// `slot::SPLIT_WRITES_BUDGET_MS`, for a scene that delays the key through them on purpose.
-    #[cfg(test)]
-    pub(crate) test_split_budget_ms: Option<u64>,
     /// A test's way to land the [`OWED_ANSWER_BOUND`] in the moment between
     /// [`Self::take_split_confirmed`]'s own look at it and the over's first split write.
     #[cfg(test)]
@@ -1037,7 +1028,6 @@ impl Rig {
             tx_split_held: false,
             split_release_pending: false,
             split_refused_at_key: false,
-            split_late_drops: 0,
             split_confirmed: None,
             slow_transport: false,
             network_chain: false,
@@ -1058,7 +1048,6 @@ impl Rig {
             #[cfg(test)]
             test_reply_deadline_ms: None,
             #[cfg(test)]
-            test_split_budget_ms: None,
             #[cfg(test)]
             test_debt_lapses_after_split_take: false,
         }
@@ -2192,7 +2181,7 @@ impl Rig {
         }
         // ⛔ A WRITE OF THE MODE VFO B WAS CONFIRMED IN LEAVES IT CONFIRMED, once the radio has taken
         // it: it cannot change VFO B's mode, and Call CQ's forced retune writes it just ahead of a
-        // key that would otherwise send the TX dial and mode again inside the key's budget. Any
+        // key that would otherwise send the TX dial and mode again ahead of the key. Any
         // other mode forgets it, as does any answer but `RPRT 0`. A connection renewed by the write
         // forgets it in `drop_connection`. A backend whose `M` also reaches VFO B in split puts it
         // in this same mode, as WSJT-X 3.0.2 does on purpose (`HamlibTransceiver.cpp:940-941`).

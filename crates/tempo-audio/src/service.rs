@@ -1750,8 +1750,8 @@ const TUNE_METER_MIN_LEAD_MS: f32 = 150.0;
 /// PTT off), and is only ASKED with at least this much left on a local link
 /// ([`RadioLoop::over_left_ms`]). ⛔ A BOUNDED READ MUST NEVER CUT A HEALTHY ANSWER: a read cut short
 /// only misses, and a miss drops the CAT connection, which takes the radio's confirmed split with it
-/// (`Rig::drop_connection`). The next over's key then writes the whole split again inside its 500 ms
-/// budget, and a radio too slow for that is refused there and TX turns off. A local link answers a
+/// (`Rig::drop_connection`). The next over's key then writes the whole split again, and on a slow
+/// radio keys that much later. A local link answers a
 /// meter well inside the 130 ms this leaves.
 const TX_METER_OVER_MIN_LEFT_MS: f64 = 150.0;
 /// [`TX_METER_OVER_MIN_LEFT_MS`] on a slow link (`Rig::slow_transport`: a network radio link, a slow
@@ -8730,7 +8730,7 @@ impl RadioLoop {
     /// write. Noticed on any tick, and written once the dial has stayed put for
     /// [`crate::slot::SPLIT_PRESET_SETTLE_MS`], so a band button pressed twice writes once. Without
     /// it the first over after a start or a reconnect wrote the whole cold split at its key, four
-    /// lines, about 770 ms on an FTDX10, past the key's budget.
+    /// lines, about 770 ms on an FTDX10, and keyed that late.
     ///
     /// A move inside the band owes nothing: the radio's own knob
     /// writes nothing to VFO B (WSJT-X's `handle_transceiver_update` does not either), and the next
@@ -8775,7 +8775,7 @@ impl RadioLoop {
     ///
     /// FT2 HOLDS SPLIT BUT NEVER PRE-SETS: its 3.75 s slot is shorter than the lead, so the lead is
     /// never met, and its key writes everything inside its budget. A radio slow to move VFO B can
-    /// still lose the first over after a band change (`slot::SPLIT_LATE_DROPS_HALT`).
+    /// still key the first over after a band change late, its audio trimmed on the slot clock.
     fn preset_rig_split_due(
         &mut self,
         eng: &Engine,
@@ -9025,8 +9025,6 @@ impl RadioLoop {
         // turned on is nothing to let go of, and a radio with no split control at all would
         // otherwise owe it for ever.
         let took_split = std::mem::replace(&mut rig.tx_split_held, false);
-        // The next over starts cold, so a run of late ones starts again too.
-        rig.split_late_drops = 0;
         if at.cluster_active {
             return;
         }
