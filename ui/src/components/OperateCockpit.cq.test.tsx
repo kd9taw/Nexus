@@ -23,6 +23,7 @@ import type { OperatePanelId, PanelLayoutApi, PanelState } from '../features/pan
 const startCq = vi.fn(async () => null)
 const startRunning = vi.fn(async (_dir?: string | null, _text?: string): Promise<null> => null)
 const pushToast = vi.fn()
+const rewriteCq = vi.fn(async (_text: string): Promise<null> => null)
 
 vi.mock('../api', () => ({
   setDxBox: vi.fn(async () => undefined),
@@ -35,6 +36,7 @@ vi.mock('../api', () => ({
   pointRotatorAtCall: vi.fn(async () => null),
   redecode: vi.fn(async () => null),
   clearDxCall: vi.fn(async () => null),
+  rewriteCq: (...a: unknown[]) => rewriteCq(...(a as [string])),
   startCq: (...a: unknown[]) => startCq(...(a as [])),
   startRunning: (...a: unknown[]) => startRunning(...(a as [string | null, string | undefined])),
   startQsoRecording: vi.fn(async () => null),
@@ -130,13 +132,13 @@ function renderCockpit(snap: AppSnapshot = makeSnap()) {
   return render(cockpit(snap))
 }
 
-function cockpit(snap: AppSnapshot) {
+function cockpit(snap: AppSnapshot, tier = 'FT8') {
   const noop = () => {}
   return (
     <OperateCockpit
       snap={snap}
       theme="dark"
-      tier="FT8"
+      tier={tier as 'FT8'}
       onTierChange={noop}
       bandPlan={[]}
       onSetFrequency={noop}
@@ -186,6 +188,7 @@ beforeEach(() => {
   startRunning.mockReset()
   startRunning.mockImplementation(async () => null)
   pushToast.mockClear()
+  rewriteCq.mockClear()
 })
 afterEach(cleanup)
 
@@ -273,6 +276,44 @@ describe("Tx6 is written again at WSJT-X's points, its CQ word kept", () => {
     expect(cqField().value, 'keyed: left alone').toBe(edited)
     rerender(at(14.076, false))
     expect(cqField().value).toBe(regenerated)
+  })
+
+  it('a band change while a contact is up (12520)', () => {
+    const inQso = (tick: number) =>
+      ({
+        ...makeSnap(),
+        bandChangeTick: tick,
+        qso: { dxcall: 'K1XYZ', dxgrid: 'FN42', state: 'AwaitReport', cqRunning: true },
+      }) as unknown as AppSnapshot
+    const { rerender } = renderCockpit(inQso(1))
+    fireEvent.change(cqField(), { target: { value: edited } })
+    rerender(cockpit(inQso(2)))
+    expect(cqField().value).toBe(regenerated)
+  })
+
+  it('a mode switch (displayWidgets, 10803)', () => {
+    const { rerender } = renderCockpit()
+    fireEvent.change(cqField(), { target: { value: edited } })
+    rerender(cockpit(makeSnap(), 'FT4'))
+    expect(cqField().value).toBe(regenerated)
+  })
+
+  // WSJT-X keys the box it rewrote at the next period, so the station calling CQ is handed it.
+  it('the rewritten box goes to a station calling CQ, and only to one', async () => {
+    const calling = {
+      ...makeSnap(),
+      qso: { dxcall: null, state: 'CallingCq', cqRunning: true, running: true },
+    } as unknown as AppSnapshot
+    renderCockpit(calling)
+    fireEvent.change(cqField(), { target: { value: edited } })
+    fireEvent.click(screen.getByText('Generate Std Msgs'))
+    await waitFor(() => expect(rewriteCq).toHaveBeenCalledWith(regenerated))
+    cleanup()
+    rewriteCq.mockClear()
+    renderCockpit()
+    fireEvent.change(cqField(), { target: { value: edited } })
+    fireEvent.click(screen.getByText('Generate Std Msgs'))
+    expect(rewriteCq, 'no run calling CQ: nothing to hand over').not.toHaveBeenCalled()
   })
 
   it("free text's second word is its CQ word, as WSJT-X reads it (10082)", () => {

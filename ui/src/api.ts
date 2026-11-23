@@ -1570,6 +1570,13 @@ export async function startCq(dir: string | null, text?: string): Promise<AppSna
   return invoke<AppSnapshot>('start_cq', { dir, text })
 }
 
+/** The Tx6 box as WSJT-X's `genCQMsg` wrote it again mid-run (Generate Std Msgs, a frequency or
+ * mode change): a station calling CQ keys `text` at its next over, as WSJT-X keys its box, so the
+ * box and the TX line agree (`Engine::rewrite_cq`). Starts nothing. */
+export async function rewriteCq(text: string): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('start_cq', { dir: null, text, rewrite: true })
+}
+
 /** The Operate strip's Call CQ on this computer (`Engine::start_running_with_cq`), and the Tx6 row's
  * while a contest runs (`snap.contestCq`, `snap.contestCqTyped`). `dir` is the direction of the CQ
  * typed in Tx6, which the contest's Running calls where WSJT-X has no activity for the contest

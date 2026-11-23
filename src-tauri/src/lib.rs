@@ -33147,19 +33147,24 @@ fn redecode(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
 /// for a plain CQ (also clears a sticky directed token). `text`: the CQ typed in the Tx6 row,
 /// which is sent as typed and stands in for `dir`
 /// ([`tempo_app::engine::Engine::start_cq_as_typed`]); a caller that sends none (the Remote page)
-/// gets the CQ built from Settings. `afar`: as [`set_tx_enabled`]'s.
+/// gets the CQ built from Settings. `rewrite`: `text` is the Tx6 box as WSJT-X's `genCQMsg`
+/// wrote it again mid-run, which a station calling CQ keys at its next over and nothing else
+/// reads ([`tempo_app::engine::Engine::rewrite_cq`]); no run is started. `afar`: as
+/// [`set_tx_enabled`]'s.
 #[tauri::command(async)]
 fn start_cq(
     state: State<'_, SharedEngine>,
     dir: Option<String>,
     text: Option<String>,
+    rewrite: Option<bool>,
     afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
-    match text.as_deref() {
-        Some(typed) => eng.start_cq_as_typed(typed)?,
-        None => eng.start_cq(dir.as_deref())?,
+    match (text.as_deref(), rewrite == Some(true)) {
+        (Some(typed), true) => eng.rewrite_cq(typed)?,
+        (Some(typed), false) => eng.start_cq_as_typed(typed)?,
+        (None, _) => eng.start_cq(dir.as_deref())?,
     }
     command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())

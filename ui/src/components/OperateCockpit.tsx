@@ -48,7 +48,7 @@ import { atuBypass, atuTune, closePanelWindow, openPanelWindow, getSettings, not
 import { WSPR_WATERFALL_WINDOW } from '../waterfall'
 import { ftOverlay } from '../spectrum/overlays'
 import { FdAdvisories } from './FdAdvisories'
-import { clearDxCall, setDxBox, pointRotatorAtCall, redecode, startCq, startRunning, startSearchAndPounce, startQsoRecording, stopQsoRecording } from '../api'
+import { clearDxCall, setDxBox, pointRotatorAtCall, redecode, rewriteCq, startCq, startRunning, startSearchAndPounce, startQsoRecording, stopQsoRecording } from '../api'
 import { setDecodeDepth } from '../api'
 import { setSkipTx1 as setSkipTx1Cmd } from '../api'
 import { qrzLookup, resolveEntity } from '../api'
@@ -986,9 +986,17 @@ export function OperateCockpit({
   // Read through a ref: `clearDx` is created once.
   const genTx6Ref = useRef(genTx6)
   genTx6Ref.current = genTx6
+  // Whether the station is calling CQ in a run that keys this box, read through a ref for the
+  // same reason (set below, once the contest flags are read).
+  const callingCqRef = useRef(false)
   const regenTx6 = () => {
     tx6Edited.current = false
     setTx6(genTx6Ref.current)
+    // WSJT-X keys the rewritten box at the next period, so a station calling CQ keys it too: the
+    // box and the TX line never disagree (`Engine::rewrite_cq`).
+    if (callingCqRef.current) {
+      void rewriteCq(genTx6Ref.current).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error'))
+    }
   }
 
   const handleTx5 = (v: string) => {
@@ -1089,6 +1097,15 @@ export function OperateCockpit({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snap.bandChangeTick])
 
+  // A mode switch rewrites Tx6 as WSJT-X's does (`displayWidgets`, mainwindow.cpp 10803).
+  const tierSeen = useRef(tier)
+  useEffect(() => {
+    if (tier === tierSeen.current) return
+    tierSeen.current = tier
+    regenTx6()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tier])
+
   // A frequency change rewrites Tx6 as WSJT-X's does (`genCQMsg` on a new nominal frequency,
   // mainwindow.cpp 12520, only while not keyed; and `setRig`, 13858).
   const dialSeen = useRef(snap.radio.dialMhz)
@@ -1151,6 +1168,9 @@ export function OperateCockpit({
   // directed or plain, as in its normal mode: the row stays editable, and on this computer Tx 6 and
   // Call CQ hand the direction typed there to the contest's Running (`snap.contestCqTyped`).
   const contestCqTyped = snap.contestCqTyped === true
+  callingCqRef.current =
+    (snap.qso?.cqRunning === true && snap.qso.state === 'CallingCq') ||
+    (contestCqTyped && snap.fieldDay?.running === true && snap.fieldDay.state === 'CallingCq')
 
   // The six panel rows (Tx5 + Tx6 = the live editable texts). The "next" dot
   // follows the row qso.txNow stands for (txRowIndex) — in a contest the over its sequencer sends

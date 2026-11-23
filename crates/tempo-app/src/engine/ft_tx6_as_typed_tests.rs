@@ -303,10 +303,11 @@ fn a_typed_cq_passes_the_identity_gate() {
     );
 }
 
-/// A plain start after a typed one (the strip's Call CQ, the Remote page) calls the Settings CQ:
-/// the typed grid is the Tx6 row's and nobody else's.
+/// A start that brings no text, the Remote page's Call CQ (`start_cq` with only the direction of
+/// the CQ it shows), calls the Settings CQ: the typed grid is the Tx6 row's and nobody else's. The
+/// strip's Call CQ sends the row ([`call_cq_outside_a_contest_sends_tx6_as_typed`]).
 #[test]
-fn a_plain_start_after_a_typed_one_calls_the_settings_cq() {
+fn a_start_with_no_text_calls_the_settings_cq() {
     let mut e = station(Tier::Ft8);
     e.start_cq_as_typed("CQ DX K1ABC FN42").expect("a run");
     e.start_cq(None).expect("a plain run");
@@ -376,4 +377,161 @@ fn in_a_contest_wsjtx_has_an_activity_for_call_cq_calls_the_activitys_cq() {
     e.start_running_as_typed("CQ DX K1ABC FN42")
         .expect("the run starts");
     assert_eq!(keyed(&mut e, 0).as_deref(), Some("CQ FD K1ABC FN31"));
+}
+
+/// ⛔ NO OVER GOES OUT AS ANOTHER STATION, whatever box it was typed in. A structured frame is read
+/// by every receiver as sent by its sender word, and `QRZ` and `DE` name a sender as `CQ` does, so
+/// each of these would put another station's call on the air as the sender; each is refused before
+/// anything changes. WSJT-X would key them all; this is the identity guard's one difference.
+const AS_ANOTHER_STATION: [&str; 9] = [
+    "W1XYZ N0OTH FN42",
+    "QRZ W1XYZ FN42",
+    "DE W1XYZ FN42",
+    "DE W1XYZ",
+    "W9XYZ W1XYZ RR73",
+    "W9XYZ W1XYZ -12",
+    "<W9XYZ> W1XYZ",
+    "W9XYZ W1XYZ R 2A EMA",
+    "CQ DX W1XYZ FN42",
+];
+
+#[test]
+fn tx6_never_goes_out_as_another_station() {
+    for typed in AS_ANOTHER_STATION {
+        let mut e = station(Tier::Ft8);
+        let why = e
+            .start_cq_as_typed(typed)
+            .expect_err(&format!("{typed:?} is refused"));
+        assert!(why.contains("not as your call K1ABC"), "{typed:?}: {why}");
+        assert_eq!(tx_now(&e), None, "{typed:?}: no run");
+        assert_eq!(keyed(&mut e, 0), None, "{typed:?}: nothing keys");
+    }
+    // CONTROL: the same frames from our own call go out as typed, as WSJT-X sends them.
+    for typed in [
+        "W9XYZ K1ABC RR73",
+        "QRZ K1ABC FN42",
+        "DE K1ABC FN42",
+        "W9XYZ K1ABC -12",
+    ] {
+        let mut e = station(Tier::Ft8);
+        e.start_cq_as_typed(typed).expect(typed);
+        assert_eq!(keyed(&mut e, 0).as_deref(), Some(typed), "{typed}");
+    }
+}
+
+/// Each half of the guard is needed alone. The TYPED text: a free-text frame keeps 13
+/// characters, so `CQ POTA DE W1XYZ` goes out as `CQ POTA DE W1`, and only what was typed still
+/// names W1XYZ. The FRAME: `W1XYZ N0OTH FN42` opens with no CQ, QRZ or DE, and only the frame it
+/// packs to (N0OTH calling W1XYZ) shows whose call it carries.
+#[test]
+fn each_half_of_the_identity_guard_is_needed() {
+    assert_eq!(
+        air_form("CQ POTA DE W1XYZ"),
+        ("i3=0 n3=0".to_string(), "CQ POTA DE W1".to_string()),
+        "premise: the frame no longer names W1XYZ"
+    );
+    let mut e = station(Tier::Ft8);
+    assert!(
+        e.start_cq_as_typed("CQ POTA DE W1XYZ").is_err(),
+        "the typed half"
+    );
+    assert_eq!(
+        air_form("W1XYZ N0OTH FN42").0,
+        "i3=1",
+        "premise: a standard frame"
+    );
+    let mut e = station(Tier::Ft8);
+    assert!(
+        e.start_cq_as_typed("W1XYZ N0OTH FN42").is_err(),
+        "the frame half"
+    );
+}
+
+/// The same guard holds Tx 5: a Tx-slot press, the free-text Tx 5, and a logger's FreeText, each
+/// refused with the reason when the over would go out as another station.
+#[test]
+fn tx5_never_goes_out_as_another_station() {
+    for typed in ["W1XYZ N0OTH FN42", "DE W1XYZ FN42", "W9XYZ W1XYZ RR73"] {
+        let mut e = station(Tier::Ft8);
+        assert!(
+            e.override_next_tx_checked("W1XYZ", None, typed).is_err(),
+            "{typed}: a Tx-slot press"
+        );
+        assert_eq!(keyed(&mut e, 0), None, "{typed}: nothing keys");
+        let mut e = station(Tier::Ft8);
+        e.start_cq(None).expect("a run");
+        assert!(e.qso_freetext_checked(typed).is_err(), "{typed}: free text");
+        e.set_tx_enabled_by_operator(true);
+        assert!(
+            e.udp_free_text(typed, true).is_err(),
+            "{typed}: a logger's FreeText"
+        );
+        assert_eq!(
+            keyed(&mut e, 0).as_deref(),
+            Some("CQ K1ABC FN31"),
+            "{typed}: the run's CQ is untouched"
+        );
+    }
+    // CONTROL: our own overs, and free text that names no sender.
+    let mut e = station(Tier::Ft8);
+    e.override_next_tx_checked("W1XYZ", None, "W1XYZ K1ABC FN31")
+        .expect("our Tx1");
+    let mut e = station(Tier::Ft8);
+    e.start_cq(None).expect("a run");
+    e.qso_freetext_checked("TNX 73 GL").expect("free text");
+}
+
+/// A start the run refuses leaves no typed CQ behind: the next run, entered another way, calls
+/// the CQ built from the CQ word and Settings, not the typed grid.
+#[test]
+fn a_refused_start_leaves_no_typed_cq_behind() {
+    let mut e = station(Tier::Wspr);
+    assert!(
+        e.start_cq_as_typed("CQ DX K1ABC FN42").is_err(),
+        "premise: no CQ run on a beacon"
+    );
+    e.set_tier(Tier::Ft8);
+    e.set_mode("qso-run").expect("the screen's run");
+    assert_eq!(keyed(&mut e, 0).as_deref(), Some("CQ DX K1ABC FN31"));
+}
+
+/// ⭐ THE BOX WSJT-X WRITES AGAIN MID-RUN IS KEYED AT THE NEXT OVER. Generate Std Msgs (10505), a
+/// frequency change (12520, 13858) or a mode switch (10803) rewrite the Tx6 box while the station
+/// calls CQ; WSJT-X keys the box at the next period, so Nexus does, and the box and the TX line
+/// agree. Outside calling CQ it changes nothing, and a rewrite as another station is refused.
+#[test]
+fn a_tx6_rewritten_mid_run_is_keyed_at_the_next_over() {
+    let mut e = station(Tier::Ft8);
+    e.start_cq_as_typed("CQ DX K1ABC FN42").expect("a run");
+    assert_eq!(keyed(&mut e, 0).as_deref(), Some("CQ DX K1ABC FN42"));
+    // A QSY mid-run: the cockpit writes the box again and hands it over.
+    e.set_frequency(14.080, "20m", "USB");
+    e.rewrite_cq("CQ DX K1ABC FN31").expect("rewritten");
+    assert_eq!(
+        tx_now(&e).as_deref(),
+        Some("CQ DX K1ABC FN31"),
+        "the TX line"
+    );
+    assert_eq!(
+        keyed(&mut e, 2).as_deref(),
+        Some("CQ DX K1ABC FN31"),
+        "the next over"
+    );
+    // As another station: refused, and the over stands.
+    assert!(e.rewrite_cq("CQ DX W1XYZ FN31").is_err());
+    assert_eq!(e.cq_dir.as_deref(), Some("DX"), "the CQ word stands");
+    assert_eq!(keyed(&mut e, 4).as_deref(), Some("CQ DX K1ABC FN31"));
+    // In a contact the box is not the over: nothing changes.
+    e.hear_for_test("K1ABC W9XYZ EN37", -12, 6);
+    assert_eq!(
+        keyed(&mut e, 6).as_deref(),
+        Some("W9XYZ K1ABC -12"),
+        "premise"
+    );
+    e.rewrite_cq("CQ DX K1ABC FN31").expect("no-op");
+    assert_eq!(tx_now(&e).as_deref(), Some("W9XYZ K1ABC -12"));
+    // Not running: nothing starts.
+    let mut e = station(Tier::Ft8);
+    e.rewrite_cq("CQ DX K1ABC FN31").expect("no-op");
+    assert_eq!(tx_now(&e), None);
 }

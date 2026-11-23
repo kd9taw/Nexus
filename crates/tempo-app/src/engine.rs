@@ -22535,8 +22535,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
             Some(dx) => addressed_free_text(&mycall, dx, text),
             None => tempo_core::message::Msg::Other(text.to_string()),
         };
-        // Free text goes on the air as it is (`QsoStation::hashed_form` passes `Msg::Other`).
-        if let Some(why) = self.ft_refusal(&msg.to_text()) {
+        // Free text goes on the air as it is (`QsoStation::hashed_form` passes `Msg::Other`), and
+        // never as another station ([`Self::sender_refusal`]).
+        if let Some(why) = self
+            .ft_refusal(&msg.to_text())
+            .or_else(|| self.sender_refusal(text, &msg.to_text()))
+        {
             return Err(why);
         }
         if let Mode::Qso { station, .. } = &mut self.mode {
@@ -22590,7 +22594,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
     pub fn override_next_tx_refusal(&self, dxcall: &str, text: &str) -> Option<String> {
         let mycall = &self.settings.mycall;
         let row = QsoStation::answering(mycall, "", dxcall).tx_row(text);
-        self.ft_refusal(&QsoStation::on_air_form(mycall, dxcall, row).to_text())
+        let on_air = QsoStation::on_air_form(mycall, dxcall, row).to_text();
+        // ⛔ …and never an over sent as another station ([`Self::sender_refusal`]).
+        self.ft_refusal(&on_air)
+            .or_else(|| self.sender_refusal(text, &on_air))
     }
 
     // ----- command delegates ----------------------------------------------
@@ -22825,7 +22832,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.tier_is_rx_only(self.app.tier()) {
             return Err("transmit unavailable for this tier".into());
         }
-        if let Some(why) = self.ft_refusal(&on_air.to_text()) {
+        // A logger's text is held to the operator's own: never an over sent as another station
+        // ([`Self::sender_refusal`]).
+        if let Some(why) = self
+            .ft_refusal(&on_air.to_text())
+            .or_else(|| self.sender_refusal(text, &on_air.to_text()))
+        {
             return Err(why);
         }
         if let Mode::Qso { station, .. } = &mut self.mode {
@@ -32441,10 +32453,49 @@ contact yourself."
         started
     }
 
+    /// The Tx6 box as WSJT-X's `genCQMsg` (mainwindow.cpp 9466) has just written it AGAIN mid-run:
+    /// on Generate Std Msgs (10505), a frequency change (12520, 13858) or a mode switch
+    /// (`displayWidgets`, 10803). WSJT-X keys its box at the next period, so a station calling CQ
+    /// here keys `text` at its next over, and the box and the TX line never disagree. Refused as
+    /// [`Self::start_cq_as_typed`] refuses, with nothing changed; a station doing anything but
+    /// calling CQ in a run (in a contact, listening, in a contest WSJT-X has an activity for) is
+    /// left alone, as the next contact or start builds its CQ anyway.
+    pub fn rewrite_cq(&mut self, text: &str) -> Result<(), String> {
+        let calling = match &self.mode {
+            Mode::Qso {
+                station,
+                running: true,
+            } => self.cq_running && station.state == QsoState::CallingCq,
+            Mode::FieldDay {
+                station,
+                running: true,
+            } => {
+                self.contest_cq_typed() && station.state == tempo_core::fieldday::FdState::CallingCq
+            }
+            _ => false,
+        };
+        if !calling {
+            return Ok(());
+        }
+        let before = self.cq_dir.clone();
+        let msg = self
+            .tx6_message(text)
+            .inspect_err(|_| self.cq_dir = before.clone())?;
+        match &mut self.mode {
+            // The same over again is no new one: its repeat count stands.
+            Mode::Qso { station, .. } if station.pending.as_ref() != Some(&msg) => {
+                station.override_next(msg)
+            }
+            Mode::FieldDay { station, .. } => station.call_typed_cq(msg),
+            _ => {}
+        }
+        Ok(())
+    }
+
     /// The over the Tx6 row's `text` makes ([`Self::start_cq_as_typed`]), as the packer sends it,
     /// or the refusal; on success the row's CQ word is [`Self::cq_dir`], WSJT-X's `m_CQtype`.
     fn tx6_message(&mut self, text: &str) -> Result<Msg, String> {
-        use tempo_core::message::{is_callsign, is_cq_dir, is_valid_grid};
+        use tempo_core::message::{is_cq_dir, is_valid_grid};
         let mut words: Vec<String> = text.split_whitespace().map(str::to_uppercase).collect();
         if words.is_empty() {
             return Err("Tx 6 is empty, so nothing goes out.".into());
@@ -32457,22 +32508,6 @@ contact yourself."
             words[n - 1].truncate(4);
         }
         let typed = words.join(" ");
-        let mycall = self.settings.mycall.clone();
-        // A CQ under our own call only: a word after CQ that is somebody else's callsign
-        // (`CQ DX W1XYZ FN42`, `CQ W1XYZ POTA`) would call CQ as that station.
-        let foreign = words[0] == "CQ"
-            && words[1..].iter().any(|w| {
-                is_callsign(w)
-                    && !is_valid_grid(w)
-                    && w != "RR73"
-                    && !w.eq_ignore_ascii_case(&mycall)
-            });
-        if foreign {
-            return Err(format!(
-                "Tx 6 calls CQ as another station: \"{typed}\". A CQ goes out under your own call, {}.",
-                mycall.to_uppercase()
-            ));
-        }
         if let Some(why) = self.ft_refusal(&typed) {
             return Err(why);
         }
@@ -32480,13 +32515,10 @@ contact yourself."
         let on_air = self.tx6_packed_text(&typed).ok_or_else(|| {
             format!("\"{typed}\" cannot be encoded, so nothing goes out. Tx 6 takes plain letters, digits and punctuation.")
         })?;
+        if let Some(why) = self.sender_refusal(&typed, &on_air) {
+            return Err(why);
+        }
         let msg = match Msg::parse(&on_air) {
-            Msg::Cq { de, .. } if !de.eq_ignore_ascii_case(&mycall) => {
-                return Err(format!(
-                    "Tx 6 calls CQ as another station: \"{typed}\". A CQ goes out under your own call, {}.",
-                    mycall.to_uppercase()
-                ));
-            }
             cq @ Msg::Cq { .. } => cq,
             _ => Msg::Other(on_air),
         };
@@ -32495,6 +32527,74 @@ contact yourself."
             self.cq_dir = Some(words[1].clone()).filter(|t| is_cq_dir(t));
         }
         Ok(msg)
+    }
+
+    /// ⛔ **THE IDENTITY GUARD on an operator's own text**: why `typed`, going on the air as
+    /// `on_air`, would be sent as a station other than this one, or `None`. It is the one
+    /// deliberate difference from WSJT-X, which keys a Tx box whatever call it names.
+    ///
+    /// Two halves, because neither text alone shows every case:
+    /// - A text opening with `CQ`, `QRZ` or `DE` names its sender in a later word, so any other
+    ///   callsign there is someone else's call, in what was typed (a free-text frame keeps only 13
+    ///   characters, so `CQ POTA DE W1XYZ` goes out as `CQ POTA DE W1` and only the typed text
+    ///   still names W1XYZ) and in what goes out.
+    /// - A STRUCTURED frame (anything but free text, `i3=0 n3=0`) is read by every receiver as
+    ///   sent by its sender word: the `de` of the standard message, else the second word, as
+    ///   WSJT-X's `deCallAndGrid` reads it (`Decoder/decodedtext.cpp` 212-224). `W1XYZ N0OTH FN42`
+    ///   is N0OTH calling W1XYZ, whatever box it was typed in.
+    ///
+    /// Our call is the Settings call whole, a hashed form's brackets dropped ([`names_whole_call`]):
+    /// a portable form goes out only once it is the Settings call. Free text naming nobody as its
+    /// sender passes.
+    fn sender_refusal(&self, typed: &str, on_air: &str) -> Option<String> {
+        use tempo_core::message::{is_callsign, is_valid_grid, unhash_call};
+        let mycall = self.settings.mycall.trim().to_uppercase();
+        let is_call = |w: &str| {
+            let u = unhash_call(w);
+            is_callsign(u) && !is_valid_grid(u) && u != "RR73"
+        };
+        let foreign =
+            |w: &str| (is_call(w) && !names_whole_call(w, &mycall)).then(|| w.to_string());
+        let named = |text: &str| {
+            let words: Vec<String> = text.split_whitespace().map(str::to_uppercase).collect();
+            if !matches!(words.first().map(String::as_str), Some("CQ" | "QRZ" | "DE")) {
+                return None;
+            }
+            words[1..].iter().find_map(|w| foreign(w))
+        };
+        let sender = named(typed).or_else(|| named(on_air)).or_else(|| {
+            if self.sends_free_text(on_air) {
+                return None;
+            }
+            let de = match Msg::parse(on_air) {
+                Msg::Cq { de, .. }
+                | Msg::Grid { de, .. }
+                | Msg::Report { de, .. }
+                | Msg::RReport { de, .. }
+                | Msg::Rr73 { de, .. }
+                | Msg::Rrr { de, .. }
+                | Msg::Bye73 { de, .. }
+                | Msg::FieldDay { de, .. } => de,
+                Msg::Other(text) => text.split_whitespace().nth(1)?.to_uppercase(),
+            };
+            foreign(&de)
+        })?;
+        Some(format!(
+            "\"{typed}\" would go out as {sender}, not as your call {mycall}, so nothing goes out."
+        ))
+    }
+
+    /// Whether `text` goes out as free text (`i3=0 n3=0`): on the 77-bit tiers read from the frame
+    /// the packer writes, on any other tier when it reads as no standard message.
+    fn sends_free_text(&self, text: &str) -> bool {
+        if matches!(
+            self.app.tier(),
+            Tier::Ft8 | Tier::Ft4 | Tier::Ft2 | Tier::Q65 | Tier::Msk144 | Tier::Fst4
+        ) {
+            return modes::wsjt77::message_bits(text)
+                .is_some_and(|b| b[71..77].iter().all(|&x| x == 0));
+        }
+        matches!(Msg::parse(text), Msg::Other(_))
     }
 
     /// The text a receiving station decodes from the frame `text` packs to on the 77-bit tiers
