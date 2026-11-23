@@ -462,9 +462,10 @@ pub(crate) struct SplitApply {
     /// Split Operation, which keys nothing either until it is cleared.
     pub split_off_unconfirmed: bool,
     /// The refusal is only the budget: the radio took every split write it was sent (`RPRT 0`),
-    /// too slowly for the key ([`SPLIT_LATE_DROPS_HALT`]). Only this over is dropped, TX stays on,
-    /// and the split stays held with what the radio confirmed, so the next over sends less.
-    pub dropped_late: bool,
+    /// too slowly for the key ([`SPLIT_LATE_DROPS_HALT`]), in this many ms. Only this over is
+    /// dropped, TX stays on, and the split stays held with what the radio confirmed, so the next
+    /// over sends less.
+    pub dropped_late: Option<u64>,
 }
 
 /// Apply the WSJT-X Split-Operation dial shift for the over about to key (must
@@ -481,9 +482,11 @@ pub(crate) struct SplitApply {
 /// as WSJT-X 3.0.2 does: the TX frequency goes out before every key with split on
 /// (`Transceiver/TransceiverBase.cpp:165-171`), XIT 0's being the RX dial
 /// (`widgets/mainwindow.cpp:12378-12387`). Such an over writes split on, VFO B on the RX dial, its
-/// mode and split on last, and from then on holds the split like any other. Only a cluster
-/// SPLIT-on-Work, which owns VFO B, and a mode Split Operation does not apply to (with no split
-/// held) write nothing here.
+/// mode and split on last, and from then on holds the split like any other. So does an over in a
+/// mode Split Operation has no shift for (MSK144, Q65, JT65, FST4 and the rest), whose TX dial is
+/// always the RX dial, as WSJT-X writes XIT 0 for every mode with split on. Only a cluster
+/// SPLIT-on-Work, which owns VFO B, and an over off the digital screens with no split held write
+/// nothing here.
 ///
 /// ⭐ RIG SPLIT IS TURNED ON ONCE AND HELD, AS WSJT-X HOLDS IT. WSJT-X sets split on the first
 /// time (`Transceiver/HamlibTransceiver.cpp:965-987`) and after that writes the TX frequency at
@@ -523,7 +526,7 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
         rig_split_engaged: false,
         refused: None,
         split_off_unconfirmed: false,
-        dropped_late: false,
+        dropped_late: None,
     };
     let shift = eng.take_tx_dial_shift();
     // ⛔ THE RADIO MAY STILL BE IN NEXUS'S SPLIT: its release was refused or not answered, so any
@@ -553,11 +556,12 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
             ..none
         };
     }
-    // Rig split writes for every over of a mode Split Operation applies to, shift or none, and for
-    // every over while Nexus holds the split (above).
+    // Rig split writes for every over on the digital screens, whatever the mode and the shift, and
+    // for every over while Nexus holds the split (above).
     let rig_split_writes = eng.settings().split_mode == SplitMode::Rig
         && !eng.cluster_split_active()
-        && (rig.tx_split_held || eng.planned_tx_dial_shift().is_some());
+        && (rig.tx_split_held
+            || eng.settings().operating_mode == tempo_app::settings::OperatingMode::Digital);
     if shift == 0 && !rig_split_writes {
         return none;
     }
@@ -590,15 +594,16 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
             // ⭐ A SPLIT THE RADIO TOOK, TOO SLOWLY, COSTS THIS OVER, NOT THE SESSION
             // ([`SPLIT_LATE_DROPS_HALT`]): the split stays held and what the radio confirmed is
             // kept, so the next over sends less; TX stays on. The third such over in a row halts.
-            let dropped_late = late_only && rig.split_late_drops + 1 < SPLIT_LATE_DROPS_HALT;
-            rig.split_late_drops = if dropped_late {
+            let dropped_late =
+                late_only.filter(|_| rig.split_late_drops + 1 < SPLIT_LATE_DROPS_HALT);
+            rig.split_late_drops = if dropped_late.is_some() {
                 rig.split_late_drops + 1
             } else {
                 0
             };
             // A refused over is let go of at the loop's next quiet point
             // (`Rig::split_refused_at_key`), as it was when its halt alone let go.
-            rig.split_refused_at_key |= sent.is_err() && !dropped_late;
+            rig.split_refused_at_key |= sent.is_err() && dropped_late.is_none();
             SplitApply {
                 dropped_late,
                 // Engaged once the radio took split on (or got it and never answered), or VFO B
@@ -633,8 +638,8 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
 /// radio has not already confirmed them for this dial ([`Rig::split_confirmed`]), then split on
 /// last, every write inside `budget_ms` from the first. `Ok` stores what the radio confirmed, and
 /// so does an `Err` that is only the budget running out after every write sent was taken (`RPRT 0`)
-/// on one connection, which the second `bool` says: those writes are on the radio, and the next
-/// over need not send them again. Any other `Err` leaves nothing confirmed. The first `bool` says
+/// on one connection, whose time (ms) the `Option` gives: those writes are on the radio, and the
+/// next over need not send them again. Any other `Err` leaves nothing confirmed. The `bool` says
 /// whether VFO B was written.
 ///
 /// One sequence for the key ([`apply_tx_dial_shift`], [`SPLIT_WRITES_BUDGET_MS`]) and for the
@@ -646,7 +651,7 @@ fn write_rig_split(
     tx_dial: u64,
     md: &str,
     budget: u64,
-) -> (std::io::Result<()>, bool, bool) {
+) -> (std::io::Result<()>, bool, Option<u64>) {
     // What the radio confirmed for this dial, only while this connection holds the split.
     let mut confirmed = rig
         .take_split_confirmed()
@@ -707,10 +712,12 @@ fn write_rig_split(
         }
         Ok(())
     })();
-    let late_only = sent.as_ref().err().is_some_and(split_budget_spent)
-        && !first_split_refused
-        && rig.connection_drops() == drops_at_take;
-    if sent.is_ok() || late_only {
+    let late_only = sent
+        .as_ref()
+        .err()
+        .and_then(split_budget_spent)
+        .filter(|_| !first_split_refused && rig.connection_drops() == drops_at_take);
+    if sent.is_ok() || late_only.is_some() {
         rig.split_confirmed = Some(confirmed);
     }
     (sent, vfo_b_written, late_only)
@@ -773,6 +780,29 @@ pub(crate) fn preset_rig_split(
     md: &str,
 ) -> (std::io::Result<()>, bool) {
     let (sent, vfo_b_written, _) = write_rig_split(rig, dial, tx_dial, md, SPLIT_PRESET_BUDGET_MS);
+    (sent, rig.tx_split_held || vfo_b_written)
+}
+
+/// Split Operation = Rig's split for a key that is not a slot over (a tune, the operator's PTT, a
+/// CW word) on the digital screens while Nexus holds no split: split on, VFO B on the RX dial
+/// `dial` (WSJT-X's XIT 0), its mode `md` and split on last. The radio may be in a split it was
+/// left in, VFO B anywhere, and such a key used to go out of it with nothing written. `Err` keys
+/// nothing.
+///
+/// Under [`SPLIT_PRESET_BUDGET_MS`], not a slot over's [`SPLIT_WRITES_BUDGET_MS`]: such a key has
+/// no slot clock to be on time for, and the over's budget exists only for that. A cold split on
+/// an FTDX10 (four lines, about 770 ms) would refuse every first Tune after a band change under
+/// 500 ms; under 1000 ms it goes out, every write still confirmed before the key. A radio slower
+/// than that refuses the key, keeping what it confirmed, so the next press needs less. The `bool` is whether
+/// the radio took split on or VFO B was written, so the loop holds the split (and lets go of it)
+/// as after an over that engaged it.
+#[cfg_attr(not(feature = "device"), allow(dead_code))] // caller lives in service.rs (device)
+pub(crate) fn rig_split_on_the_dial(
+    rig: &mut Rig,
+    dial: u64,
+    md: &str,
+) -> (std::io::Result<()>, bool) {
+    let (sent, vfo_b_written, _) = write_rig_split(rig, dial, dial, md, SPLIT_PRESET_BUDGET_MS);
     (sent, rig.tx_split_held || vfo_b_written)
 }
 
@@ -842,9 +872,10 @@ fn split_writes_budget_ms(_rig: &Rig) -> u64 {
 /// halts with the reason, as before.
 pub(crate) const SPLIT_LATE_DROPS_HALT: u8 = 3;
 
-/// The error [`within_split_budget`] gives: only the time ran out, not a write.
+/// The error [`within_split_budget`] gives: only the time ran out, not a write. Its words, and
+/// how long (ms) the writes had taken.
 #[derive(Debug)]
-struct SplitBudgetSpent(String);
+struct SplitBudgetSpent(String, u64);
 
 impl std::fmt::Display for SplitBudgetSpent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -854,10 +885,10 @@ impl std::fmt::Display for SplitBudgetSpent {
 
 impl std::error::Error for SplitBudgetSpent {}
 
-/// Whether `e` is [`within_split_budget`]'s: the budget ran out, no write was refused.
-fn split_budget_spent(e: &std::io::Error) -> bool {
-    e.get_ref()
-        .is_some_and(|inner| inner.is::<SplitBudgetSpent>())
+/// How long (ms) the split writes had taken when `e`, [`within_split_budget`]'s, said the budget ran
+/// out; `None` for any other error (a write refused or not answered).
+fn split_budget_spent(e: &std::io::Error) -> Option<u64> {
+    e.get_ref()?.downcast_ref::<SplitBudgetSpent>().map(|s| s.1)
 }
 
 /// `Err` once the split writes begun at `started` have taken longer than `budget_ms`, in words for
@@ -867,10 +898,13 @@ fn within_split_budget(started: std::time::Instant, budget_ms: u64) -> std::io::
     if took > u128::from(budget_ms) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::TimedOut,
-            SplitBudgetSpent(format!(
-                "the radio took {took} ms to confirm the split writes, more than the \
-                 {budget_ms} ms Nexus allows before the key"
-            )),
+            SplitBudgetSpent(
+                format!(
+                    "the radio took {took} ms to confirm the split writes, more than the \
+                     {budget_ms} ms Nexus allows before the key"
+                ),
+                u64::try_from(took).unwrap_or(u64::MAX),
+            ),
         ));
     }
     Ok(())
@@ -1209,17 +1243,10 @@ pub fn slot_tx_phase(
         // BEFORE the carrier keys.
         let split = apply_tx_dial_shift(eng, rig);
         if let Some(why) = &split.refused {
-            if split.dropped_late {
-                // Taken, too slowly: this over alone is dropped, TX stays on, the split held.
-                tempo_core::applog::info(
-                    "tx",
-                    &format!(
-                        "{} over dropped: {why}; every split write was taken and is kept, so the \
-                         next over sends fewer; {} in a row; transmit stays on",
-                        eng.tier().label(),
-                        rig.split_late_drops,
-                    ),
-                );
+            if let Some(took_ms) = split.dropped_late {
+                // Taken, too slowly: this over alone is dropped, TX stays on, the split held, and
+                // the operator is told on screen as for an over keyed past its period.
+                eng.drop_over_for_a_late_split(why, took_ms, u32::from(rig.split_late_drops));
             } else {
                 // The radio did not take the TX dial: no key, TX halted, and the split put back as
                 // after any over (the native loop does it on its next idle tick).

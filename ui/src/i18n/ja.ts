@@ -9447,6 +9447,8 @@ export const JA: PartialCatalog = {
   "shell.lane.slotAudioLost.detail": "{{time}} UTC、送信の途中で、送信音声を無線機へ運ぶ経路（Flex DAX または TCI）が止まったため、その送信の残りは無音で出るところでした。Nexus はそこで送信を終了し、TX をオフにしました。続けるには TX をもう一度オンにしてください。",
   "shell.lane.slotOverDropped.message": "送信破棄 — 無線機のキーイング遅延",
   "shell.lane.slotOverDropped.detail": "この送信は破棄されました。無線機がキーイングされたのは {{time}} UTC で、あなたの期間が終わってから {{late}} 後でした（CAT の通信が遅いため）。そのため Nexus はすぐにキーイングを解除して何も送信せず、次の送信に備えて TX はオンのままにしました。スプリット運用ではキーイングの前に毎回無線機へコマンドを送るため、遅い CAT 接続では数秒かかることがあります。これが続く場合は、設定の CAT 接続とスプリット運用を確認してください。",
+  "shell.lane.slotOverDropped.splitLate.message": "送信破棄 — スプリットのコマンドが遅すぎます",
+  "shell.lane.slotOverDropped.splitLate.detail": "この送信はキーイング前に破棄されました。{{time}} UTC に無線機がスプリット運用のコマンドを確認するまで {{late}} かかり、Nexus がキーイング前に許す時間を超えたため、何も送信していません。TX はオンのままで、無線機が受け付けた内容は保持されるので、次の送信で必要なコマンドは少なくなります。この理由で 3 回続けて破棄されると TX はオフになります。設定の CAT 接続とスプリット運用を確認してください。",
   "shell.lane.pttRefused.message": "PTT 拒否",
   "shell.lane.pttRefused.detail": "{{time}} UTC、Nexus はこの {{mode}} の送信をキーイングしませんでした。無線機は Nexus が設定したとおり、まだ送信オーディオを DAX から受けていて、マイクからではなかったため、声は送信されないところでした。何も送信されていません。PTT を離すと、Nexus はまもなく無線機をマイク入力に戻します。そのあと PTT をもう一度押してください。",
   "shell.lane.txWatchdog.detail": "送信はオフです。もう一度送信するには TX On を押してください。",

@@ -8520,8 +8520,9 @@ impl RadioLoop {
     /// Whether a Rig split held between overs must be let go now: Split Operation is no longer
     /// Rig, a cluster SPLIT-on-Work owns VFO B, the band has changed since split was turned on, the
     /// station left the digital screens (a phone or CW transmission must never go out of VFO B on
-    /// the last FT TX dial), or the mode is one Split Operation does not apply to (anything but
-    /// FT8, FT4 and FT2). WSJT-X holds split between overs (`Transceiver/TransceiverBase.cpp:160-171`,
+    /// the last FT TX dial). A change to a mode Split Operation has no shift for (MSK144, Q65, JT65,
+    /// FST4) is not one: every over there writes VFO B on the RX dial before its key
+    /// (`slot::apply_tx_dial_shift`), as WSJT-X writes XIT 0 for every mode. WSJT-X holds split between overs (`Transceiver/TransceiverBase.cpp:160-171`,
     /// `widgets/mainwindow.cpp:12378-12387`); these are the points where Nexus lets go of it. The
     /// radio changing and Nexus stopping let go where they happen.
     ///
@@ -8536,7 +8537,6 @@ impl RadioLoop {
         s.split_mode != SplitMode::Rig
             || eng.cluster_split_active()
             || s.operating_mode != OperatingMode::Digital
-            || eng.planned_tx_dial_shift().is_none()
             || !same_named_band(self.rig_split_dial, s.dial_hz())
     }
 
@@ -8589,7 +8589,7 @@ impl RadioLoop {
             // the teardown has given up and said so.
             Err("the radio has not yet gone back to the dial after the Fake It over".to_string())
         } else if !self.audio_rig_split {
-            return Ok(());
+            self.rig_split_on_the_dial(engine, rig)
         } else {
             self.ready_held_rig_split(engine, rig)
         };
@@ -8626,13 +8626,41 @@ impl RadioLoop {
             if rig.split_release_pending {
                 Err("the radio did not take the split release".to_string())
             } else {
-                Ok(())
+                // Still on the digital screens (the band changed): the new dial's split first.
+                self.rig_split_on_the_dial(engine, rig)
             }
         } else if rig.tx_split_held {
             crate::slot::vfo_b_to_the_rx_dial(rig, dial).map_err(|e| e.to_string())
         } else {
             Ok(())
         }
+    }
+
+    /// ⛔ A KEY THAT IS NOT A SLOT OVER, ON THE DIGITAL SCREENS WITH SPLIT OPERATION = RIG AND NO
+    /// SPLIT HELD, GOES OUT ONLY ONCE NEXUS HAS WRITTEN THE SPLIT FOR THE DIAL. The radio may be in a
+    /// split it was left in, VFO B on another band: a tune, the operator's PTT or a CW ID right
+    /// after connecting, before the pre-set, went out of it. WSJT-X writes the TX frequency at its
+    /// start and before every key with split on, XIT 0's being the dial; so here split on, VFO B on
+    /// the dial, its mode and split on last ([`crate::slot::rig_split_on_the_dial`]), held after as
+    /// any split an over engaged, or the key goes out with nothing. Off the digital screens, with
+    /// another Split Operation or with a cluster SPLIT-on-Work owning VFO B, nothing is written.
+    fn rig_split_on_the_dial(
+        &mut self,
+        engine: &Arc<Mutex<Engine>>,
+        rig: &mut Rig,
+    ) -> Result<(), String> {
+        let (at, md) = {
+            let eng = engine_lock(engine);
+            (SplitLetGo::of(&eng), eng.rig_mode_effective())
+        };
+        if !at.ft_rig || at.cluster_active || !rig.has_control() {
+            return Ok(());
+        }
+        let (sent, engaged) = crate::slot::rig_split_on_the_dial(rig, at.dial, &md);
+        if engaged {
+            self.hold_rig_split(at.dial);
+        }
+        sent.map_err(|e| e.to_string())
     }
 
     /// The raw ALC read ([`crate::rigmodels::raw_alc_query`]) to ask once, to learn whether this
@@ -8717,8 +8745,9 @@ impl RadioLoop {
     /// pre-set still owed from the band before it; moving from one back into a named band owes one,
     /// as any change of named band does.
     ///
-    /// ⛔ ONLY AT A QUIET POINT. Never with a carrier up: no over, tune or PTT of this loop's, nothing
-    /// keyed by this loop or read as keyed at the radio, and at least
+    /// ⛔ ONLY AT A QUIET POINT. Never with a carrier up: no over, tune or PTT of this loop's, no PC
+    /// microphone open, no CW keying or its hang time, nothing keyed by this loop or read as keyed
+    /// at the radio, and at least
     /// [`crate::slot::SPLIT_PRESET_LEAD_MS`] to the next slot boundary, counted from where the tick
     /// is now (`lead_ms`), so writes started clear of a boundary are done before it.
     ///
@@ -8738,8 +8767,8 @@ impl RadioLoop {
     /// this tick it keys on a later one, after the writes.
     ///
     /// ⛔ ONLY WHERE AN OVER WOULD WRITE SPLIT ITSELF: Split Operation is Rig, the station is on the
-    /// digital screens in a mode Split Operation applies to (FT8, FT4, FT2), and no cluster
-    /// SPLIT-on-Work owns VFO B. Whatever the TX offset: an over in 1500-1999 Hz writes split too,
+    /// digital screens (any mode: one Split Operation has no shift for pre-sets VFO B on the dial),
+    /// and no cluster SPLIT-on-Work owns VFO B. Whatever the TX offset: an over in 1500-1999 Hz writes split too,
     /// VFO B on the RX dial (`slot::apply_tx_dial_shift`), and this pre-set used to be cancelled for
     /// it, so a radio still in another band's split was keyed out of that split. Fake It and None
     /// never pre-set.
@@ -8775,6 +8804,8 @@ impl RadioLoop {
         let quiet = self.tx_until_ms.is_none()
             && !self.manual_ptt_applied
             && !self.tuning_keyed
+            && self.pc_mic_open.is_none()
+            && now >= self.cw_keying_until + CW_HANG_MS
             && !rig.keyed
             && !self.rig_keyed
             && lead_ms >= crate::slot::SPLIT_PRESET_LEAD_MS
@@ -8792,7 +8823,8 @@ impl RadioLoop {
         if tries >= 2 || !settled || !quiet || !free || !wanted {
             return None;
         }
-        let shift = eng.planned_tx_dial_shift()?;
+        // A mode Split Operation has no shift for has XIT 0: VFO B on the dial.
+        let shift = eng.planned_tx_dial_shift().unwrap_or(0);
         let tx_dial = (dial as i64 + shift).max(0) as u64;
         let md = eng.rig_mode_effective();
         if crate::slot::rig_split_confirmed_for(rig, dial, tx_dial, &md) {
@@ -9080,7 +9112,14 @@ impl RadioLoop {
     /// not take is done all the same when a read of the radio's split says it is off
     /// ([`Self::radio_reads_split_off`]): that is the radio's own word on what the release was for,
     /// and it frees a radio that ignores the split write but answers the read.
-    fn retry_rig_split_release(&mut self, rig: &mut Rig, now: f64) {
+    ///
+    /// ⛔ A SPLIT TO PUT BACK IS JUDGED AGAIN AGAINST THE STATION AS IT IS NOW (`at`): the band or
+    /// the screens may have changed while the release was owed, and a split is never put back
+    /// off the dial's band or on the FT screens ([`Self::split_to_put_back`]).
+    fn retry_rig_split_release(&mut self, rig: &mut Rig, now: f64, at: SplitLetGo) {
+        if self.rig_split_put_back.is_some() {
+            self.rig_split_put_back = self.split_to_put_back(at);
+        }
         let done = match self.send_rig_split_release(rig) {
             Ok(()) => Some("the radio took the split release"),
             Err(_) if self.radio_reads_split_off(rig) => {
@@ -17286,10 +17325,11 @@ impl RadioLoop {
             if self.rig_split_release_due(rig, now) {
                 // ⚠️ OUTSIDE THE ENGINE LOCK: on a link that is up but no longer answering, each try
                 // costs a CAT deadline (700 ms, 2.5 s on a network link), and it comes back every
-                // few seconds while the release is owed. Nothing here reads the engine; the code
-                // after this takes it again and reads it as it is then.
+                // few seconds while the release is owed. The station is read before it; the code
+                // after this takes the lock again and reads it as it is then.
+                let at = SplitLetGo::of(&eng);
                 drop(eng);
-                self.retry_rig_split_release(rig, now);
+                self.retry_rig_split_release(rig, now, at);
                 eng = engine_lock(engine);
             }
         } else if self.fake_it_restore.is_some() {

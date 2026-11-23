@@ -21,6 +21,14 @@ export function slotOverDroppedLane(
   if (!d) return null
   // UTC, as every time an operator logs is.
   const time = new Date(d.at * 1000).toISOString().slice(11, 19)
+  // Dropped before its key: Split operation's commands came too late (`late` is how long they took).
+  if (d.splitLate) {
+    return {
+      tier: 'warning',
+      message: t('shell.lane.slotOverDropped.splitLate.message'),
+      detail: t('shell.lane.slotOverDropped.splitLate.detail', { time, late: d.late }),
+    }
+  }
   return {
     tier: 'warning',
     message: t('shell.lane.slotOverDropped.message'),

@@ -24020,6 +24020,32 @@ Pick the one you operate from on the Contesting tab in Settings.",
         });
     }
 
+    /// Drop a slot over before its key because Split Operation = Rig's commands, every one taken
+    /// (`RPRT 0`), took `took_ms`, longer than the radio loop allows before a key (`why`, in its
+    /// words); `count` such overs in a row, this one included. Nothing was keyed. TX stays on, and
+    /// the next over sends only what the radio has not yet confirmed; the radio loop halts TX
+    /// itself on the third in a row.
+    ///
+    /// Told on screen in the dropped over's lane ([`crate::dto::SlotOverDropped::split_late`]), as
+    /// an over keyed past its period is ([`Self::drop_over_keyed_past_its_period`]), since the
+    /// refused key's "TX STOPPED" would be wrong while TX is on. One event, one line in the log.
+    pub fn drop_over_for_a_late_split(&mut self, why: &str, took_ms: u64, count: u32) {
+        tempo_core::applog::info(
+            "tx",
+            &format!(
+                "{} over dropped: {why}; every split write was taken and is kept, so the next \
+                 over sends fewer; {count} in a row; transmit stays on",
+                self.tier().label(),
+            ),
+        );
+        self.slot_over_dropped = Some(crate::dto::SlotOverDropped {
+            at: now_unix_secs(),
+            late: format!("{:.2} s", took_ms as f64 / 1000.0),
+            count,
+            split_late: true,
+        });
+    }
+
     /// The radio keyed an FT8 or FT4 over at a boundary in its own period: a run of dropped overs
     /// ([`Self::drop_over_keyed_past_its_period`]) is over, and so is its lane. A late start needs
     /// no such call: every one follows an operator arm ([`Self::set_tx_enabled`]), which ends the
