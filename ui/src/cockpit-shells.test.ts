@@ -292,9 +292,10 @@ function blockFlexDirection(body: string): string | null {
 function winningValue<T>(
   chain: Array<Set<string>>,
   blockValue: (body: string) => T | null,
+  rules: Rule[] = RULES,
 ): { value: T; selector: string } | null {
   let win: { value: T; selector: string; spec: number; order: number } | null = null
-  for (const r of RULES) {
+  for (const r of rules) {
     if (r.media !== null || !matchesChain(r.selector, chain)) continue
     const v = blockValue(r.body)
     if (v === null) continue
@@ -1891,3 +1892,42 @@ describe("CW's Both view: the radio's scope and the audio view stacked inside th
     expect(winner([...strip, new Set(['ph-scope'])], blockLonghand('min-height'))?.value).toBe('0')
   })
 })
+
+describe("APRS's body has a fixed 10em floor, and the shell it floors in scrolls (2026-11-22)", () => {
+  // The body (the map and the rail) had `min-height: 0`, and where the header and the TX strip took the whole shell
+  // it was crushed to 0 px: the map and the rail's fields gone, clipped where the strip stands (900×600 at 175 %, and
+  // 1366×768 / 1440×900 / 1536×864 at the OS's 150–175 % with the app at 150–175 %, measured). It floors at a pane's
+  // 10em now — FIXED, never content, which would re-arm the map's growth loop (aprsLayout.test.ts) — and that floor is
+  // safe only because the shell is a definite-height flex column whose deficit valve scrolls. CASCADE WINNERS, all
+  // three: a declaration that loses never reaches the box.
+  const body = [...APRS_CHAIN, new Set(['aprs-body'])]
+  const blockDisplay = blockLonghand('display')
+  const fails = (rules: Rule[]): string[] => {
+    const out: string[] = []
+    const floor = winningValue(body, blockLonghand('min-height'), rules)
+    if (floor?.value !== '10em') out.push(`.aprs-body min-height is ${JSON.stringify(floor)}`)
+    const valve = winningValue(APRS_CHAIN, blockOverflowY, rules)
+    if (valve?.value !== 'auto') out.push(`the APRS shell's overflow-y is ${JSON.stringify(valve)}`)
+    const display = winningValue(APRS_CHAIN, blockDisplay, rules)
+    if (display?.value !== 'flex') out.push(`the APRS shell's display is ${JSON.stringify(display)}`)
+    return out
+  }
+  it('the body floors at 10em, the shell scrolls, and the shell is a flex column', () => {
+    expect(fails(RULES)).toEqual([])
+  })
+  // THE CONTROLS: each plant, one at a time, must leave a red.
+  const PLANTS: Array<[string, () => Rule[]]> = [
+    ['a second `min-height: auto` in the body’s own rule', () => parseRules(css.replace(/(\.aprs-body \{[^}]*?min-height: 10em;)/, '$1\n  min-height: auto;'))],
+    ['a later, more specific content floor', () => [...RULES, ...parseRules('.aprs-cockpit .aprs-body { min-height: min-content }').map((r) => ({ ...r, order: 1e9 }))]],
+    ['the valve outranked by a later rule', () => [...RULES, ...parseRules('.app .shell .layout.single.needed-panel.aprs-cockpit { overflow-y: hidden }').map((r) => ({ ...r, order: 1e9 }))]],
+    ['the shell switched to display: block', () => [...RULES, ...parseRules('.app .layout.single.needed-panel.aprs-cockpit { display: block }').map((r) => ({ ...r, order: 1e9 }))]],
+  ]
+  for (const [what, rules] of PLANTS) {
+    it(`the control: ${what} goes red`, () => {
+      const planted = rules()
+      expect(planted.length, 'the plant did not apply').toBeGreaterThan(0)
+      expect(fails(planted), `${what} passed`).not.toEqual([])
+    })
+  }
+})
+
