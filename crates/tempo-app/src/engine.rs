@@ -114,6 +114,9 @@ mod data_mode_licence_tests;
 /// The receive decoders a screen started, stopped when the operator leaves for another section.
 pub mod decoder_screens;
 mod field_day_display;
+/// A directed CQ goes on the air with the four-character grid, as WSJT-X's Tx6 does.
+#[cfg(test)]
+mod ft_directed_cq_grid_tests;
 /// WSJT-X's mid-over message switch for FT8 and FT4 (`m_restart`).
 /// The FT modes' TX drive, remembered per band and mode and brought back between overs.
 mod ft_drive;

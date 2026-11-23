@@ -8399,13 +8399,21 @@ mod tests {
     }
 
     /// The CQ a running station calls, by value, for each set of messages: Field Day's with the
-    /// locator as typed and never a contest GRID, the others with the contest's own GRID or the
-    /// locator's four characters; and, as the Tx6 row shows it, with four characters on the air.
+    /// locator's four characters and never a contest GRID, the others with the contest's own GRID
+    /// or the locator's four characters; and, as the Tx6 row shows it, with four characters on the
+    /// air. Every one packs as the standard CQ it reads as.
     #[test]
     fn the_running_cq_by_value() {
         let cq = |m: FtMessages, session: &str| m.cq("K1ABC", "FN42ab", session, "").to_text();
-        assert_eq!(cq(FtMessages::FieldDay, ""), "CQ FD K1ABC FN42ab");
-        assert_eq!(cq(FtMessages::FieldDay, "EN52"), "CQ FD K1ABC FN42ab");
+        assert_eq!(cq(FtMessages::FieldDay, ""), "CQ FD K1ABC FN42");
+        assert_eq!(cq(FtMessages::FieldDay, "EN52"), "CQ FD K1ABC FN42");
+        for m in [
+            FtMessages::FieldDay,
+            FtMessages::NaVhf,
+            FtMessages::Standard,
+        ] {
+            assert!(packs_as(&cq(m, ""), 1), "{m:?}: a standard CQ");
+        }
         assert_eq!(cq(FtMessages::NaVhf, ""), "CQ TEST K1ABC FN42");
         assert_eq!(cq(FtMessages::NaVhf, "EN52"), "CQ TEST K1ABC EN52");
         assert_eq!(cq(FtMessages::Standard, ""), "CQ K1ABC FN42");
@@ -8418,7 +8426,7 @@ mod tests {
         // nonstandard call's.
         let typed = |m: FtMessages, call: &str| m.cq(call, "FN42ab", "", "QP").to_text();
         assert_eq!(typed(FtMessages::Standard, "K1ABC"), "CQ QP K1ABC FN42");
-        assert_eq!(typed(FtMessages::FieldDay, "K1ABC"), "CQ FD K1ABC FN42ab");
+        assert_eq!(typed(FtMessages::FieldDay, "K1ABC"), "CQ FD K1ABC FN42");
         assert_eq!(typed(FtMessages::NaVhf, "K1ABC"), "CQ TEST K1ABC FN42");
         let nonstandard = typed(FtMessages::Standard, "PJ4/K1ABC");
         assert!(!nonstandard.contains("QP"), "{nonstandard}");
