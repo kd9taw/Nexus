@@ -4329,12 +4329,12 @@ impl FtMessages {
     }
 
     /// The CQ a running station with these messages calls from `mycall` (`genCQMsg`,
-    /// mainwindow.cpp 9466-9531): `CQ FD` with `mygrid` as Field Day has always sent it,
-    /// `CQ TEST` in the ARRL VHF contests, `CQ WW` in WW Digi, `CQ RU` in the RTTY Roundup, and
-    /// where WSJT-X has no activity the CQ the operator typed in Tx6, `dir` its direction ("" for
-    /// a plain CQ), as WSJT-X's normal mode sends its Tx6; all with `sent_grid`: the contest's own
-    /// `session_grid` where it exchanges one, else `mygrid` cut to the four characters WSJT-X
-    /// sends.
+    /// mainwindow.cpp 9466-9531): `CQ FD` with `mygrid` cut to the four characters WSJT-X sends
+    /// (never a contest GRID), `CQ TEST` in the ARRL VHF contests, `CQ WW` in WW Digi, `CQ RU` in
+    /// the RTTY Roundup, and where WSJT-X has no activity the CQ the operator typed in Tx6, `dir`
+    /// its direction ("" for a plain CQ), as WSJT-X's normal mode sends its Tx6; all but Field
+    /// Day's with `sent_grid`: the contest's own `session_grid` where it exchanges one, else
+    /// `mygrid` cut to four characters.
     ///
     /// ⛔ **A nonstandard `mycall` calls WSJT-X's plain CQ, `CQ <call>`, whatever the messages.**
     /// WSJT-X's `stdCall` (mainwindow.cpp 9541-9552) decides, and for a call that fails it
@@ -4351,7 +4351,8 @@ impl FtMessages {
             };
         }
         let (dir, grid) = match self {
-            Self::FieldDay => ("FD", mygrid.to_string()),
+            // Four characters of the locator, as every other CQ (`genCQMsg`: `grid.left (4)`).
+            Self::FieldDay => ("FD", crate::qso::air_grid(mygrid)),
             Self::NaVhf => ("TEST", sent_grid(session_grid, mygrid)),
             Self::WwDigi => ("WW", sent_grid(session_grid, mygrid)),
             Self::RttyRoundup => ("RU", sent_grid(session_grid, mygrid)),
@@ -8399,13 +8400,21 @@ mod tests {
     }
 
     /// The CQ a running station calls, by value, for each set of messages: Field Day's with the
-    /// locator as typed and never a contest GRID, the others with the contest's own GRID or the
-    /// locator's four characters; and, as the Tx6 row shows it, with four characters on the air.
+    /// locator's four characters and never a contest GRID, the others with the contest's own GRID
+    /// or the locator's four characters; and, as the Tx6 row shows it, with four characters on the
+    /// air. Every one packs as the standard CQ it reads as.
     #[test]
     fn the_running_cq_by_value() {
         let cq = |m: FtMessages, session: &str| m.cq("K1ABC", "FN42ab", session, "").to_text();
-        assert_eq!(cq(FtMessages::FieldDay, ""), "CQ FD K1ABC FN42ab");
-        assert_eq!(cq(FtMessages::FieldDay, "EN52"), "CQ FD K1ABC FN42ab");
+        assert_eq!(cq(FtMessages::FieldDay, ""), "CQ FD K1ABC FN42");
+        assert_eq!(cq(FtMessages::FieldDay, "EN52"), "CQ FD K1ABC FN42");
+        for m in [
+            FtMessages::FieldDay,
+            FtMessages::NaVhf,
+            FtMessages::Standard,
+        ] {
+            assert!(packs_as(&cq(m, ""), 1), "{m:?}: a standard CQ");
+        }
         assert_eq!(cq(FtMessages::NaVhf, ""), "CQ TEST K1ABC FN42");
         assert_eq!(cq(FtMessages::NaVhf, "EN52"), "CQ TEST K1ABC EN52");
         assert_eq!(cq(FtMessages::Standard, ""), "CQ K1ABC FN42");
@@ -8418,7 +8427,7 @@ mod tests {
         // nonstandard call's.
         let typed = |m: FtMessages, call: &str| m.cq(call, "FN42ab", "", "QP").to_text();
         assert_eq!(typed(FtMessages::Standard, "K1ABC"), "CQ QP K1ABC FN42");
-        assert_eq!(typed(FtMessages::FieldDay, "K1ABC"), "CQ FD K1ABC FN42ab");
+        assert_eq!(typed(FtMessages::FieldDay, "K1ABC"), "CQ FD K1ABC FN42");
         assert_eq!(typed(FtMessages::NaVhf, "K1ABC"), "CQ TEST K1ABC FN42");
         let nonstandard = typed(FtMessages::Standard, "PJ4/K1ABC");
         assert!(!nonstandard.contains("QP"), "{nonstandard}");

@@ -114,6 +114,9 @@ mod data_mode_licence_tests;
 /// The receive decoders a screen started, stopped when the operator leaves for another section.
 pub mod decoder_screens;
 mod field_day_display;
+/// A directed CQ goes on the air with the four-character grid, as WSJT-X's Tx6 does.
+#[cfg(test)]
+mod ft_directed_cq_grid_tests;
 /// WSJT-X's mid-over message switch for FT8 and FT4 (`m_restart`).
 /// The FT modes' TX drive, remembered per band and mode and brought back between overs.
 mod ft_drive;
@@ -20838,11 +20841,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     s.cq_call_cap = self.cq_call_budget();
                     if let Some(d) = &self.cq_dir {
                         // Directed run: "CQ DX <me> <grid>" instead of plain.
-                        s.override_next(Msg::Cq {
-                            de: mycall.clone(),
-                            grid: mygrid.clone(),
-                            dir: d.clone(),
-                        });
+                        s.set_cq_dir(d);
                     }
                     s
                 }),
@@ -21491,11 +21490,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 s.confirm_with_rrr = self.settings.prefer_rrr;
                 s.cq_call_cap = self.cq_call_budget();
                 if let Some(d) = &self.cq_dir {
-                    s.override_next(Msg::Cq {
-                        de: mycall.clone(),
-                        grid: mygrid.clone(),
-                        dir: d.clone(),
-                    });
+                    s.set_cq_dir(d);
                 }
                 self.mode = Mode::Qso {
                     station: Box::new(s),
@@ -36758,11 +36753,7 @@ contact yourself."
             if let Some(d) = &self.cq_dir {
                 // The directed run stays directed across the pileup (stock: the
                 // edited Tx6 text persists).
-                s.override_next(Msg::Cq {
-                    de: mycall.clone(),
-                    grid: mygrid.clone(),
-                    dir: d.clone(),
-                });
+                s.set_cq_dir(d);
             }
             self.mode = Mode::Qso {
                 station: Box::new(s),

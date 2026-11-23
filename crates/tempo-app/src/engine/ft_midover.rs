@@ -38,7 +38,7 @@
 //! started mid-over, nor a CQ switched (contest rules: the operator starts every QSO).
 
 use super::{
-    call_changed_refusal, Engine, Mode, Msg, QsoStation, Tier, TxGateStamp, TxPlan, TxWaveform,
+    call_changed_refusal, Engine, Mode, QsoStation, Tier, TxGateStamp, TxPlan, TxWaveform,
 };
 
 /// The FT8/FT4 over [`Engine::commit_tx`] handed to the radio loop last: what is on the air while
@@ -144,11 +144,7 @@ impl Engine {
         let mycall = &self.settings.mycall;
         let mut s = QsoStation::calling_cq(mycall, &self.settings.mygrid);
         if let Some(d) = &self.cq_dir {
-            s.override_next(Msg::Cq {
-                de: mycall.clone(),
-                grid: self.settings.mygrid.clone(),
-                dir: d.clone(),
-            });
+            s.set_cq_dir(d);
         }
         s.outgoing().map(|m| m.to_text()).unwrap_or_default()
     }

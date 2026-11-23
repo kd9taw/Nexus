@@ -144,10 +144,10 @@ pub struct Station {
 
 /// The operator's grid AS IT GOES ON AIR: the 4-character field+square, upper-cased.
 ///
-/// ⚠️ A STANDARD FT8/FT4 MESSAGE CARRIES FOUR CHARACTERS AND NO MORE (#42). Hand the packer a
-/// six-character locator and it cannot build the standard grid message at all — it falls out to
-/// free text, which the station you are working cannot auto-sequence against, so the QSO stalls
-/// on their side for reasons invisible on yours.
+/// ⚠️ A STANDARD FT8/FT4 MESSAGE CARRIES FOUR CHARACTERS AND NO MORE (#42). The packer reads
+/// only the first four of a six-character locator (`packjt77.f90` `pack77_1`,
+/// `is_grid4(w(nwords)(1:4))`), so the frame carries four either way; a message TEXT holding six
+/// is what the operator then sees on the TX line and in ALL.TXT, and it is not what was sent.
 ///
 /// Baselined against real WSJT-X rather than reasoned about: `MainWindow::genStdMsgs` opens with
 /// `auto const& my_grid = m_config.my_grid ().left (4);` and every standard message it builds uses
@@ -824,6 +824,21 @@ impl Station {
         self.rv_count = 0;
     }
 
+    /// Call a DIRECTED CQ next: `CQ <dir> <mycall> <grid>` (`CQ DX`, `CQ POTA`, a kHz figure …),
+    /// as the operator's edited Tx6 asks, in place of whatever was about to go out.
+    ///
+    /// ⚠️ Built from this station's own call and grid, never a grid handed in: `self.mygrid` is
+    /// already cut to the four characters a standard message carries ([`air_grid`]), which is
+    /// WSJT-X's `genCQMsg` (`grid.left (4)`). A directed CQ built from the Settings locator
+    /// showed and logged six characters while the packer sent four.
+    pub fn set_cq_dir(&mut self, dir: &str) {
+        self.override_next(Msg::Cq {
+            de: self.mycall.clone(),
+            grid: self.mygrid.clone(),
+            dir: dir.to_string(),
+        });
+    }
+
     /// The message a Tx panel row the operator clicked stands for: `text` read back, except our
     /// roger where no number can ride it. [`Self::hashed_form`] sends that Tx3 as a bare `RRR`
     /// (`<W9XYZ/M> K1ABC/P RRR`), and an `RRR` read back is the Tx4 roger, which `hashed_form`
@@ -1478,6 +1493,14 @@ mod start_context_tests {
         );
 
         assert_eq!(Station::monitoring("KD9TAW", "EN52ab").mygrid, "EN52");
+
+        // The directed CQ is built from the same cut grid.
+        let mut directed = Station::calling_cq("KD9TAW", "EN52ab");
+        directed.set_cq_dir("DX");
+        assert_eq!(
+            directed.outgoing().expect("CQ is pending").to_text(),
+            "CQ DX KD9TAW EN52"
+        );
     }
 
     /// Four characters are untouched, and a lower-case locator comes out matching the CQ path —

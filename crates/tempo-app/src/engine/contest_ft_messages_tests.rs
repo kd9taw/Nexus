@@ -216,7 +216,7 @@ fn heard(text: &str) -> modes::Decode {
 
 /// A station in `contest`, with the master switch on and every Settings field a contest on
 /// the list sends filled for an out-of-state entrant in Massachusetts.
-fn engine_for(contest: &str, grid: &str) -> Engine {
+pub(super) fn engine_for(contest: &str, grid: &str) -> Engine {
     let mut e = Engine::new(ME, grid, 0);
     let mut s = e.settings().clone();
     s.fd_event = contest.into();
@@ -2587,15 +2587,15 @@ fn the_tx6_row_shows_the_cq_the_contests_running_sends() {
         started, 20,
         "Tx 6 pressed in the contests WSJT-X has an activity for"
     );
-    // Field Day with a six-character locator: the Running hands the encoder the locator as typed,
-    // and the air carries four characters — as the row shows, and as WSJT-X's Tx6 does.
+    // Field Day with a six-character locator: the Running hands the encoder four characters, and
+    // the air carries them, as the row shows and as WSJT-X's Tx6 does.
     let mut e = engine_for("arrlfd", "FN42ab");
     e.set_tier(Tier::Ft8);
     assert_eq!(e.contest_running_cq().as_deref(), Some("CQ FD K1ABC FN42"));
     e.start_running().expect("the run starts");
     assert_eq!(
         keyed(&mut e, 0).as_deref(),
-        Some("CQ FD K1ABC FN42ab"),
+        Some("CQ FD K1ABC FN42"),
         "the encoder's text"
     );
     // A locator changed in Settings during the contest: what the row shows is still what goes out.

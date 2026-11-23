@@ -18,6 +18,9 @@ overs refused, with TX turned off.
 - **A late over stays inside your period** in every mode: what does not fit is not sent, and an over that could not
   start in time is skipped, with TX left on for your next one.
 - **Stop TX stops before anything is sent,** even while the radio is still taking the split commands.
+- **A CQ DX, CQ POTA or CQ FD shows and logs the 4-character grid it sends.** With a 6-character grid in Settings,
+  the TX line, Band Activity, ALL.TXT and the message to GridTracker or JTAlert showed all six, though only four
+  ever went on the air. What goes on the air is unchanged.
 - **Tab no longer lands on a control you cannot see** behind the bottom controls, on the FT, CW, Phone,
   RTTY, PSK, JTTY, JS8, SSTV and Tempo screens.
 - **RTTY's waterfall keeps a picture and its buttons on a small or scaled screen,** and **APRS keeps its map and
