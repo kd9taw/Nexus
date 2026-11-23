@@ -190,16 +190,25 @@ pub(crate) fn record(station: &str, addresses: &[&str]) -> PairedStation {
 /// connect waits out its timeout instead.
 pub(crate) fn where_nothing_listens(ip: std::net::Ipv4Addr) -> std::net::SocketAddrV4 {
     static HELD: std::sync::Mutex<Vec<tokio::net::TcpSocket>> = std::sync::Mutex::new(Vec::new());
-    let (socket, at) = ports_below_the_ephemeral_range()
+    let (socket, at) = held_below_the_ephemeral_range(ip);
+    HELD.lock().unwrap().push(socket);
+    at
+}
+
+/// A socket bound on `ip` at a free port below the kernel's ephemeral range and never listened on
+/// ([`where_nothing_listens`]), with its address: a connect there is refused while it is held, and
+/// the test that holds it can listen on it later (`TcpSocket::listen`).
+pub(crate) fn held_below_the_ephemeral_range(
+    ip: std::net::Ipv4Addr,
+) -> (tokio::net::TcpSocket, std::net::SocketAddrV4) {
+    ports_below_the_ephemeral_range()
         .find_map(|port| {
             let at = std::net::SocketAddrV4::new(ip, port);
             let socket = tokio::net::TcpSocket::new_v4().unwrap();
             socket.bind(at.into()).ok()?;
             Some((socket, at))
         })
-        .expect("a free port below the ephemeral range");
-    HELD.lock().unwrap().push(socket);
-    at
+        .expect("a free port below the ephemeral range")
 }
 
 /// A listener on `ip` at a free port below the kernel's ephemeral range: once it is let go, no

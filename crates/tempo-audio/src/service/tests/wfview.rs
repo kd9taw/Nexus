@@ -1106,7 +1106,10 @@ fn with_nothing_answering_at_the_network_address_nexus_starts_nothing_and_says_s
 /// `T 1` reaches it. Every line Nexus sends there is one wfview answers.
 #[test]
 fn started_before_wfview_nexus_waits_for_it_and_then_shares_it() {
-    let addr = format!("127.0.0.1:{}", free_port());
+    // Held until wfview listens there: a port let go between the draw and wfview's bind can be
+    // handed to another socket meanwhile, and wfview's bind then fails as in use.
+    let (port, wfview_port) = unlistened_port();
+    let addr = format!("127.0.0.1:{port}");
     let (engine, settings) = station(&addr, free_port());
     let applied = Transport::from_settings(&settings);
     let (mut rig, daemon, probe) = open_rig(&applied, true);
@@ -1150,7 +1153,7 @@ fn started_before_wfview_nexus_waits_for_it_and_then_shares_it() {
         };
     run(&mut state, &mut rig, 4, &|_| false);
     let waiting = (state.rigctld_proc.is_some(), state.cat_ok, said());
-    let wf = FakeWfview::at(&addr, true);
+    let wf = FakeWfview::serving(listen_on(wfview_port), true);
     // The backoff is 10 s after the first ask again.
     run(&mut state, &mut rig, 40, &|s| s.cat_ok == Some(true));
     let shared = (

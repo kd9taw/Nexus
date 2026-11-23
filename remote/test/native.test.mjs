@@ -282,6 +282,9 @@ test('actual native: a computer running Nexus is listed to the station as one, a
     await probe.send({ type: 'refresh' })
     const paired = await probe.send({ type: 'approve', enrollmentId: stationId, accountId: browser.accountId })
     assert.equal(paired.ok, true, paired.error)
+    // The pairing's browser is granted once the approval has turned Remote on, a moment after the
+    // approval answers (the one-approval test waits for it the same way): the control below needs it.
+    for (let i = 0; i < 100 && !(await probe.send({ type: 'status' })).status.stationPermissions?.length; i++) await delay(100)
     // The computer: its key made in memory, its requests signed as the native client signs them.
     const subject = JSON.parse(Buffer.from(browser.jwt.split('.')[1], 'base64url')).sub
     const computer = app.client(null, '', await app.token(subject, { azp: NATIVE }))

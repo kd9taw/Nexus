@@ -1633,10 +1633,23 @@ mod tests {
             }
             turn.seen().allocations == 1
         };
+        // A ufrag of this test's own, and counters that count only checks naming it: each counter's
+        // port was another socket's a moment ago, and a check still on its way there, from another
+        // road in this process (whose offers share `offer_naming`'s) or on this machine, would be
+        // counted as this road's. The CONTROL hears its checks through the same filter.
+        let ours = credentials().expect("randomness").ufrag;
+        let offer = |candidates| Offer {
+            ufrag: ours.clone(),
+            ..offer_naming(candidates)
+        };
+        let counter = |ip: IpAddr| Counter::naming(ip, &ours);
         let turn = StandIn::start("road", "throwaway-password");
         let road = on_every_interface(Role::Computer, relayed(&turn));
-        let (loopback_one, its_network) = (on_loopback(), Counter::on(road.host().ip()));
-        assert!(road.answer(&offer_naming(vec![loopback_one.line()])));
+        let (loopback_one, its_network) = (
+            counter(Ipv4Addr::LOCALHOST.into()),
+            counter(road.host().ip()),
+        );
+        assert!(road.answer(&offer(vec![loopback_one.line()])));
         let road = Driven::new(road);
         assert!(
             allocated(&turn),
@@ -1644,10 +1657,10 @@ mod tests {
         );
         assert!(road.road.add_candidate(&its_network.line()), "read");
         let control_turn = StandIn::start("road", "throwaway-password");
-        let probed = on_loopback();
+        let probed = counter(Ipv4Addr::LOCALHOST.into());
         let control =
             IceRoad::bind(loopback(), Role::Computer, relayed(&control_turn), TICK).unwrap();
-        assert!(control.answer(&offer_naming(Vec::new())));
+        assert!(control.answer(&offer(Vec::new())));
         let control = Driven::new(control);
         assert!(
             allocated(&control_turn),
@@ -1707,11 +1720,16 @@ mod tests {
         .unwrap();
         assert!(road.answer(&offer_naming(Vec::new())));
         let road = Driven::new(road);
+        // The road's own relayed candidate, not the server's count: the stand-in counts the
+        // allocation before its answer is sent, and until the road's thread has read that answer
+        // the relay has no address, so a peer taken then is not permitted yet.
+        let relayed = || lock(&road.road.state).relayed.is_some();
         let started = Instant::now();
-        while turn.seen().allocations == 0 && started.elapsed() < Duration::from_secs(3) {
+        while !relayed() && started.elapsed() < Duration::from_secs(3) {
             std::thread::sleep(Duration::from_millis(5));
         }
-        assert_eq!(turn.seen().allocations, 1, "premise: the relayed address");
+        assert!(relayed(), "premise: the relayed address");
+        assert_eq!(turn.seen().allocations, 1, "premise: one allocation");
         let held = || lock(&road.road.state).relay.as_ref().map(Turn::held);
         for round in 1..=12u8 {
             road.road.restart_at(Instant::now()).expect("a new offer");

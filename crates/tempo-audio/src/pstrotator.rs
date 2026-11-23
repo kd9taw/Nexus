@@ -724,9 +724,16 @@ mod tests {
             };
             let (tx, heard) = mpsc::channel();
             let el = el.clone();
+            // The link sends from its reply socket (`bind_replies`): only that is the link. The
+            // port is an ephemeral one any process on this machine may still be sending to, and
+            // a stray datagram heard as the link's would fail a test that nothing was sent.
+            let link_at = SocketAddr::from((Ipv4Addr::LOCALHOST, port + 1));
             std::thread::spawn(move || {
                 let mut buf = [0u8; 512];
-                while let Ok((n, _)) = sock.recv_from(&mut buf) {
+                while let Ok((n, from)) = sock.recv_from(&mut buf) {
+                    if from != link_at {
+                        continue;
+                    }
                     let d = String::from_utf8_lossy(&buf[..n]).to_string();
                     if let (true, Some((e, lose))) = (d == EL_QUESTION, &el) {
                         let lost = lose

@@ -13,7 +13,7 @@ use crate::client_mode::tests::{ask, eventually, scratch, screens};
 use crate::client_mode::{Afar, Client, Find, Phase, ThisComputer, Timing};
 use crate::lan_client::audio_road::{Headset, CUSHION_MS, INTERNET_CUSHION_MS};
 use crate::lan_client::link::{Internet, Link};
-use crate::lan_client::tests::listener_below_the_ephemeral_range;
+use crate::lan_client::tests::held_below_the_ephemeral_range;
 use crate::remote_service::tunnel::Approved;
 use crate::remote_service::vault::PairedStation;
 use std::future::Future;
@@ -195,6 +195,10 @@ struct Afield {
     /// The station's address on this network, as the operator typed it: nothing listens there
     /// until a test puts the station's listener there ([`Afield::on_this_network`]).
     lan: SocketAddrV4,
+    /// Its port, held bound and not listening until then: a connect there is refused, and no
+    /// other socket on this machine can be handed the port meanwhile. Let go, another process's
+    /// listener could land on it and hold this computer's try of this network until it timed out.
+    lan_held: Mutex<Option<tokio::net::TcpSocket>>,
     headset: Arc<tempo_client::audio_road::StandIn>,
     driving: tauri::async_runtime::JoinHandle<()>,
     dir: std::path::PathBuf,
@@ -245,13 +249,8 @@ impl Afield {
         client.reach_afar(Arc::clone(&service) as Arc<dyn Afar>);
         client.time_with(timing);
         let screens = screens(&client);
-        // Let go, not held: the station's listener on this network binds it later.
-        let std::net::SocketAddr::V4(lan) = listener_below_the_ephemeral_range(Ipv4Addr::LOCALHOST)
-            .local_addr()
-            .unwrap()
-        else {
-            unreachable!()
-        };
+        // Held, not listening: the station's listener on this network listens on it later.
+        let (lan_held, lan) = held_below_the_ephemeral_range(Ipv4Addr::LOCALHOST);
         let find: Find = {
             // This network's own record: the device id the station's LAN listener gave.
             let (key, pkcs8, device) = (
@@ -282,6 +281,7 @@ impl Afield {
             screens,
             service,
             lan,
+            lan_held: Mutex::new(Some(lan_held)),
             headset,
             driving,
             dir,
@@ -300,9 +300,10 @@ impl Afield {
     /// The station's listener on this network, at the address the operator typed.
     fn on_this_network(&self, stop: watch::Receiver<bool>) {
         let shared = self.s.shared.clone();
-        let at = self.lan;
+        let held = self.lan_held.lock().unwrap().take();
+        let held = held.expect("the station's port on this network, held");
         tauri::async_runtime::block_on(async move {
-            let listener = tokio::net::TcpListener::bind(at).await.unwrap();
+            let listener = held.listen(1024).unwrap();
             tokio::spawn(async move {
                 while let Ok((stream, _)) = listener.accept().await {
                     tokio::spawn(channel::connection(
