@@ -1350,6 +1350,55 @@ mod tests {
     use crate::backend::MockBackend;
     use tempo_app::engine::{run_decode_job, DecodeApplied, DecodePass};
 
+    /// A CAT link like Nexus's CI-V daemon on wfview's virtual port with a radio that never
+    /// answers PTT off: `T 0` answered `RPRT -5` after the daemon's two 1 s tries, the client set
+    /// up for it (`Rig::set_unkey_retried`).
+    fn silent_unkey_on_wfviews_port() -> (crate::rig::remote_tests::Peer, Rig) {
+        let peer = crate::rig::remote_tests::retuning_peer(14_074_000, "PKTUSB", |line, _| {
+            (line == "T 0").then(|| {
+                std::thread::sleep(std::time::Duration::from_millis(2_000));
+                "RPRT -5\n".to_string()
+            })
+        });
+        let mut rig = Rig::rigctld(&peer.address);
+        rig.set_unkey_retried(true);
+        (peer, rig)
+    }
+
+    fn unkey_failed(e: &Engine) -> Option<String> {
+        e.snapshot().radio.slot_unkey_failed.map(|f| f.why)
+    }
+
+    /// ⛔ THE PAST-PERIOD CUT AND A JS8 LATE KEY DECIDE A HALT TOO, so on wfview's port each waits
+    /// for the daemon's two tries, hears the silent radio's `RPRT -5` and halts TX, as an over's
+    /// end does ([`unkey_a_key_past_its_period`], [`crate::js8_slot::unkey_a_late_key`]).
+    #[test]
+    fn on_wfviews_port_the_past_period_cut_and_a_js8_late_key_halt_on_a_silent_radio() {
+        for cut in ["past its period", "JS8 late key"] {
+            let (_peer, mut rig) = silent_unkey_on_wfviews_port();
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            let mut backend = MockBackend::new();
+            if cut == "JS8 late key" {
+                crate::js8_slot::unkey_a_late_key(
+                    &mut e,
+                    &mut rig,
+                    &mut backend,
+                    false,
+                    9_000.0,
+                    8_000.0,
+                );
+            } else {
+                let decided = KeyDecision {
+                    into_slot_ms: 1_000.0,
+                    at: std::time::Instant::now(),
+                };
+                unkey_a_key_past_its_period(&mut e, &mut rig, &mut backend, false, decided, 500.0);
+            }
+            let why = unkey_failed(&e).unwrap_or_else(|| panic!("{cut}: nothing halted"));
+            assert!(why.contains("RPRT -5"), "{cut}: {why}");
+        }
+    }
+
     #[test]
     fn remote_presence_keying_rechecks_authority_before_and_after_ptt_io() {
         use crate::rig::remote_tests::{retuning_peer, writes};

@@ -484,6 +484,55 @@ fn on_wfviews_port_a_radio_that_never_answers_the_unkey_halts_tx_at_the_end_and_
     }
 }
 
+/// The same at the two other ends that decide a slot over's halt: an FT2 over's own end, which has
+/// no WSJT-X window and ends on the loop's deadline unkey, and a logger's HaltTx mid-over. Each
+/// waits for the daemon's two tries, hears its `RPRT -5`, and halts.
+#[test]
+fn on_wfviews_port_a_silent_radio_halts_tx_at_an_ft2_overs_end_and_at_a_loggers_halt_tx() {
+    let mut ft2 = Station::with(Unkey::SilentAfterTwoTries, 14_084_000, "PKTUSB", |e| {
+        e.set_tier(Tier::Ft2);
+        e.set_frequency(14.084, "20m", "USB");
+        e.start_cq(None).expect("Call CQ");
+        let _ = e.take_immediate_tx();
+    });
+    assert_eq!(
+        crate::slot::wsjtx_tx_window_ms(Tier::Ft2),
+        None,
+        "premise: FT2 has no window"
+    );
+    let end = ft2.key_the_over();
+    ft2.run_to(end + 20.0);
+    assert!(
+        ft2.unkey_failed()
+            .is_some_and(|f| f.why.contains("RPRT -5")),
+        "the FT2 over's end: {:?}",
+        ft2.unkey_failed()
+    );
+    assert!(!ft2.armed(), "the FT2 over's end: TX is still on");
+
+    let logger = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let server =
+        WsjtxServer::new("127.0.0.1:0".parse().unwrap(), logger.local_addr().unwrap()).unwrap();
+    let mut s = Station::new(Unkey::SilentAfterTwoTries);
+    s.key_the_over();
+    let cut = s.slot + 5_000.0;
+    s.run_with(Some(&server), cut - 20.0);
+    logger
+        .send_to(&halt_tx_datagram(), server.local_addr().unwrap())
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(20));
+    s.run_with(Some(&server), cut);
+    assert_eq!(
+        s.state.tx_until_ms, None,
+        "premise: the HaltTx cut the over"
+    );
+    assert!(
+        s.unkey_failed().is_some_and(|f| f.why.contains("RPRT -5")),
+        "the HaltTx: {:?}",
+        s.unkey_failed()
+    );
+}
+
 /// ⭐ A LATE ANSWER TO AN FT8 UNKEY HALTS NOTHING. Nexus's own PTT deadline has no counterpart in
 /// WSJT-X, which waits on Hamlib: a slow radio unkeys late there and nothing halts. The loop sends
 /// the unkey again, the radio takes it, and the run goes on.
