@@ -557,11 +557,21 @@ fn engine_loop(
             }
             // Resolve the in-flight request if this frame answers it, unless it is an `FB`/`FA`
             // that may be another frame's late answer, which proves nothing ([`Unanswered`]).
+            //
+            // ⛔ An `FB`/`FA` is an answer of the radio's only when it comes FROM the radio and is
+            // addressed TO this controller. Another controller on the bus (a second program on an
+            // IC-7300's remote jack with "CI-V USB Port: Link to [REMOTE]") gets its own acks on
+            // the same wire; taken as ours they answered whatever was pending. Hamlib drops a
+            // frame from an address it does not know (Hamlib 4.6.5 `rigs/icom/frame.c`).
+            let ack = f.is_ack() || f.is_nak();
+            if ack && (f.from != radio_addr || f.to != super::frame::CONTROLLER) {
+                continue;
+            }
             let late = late_answer_of(&mut unanswered, &f);
             if let Some((req, _, doubtful)) = &mut pending {
                 if let Some(result) = resolves(req.expect, &f) {
                     let another_frames = late.is_some_and(|earlier| earlier != req.frame);
-                    if another_frames && (f.is_ack() || f.is_nak()) {
+                    if another_frames && ack {
                         *doubtful = true;
                     } else {
                         let (req, ..) = pending.take().unwrap();
@@ -1937,6 +1947,30 @@ mod tests {
             "answered at once: {:?}",
             t0.elapsed()
         );
+    }
+
+    /// ⛔ AN `FB` FROM ANOTHER ADDRESS IS NOT THE RADIO'S ANSWER. A second controller on the bus
+    /// (another program on an IC-7300's remote jack) gets acks of its own on the same wire; an
+    /// `FB` from any address but the radio's, or to any controller but this one, answers nothing
+    /// here, on every link, as Hamlib drops a frame from an address it does not know. The control:
+    /// the radio's own `FB` answers.
+    #[test]
+    fn an_ack_not_from_the_radio_to_this_controller_answers_nothing() {
+        for (bus_addr, shared) in [(0x98, false), (0x98, true), (0x94, false)] {
+            let bus = tests_support::LateBus::new(bus_addr, |_| answer(20, Some(true)));
+            let eng = CivEngine::start_on_bus(Box::new(bus), 0x94, None, REQUEST_DEADLINE, shared);
+            std::thread::sleep(Duration::from_millis(400)); // past the start's housekeeping
+            let unkey = eng.handle().transact(set_ptt(0x94, false), Expect::Ack);
+            if bus_addr == 0x94 {
+                assert!(unkey.is_ok(), "the radio's own FB: {unkey:?}");
+            } else {
+                assert_eq!(
+                    unkey,
+                    Err(CivError::Timeout),
+                    "from {bus_addr:#04x}, shared={shared}"
+                );
+            }
+        }
     }
 
     /// The controls: a serial cable (300 ms) and the radio's own network connection (1 s, not a

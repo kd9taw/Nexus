@@ -149,7 +149,7 @@ pub(crate) fn unkey_a_late_key(
     limit_ms: f64,
 ) {
     backend.flush_output();
-    let unkey = (!held).then(|| rig.ptt(false));
+    let unkey = (!held).then(|| rig.unkey_deciding_halt());
     eng.js8_note_late_key(into_ms, limit_ms);
     if let Some(why) = unkey.and_then(|unkey| crate::slot::slot_unkey_failure(&unkey, true)) {
         eng.halt_tx_for_failed_unkey(&why);

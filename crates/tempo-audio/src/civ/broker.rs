@@ -58,12 +58,13 @@
 //! The engine waits [`VIRTUAL_PORT_DEADLINE`] (1 s, Hamlib's Icom per-try time) for each answer,
 //! and an unkey the radio does not answer is sent once more ([`Link::port`],
 //! [`RigBackend::try_set_ptt`]); Hamlib's Icom backend tries up to four times, with 100 ms between
-//! tries, about 4.3 s on a silent radio, where Nexus tries twice, about 2 s. Nexus's client waits for both tries on that link's release
-//! (`rig::RETRIED_RELEASE_DEADLINE_MS`, 2.5 s), so a radio that never answers PTT off is heard
-//! saying so (`RPRT -5`) and a slot over halts, as WSJT-X does, while a slow round trip is simply
-//! answered. ⚠️ The cost: a radio that never answers holds the radio loop about 2 s for each
-//! release, once at a dead over's end and again at each idle self-heal unkey while it stays
-//! silent. A real COM port keeps the serial bus's 300 ms and one try.
+//! tries, about 4.3 s on a silent radio, where Nexus tries twice, about 2 s. The release that
+//! decides a slot over's halt waits for both tries (`rig::Rig::unkey_deciding_halt`, 2.5 s), so a
+//! radio that never answers PTT off is heard saying so (`RPRT -5`) and the over halts, as WSJT-X
+//! does, while a slow round trip is simply answered. ⚠️ The cost: a radio that never answers holds
+//! the radio loop, and the engine lock, about 2 s once per dead over. Every other release (the idle
+//! self-heal, a second unkey in the same tick) keeps the 700 ms PTT deadline, and the self-heal
+//! tries once per 2.5 s there. A real COM port keeps the serial bus's 300 ms and one try.
 
 use std::net::{SocketAddr, TcpListener};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1571,9 +1572,9 @@ impl RigBackend for CivBackend {
     /// backend sends a timed-out command again, up to three times with 100 ms between tries
     /// (`icom_transaction`, Hamlib 4.6.5 `rigs/icom/frame.c`); this sends it once more: one more
     /// unkey on the wire for a radio across a network. Only after both tries is the unkey answered
-    /// `RPRT -5`, about two deadlines out, and Nexus's client waits that long for a release on this
-    /// link (`rig::RETRIED_RELEASE_DEADLINE_MS`), so a radio that never answers PTT off halts a
-    /// slot over with that reason, as WSJT-X does. A key is never sent twice, and a serial bus
+    /// `RPRT -5`, about two deadlines out, and Nexus's client waits that long for the release that
+    /// decides a slot over's halt (`rig::Rig::unkey_deciding_halt`), so a radio that never answers
+    /// PTT off halts the over with that reason, as WSJT-X does. A key is never sent twice, and a serial bus
     /// keeps its one try.
     ///
     /// ⛔ NOT OVER A LATER KEY. Another connection may key while the first try waits; the retry,
@@ -6463,7 +6464,7 @@ mod tests {
         let _ = rig.ptt(true);
         // The over: long enough for every answer to the key to have come in.
         std::thread::sleep(Duration::from_millis(1_500));
-        crate::slot::slot_unkey_failure(&rig.ptt(false), true)
+        crate::slot::slot_unkey_failure(&rig.unkey_deciding_halt(), true)
     }
 
     /// ⛔ AN UNKEY THE RADIO ACKS LATE ENDS THE OVER NORMALLY (#559). Over wfview Remote the
@@ -6492,7 +6493,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1_000));
         let (mut c, mut rd) = client(daemon.local_addr().port());
         assert_eq!(roundtrip(&mut c, &mut rd, "F 14074000\n"), "RPRT -5\n");
-        let unkey = rig.ptt(false);
+        let unkey = rig.unkey_deciding_halt();
         assert_eq!(
             crate::slot::slot_unkey_failure(&unkey, true),
             None,
@@ -6520,7 +6521,7 @@ mod tests {
     /// ⛔ A RADIO THAT NEVER ANSWERS PTT OFF STILL HALTS TX, WITH THE REASON, as WSJT-X does after
     /// Hamlib's tries. On this link the daemon sends the unanswered unkey once more, as Hamlib's
     /// Icom backend retries, and answers `RPRT -5` only after both; Nexus's client waits for that
-    /// on this link's release (`rig::RETRIED_RELEASE_DEADLINE_MS`) instead of its 700 ms, so it
+    /// on the over's own release (`rig::Rig::unkey_deciding_halt`) instead of its 700 ms, so it
     /// hears it, and the slot over halts. Before, with the 700 ms release, the `RPRT -5` came after
     /// the client had stopped reading and was never judged.
     #[test]
@@ -6532,7 +6533,7 @@ mod tests {
         let _ = rig.ptt(true);
         std::thread::sleep(Duration::from_millis(1_500));
         let t0 = std::time::Instant::now();
-        let unkey = rig.ptt(false);
+        let unkey = rig.unkey_deciding_halt();
         let took = t0.elapsed();
         let why = crate::slot::slot_unkey_failure(&unkey, true).expect("a silent radio halts TX");
         assert!(why.contains("RPRT -5"), "{why}");
@@ -6565,7 +6566,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(1_000));
         let (mut c, mut rd) = client(daemon.local_addr().port());
         assert_eq!(roundtrip(&mut c, &mut rd, "F 14074000\n"), "RPRT -5\n");
-        let unkey = rig.ptt(false);
+        let unkey = rig.unkey_deciding_halt();
         let why = crate::slot::slot_unkey_failure(&unkey, true).expect("not taken as unkeyed");
         assert!(why.contains("RPRT -5"), "{why}");
         assert_eq!(unkeys(&written).len(), 2, "the unkey, then once more");

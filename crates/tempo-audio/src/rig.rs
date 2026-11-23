@@ -92,8 +92,12 @@ const NETWORK_KEY_DEADLINE_MS: u64 = SLOW_LINK_DEADLINE_MS;
 /// radio that never answers PTT off is heard saying so, and a slot over halts, as WSJT-X does after
 /// Hamlib's retries; any answer faster than that is taken as it comes.
 ///
-/// ⚠️ THE COST: a radio that never answers holds the radio loop that long on each release: once at
-/// the over's end, and again at each idle self-heal unkey while the radio stays silent.
+/// ⚠️ ONLY THE RELEASE THAT DECIDES A HALT WAITS THIS LONG ([`Rig::unkey_deciding_halt`]): a slot
+/// over's end, its past-period cut, a Stop TX or a logger's HaltTx that ends one. Those run under
+/// the engine lock, so on a radio that never answers it is held about 2 s, once per dead over. At
+/// most one such wait in any [`RETRIED_RELEASE_DEADLINE_MS`]: a second in the same tick, or a Stop
+/// TX pressed again, keeps [`PTT_DEADLINE_MS`], as every other release does (the idle self-heal,
+/// which the radio loop also spaces this far apart on such a link).
 pub(crate) const RETRIED_RELEASE_DEADLINE_MS: u64 = SLOW_LINK_DEADLINE_MS;
 
 /// How long a connection may go on owing late answers before it is given up and the next command
@@ -748,6 +752,10 @@ pub struct Rig {
     /// True when this link's daemon sends an unanswered unkey once more before it answers
     /// ([`Self::set_unkey_retried`]): a release then waits [`RETRIED_RELEASE_DEADLINE_MS`].
     unkey_retried: bool,
+    /// When a release last waited [`RETRIED_RELEASE_DEADLINE_MS`] ([`Self::unkey_deciding_halt`]).
+    last_long_release: Option<std::time::Instant>,
+    /// When a release last went out on a CAT line ([`Self::released_within`]).
+    last_release: Option<std::time::Instant>,
     /// Answers still owed on `stream` by ordered lines (a key, a release, a stop) whose deadline
     /// passed with the line sent ([`Self::command_lines`]): one terminator each
     /// ([`ends_an_answer`]). Zero whenever `stream` is `None`.
@@ -1047,6 +1055,8 @@ impl Rig {
             slow_transport: false,
             network_chain: false,
             unkey_retried: false,
+            last_long_release: None,
+            last_release: None,
             owed_replies: 0,
             owed_since: None,
             owed_key_down: false,
@@ -1086,16 +1096,24 @@ impl Rig {
         self.network_chain = network;
     }
     /// Mark this CAT link's daemon as one that sends an unanswered unkey once more before it
-    /// answers (Nexus's CI-V daemon on a virtual port), so a release waits
-    /// [`RETRIED_RELEASE_DEADLINE_MS`] for its answer: long enough to hear that daemon's own "no
-    /// answer" after both tries. Every other link's release keeps [`PTT_DEADLINE_MS`].
+    /// answers (Nexus's CI-V daemon on a virtual port), so a release that decides a halt
+    /// ([`Self::unkey_deciding_halt`]) waits [`RETRIED_RELEASE_DEADLINE_MS`] for its answer: long
+    /// enough to hear that daemon's own "no answer" after both tries. Every other release, and
+    /// every other link's, keeps [`PTT_DEADLINE_MS`].
     pub fn set_unkey_retried(&mut self, retried: bool) {
         self.unkey_retried = retried;
     }
-    /// Whether a release waits for the daemon's unkey retry ([`Self::set_unkey_retried`]).
-    #[cfg(test)]
+    /// Whether this link's daemon retries an unanswered unkey ([`Self::set_unkey_retried`]).
+    #[cfg_attr(not(feature = "device"), allow(dead_code))] // the radio loop (service.rs, device)
     pub(crate) fn unkey_retried(&self) -> bool {
         self.unkey_retried
+    }
+    /// Whether a release went out on this CAT line less than `within` ago: the radio loop's idle
+    /// self-heal sends none sooner than [`RETRIED_RELEASE_DEADLINE_MS`] after another on a link whose
+    /// daemon retries an unanswered unkey, as that daemon is still at work on the last one.
+    #[cfg_attr(not(feature = "device"), allow(dead_code))] // the radio loop (service.rs, device)
+    pub(crate) fn released_within(&self, within: Duration) -> bool {
+        self.last_release.is_some_and(|at| at.elapsed() < within)
     }
     /// Name the (verb, token) pairs this link must never send (#381, #385). Everything else is
     /// sent as before, so a power or a switch the radio's driver maps correctly still goes out.
@@ -1347,6 +1365,15 @@ impl Rig {
         self.give_up_a_stale_debt();
         if !ordered {
             let window = deadline_ms.unwrap_or(self.transport_deadline_ms());
+            // ⚠️ Owing only releases on a link whose daemon retries an unanswered unkey: that
+            // daemon is still at work on an unkey the radio did not answer (about 2 s on a silent
+            // radio), and it serves this connection in order, so this command would wait all that
+            // time in the radio loop. It is not sent: no answer in time, at once.
+            let window = if self.unkey_retried && self.owed_keys.is_empty() {
+                0
+            } else {
+                window
+            };
             self.settle_owed(window)?;
         }
         // Only a key line moves `owed_key_down`: a stop keys nothing.
@@ -1947,6 +1974,18 @@ impl Rig {
         self.key(true, !plain, true)
     }
 
+    /// The release whose answer decides whether a slot over halts TX
+    /// ([`crate::slot::slot_unkey_failure`]): the over's end, its past-period cut, and the Stop TX
+    /// or logger HaltTx that cuts it. It is [`Self::ptt`]`(false)`, except on a link whose daemon
+    /// retries an unanswered unkey ([`Self::set_unkey_retried`]), where it waits
+    /// [`RETRIED_RELEASE_DEADLINE_MS`] so that daemon's "no answer" after both tries is heard and
+    /// halts, as WSJT-X halts. At most once in that time: another one sooner keeps
+    /// [`PTT_DEADLINE_MS`], so the engine lock it runs under is never held that long twice running.
+    #[track_caller]
+    pub fn unkey_deciding_halt(&mut self) -> std::io::Result<()> {
+        self.key(false, true, true)
+    }
+
     #[track_caller]
     fn key(&mut self, on: bool, nexus_audio: bool, link_window: bool) -> std::io::Result<()> {
         // Diagnostic: name the exact caller of every PTT change. A CI-V capture that shows an
@@ -1999,18 +2038,33 @@ impl Rig {
                     // not a refusal ([`no_answer_in_time`]): a slow radio keys and answers late.
                     // Nor is Hamlib's own "the rig did not answer" ([`ptt_reply`]). A key-down
                     // asked to wait for the link ([`Self::key_awaiting_answer`]) waits a network
-                    // chain's window; a release waits longer only where the daemon tries an
-                    // unanswered unkey twice ([`Self::set_unkey_retried`]). A missed deadline keeps the
+                    // chain's window; a release that decides a halt ([`Self::unkey_deciding_halt`])
+                    // waits longer where the daemon tries an unanswered unkey twice, at most once
+                    // per that wait ([`RETRIED_RELEASE_DEADLINE_MS`]). A missed deadline keeps the
                     // connection, so the release goes out behind the key
                     // ([`Self::command_lines`]).
                     let deadline = if on && link_window && self.network_chain {
                         NETWORK_KEY_DEADLINE_MS
-                    } else if !on && self.unkey_retried {
+                    } else if !on
+                        && link_window
+                        && self.unkey_retried
+                        && self.last_long_release.is_none_or(|at| {
+                            at.elapsed() >= Duration::from_millis(RETRIED_RELEASE_DEADLINE_MS)
+                        })
+                    {
+                        self.last_long_release = Some(std::time::Instant::now());
                         RETRIED_RELEASE_DEADLINE_MS
                     } else {
                         PTT_DEADLINE_MS
                     };
-                    self.command_lines(&line, Some(deadline), None, 1, false, true)
+                    // A short release on a link whose daemon retries the unkey ends AT its deadline,
+                    // not at the end of the read window it falls in: it runs under the engine lock,
+                    // and that daemon, at work on an unanswered unkey, answers nothing sooner.
+                    let end_by_deadline = !on && self.unkey_retried && deadline == PTT_DEADLINE_MS;
+                    if !on {
+                        self.last_release = Some(std::time::Instant::now());
+                    }
+                    self.command_lines(&line, Some(deadline), None, 1, end_by_deadline, true)
                         .and_then(|reply| ptt_reply(&reply))
                 }
             }
@@ -4833,18 +4887,20 @@ mod tests {
     }
 
     /// On a link whose daemon tries an unanswered unkey twice ([`Rig::set_unkey_retried`]) the
-    /// release waits for both: a `T 0` answered `RPRT -5` at 2 s is heard, as Hamlib's own "the rig
-    /// did not answer", which halts a slot over. Controls: the same answer on any other link is
-    /// past the release's 700 ms deadline, and the key keeps its own deadline on this link.
+    /// release that decides a halt ([`Rig::unkey_deciding_halt`]) waits for both: a `T 0` answered
+    /// `RPRT -5` at 2 s is heard, as Hamlib's own "the rig did not answer", which halts a slot over.
+    /// Once: another one straight after keeps the 700 ms deadline, as the engine lock it runs under
+    /// must not be held that long twice running. Controls: a plain release (`ptt(false)`, the idle
+    /// self-heal's) and any other link keep 700 ms, and the key keeps its own deadline.
     #[test]
-    fn a_release_on_a_link_that_retries_the_unkey_waits_for_both_tries() {
+    fn a_release_that_decides_a_halt_waits_for_both_tries_once() {
         let late = || {
             mock_rigctld_paced(|_| Some((Duration::from_millis(2_000), "RPRT -5\n".to_string())))
         };
         let (addr, _) = late();
         let mut retried = Rig::rigctld(&addr);
         retried.set_unkey_retried(true);
-        let unkey = retried.ptt(false);
+        let unkey = retried.unkey_deciding_halt();
         assert!(
             unkey
                 .as_ref()
@@ -4852,9 +4908,20 @@ mod tests {
             "{unkey:?}"
         );
         assert!(crate::slot::slot_unkey_failure(&unkey, true).is_some());
+        let again = retried.unkey_deciding_halt();
+        assert!(again.as_ref().is_err_and(deadline_passed), "{again:?}");
+        let (addr, _) = late();
+        let mut plain = Rig::rigctld(&addr);
+        plain.set_unkey_retried(true);
+        assert!(
+            plain.ptt(false).is_err_and(|e| deadline_passed(&e)),
+            "the self-heal's"
+        );
         let (addr, _) = late();
         let mut other = Rig::rigctld(&addr);
-        assert!(other.ptt(false).is_err_and(|e| deadline_passed(&e)));
+        assert!(other
+            .unkey_deciding_halt()
+            .is_err_and(|e| deadline_passed(&e)));
         let (addr, _) = late();
         let mut key = Rig::rigctld(&addr);
         key.set_unkey_retried(true);

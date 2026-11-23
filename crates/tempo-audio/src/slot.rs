@@ -954,7 +954,7 @@ pub(crate) fn unkey_a_key_past_its_period(
     past_ms: f64,
 ) {
     backend.flush_output();
-    let unkey = (!held).then(|| rig.ptt(false));
+    let unkey = (!held).then(|| rig.unkey_deciding_halt());
     eng.drop_over_keyed_past_its_period(decided.into_slot_ms, past_ms);
     if let Some(why) = unkey.and_then(|unkey| slot_unkey_failure(&unkey, true)) {
         eng.halt_tx_for_failed_unkey(&why);
