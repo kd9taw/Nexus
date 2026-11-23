@@ -1494,19 +1494,29 @@ function sharedFloor(shell: string, value: string): string {
   expect(m, `.rtty-wf-row's floor is \`${value}\`, not max(<the shared floor>, calc(var(--rtty-wf-head-h, 0px) + 40px))`).not.toBeNull()
   return m![1]
 }
-/** Every selector, in either sheet, whose declarations read the header's measured height. */
+/** Every (selector, property) in either sheet whose value reads the header's measured height. */
 function headVarUsers(rules: Rule[]): string[] {
-  return rules.filter((r) => r.body.includes('--rtty-wf-head-h')).map((r) => r.selector.trim())
+  const out: string[] = []
+  for (const r of rules) {
+    for (const decl of r.body.split(';')) {
+      const at = decl.indexOf(':')
+      if (at < 0 || !decl.slice(at + 1).includes('--rtty-wf-head-h')) continue
+      out.push(`${r.selector.trim()} / ${decl.slice(0, at).trim()}`)
+    }
+  }
+  return out
 }
 const PANES_SHEET = readFileSync(fileURLToPath(new URL('./cockpit-panes.css', import.meta.url)), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
 
 describe("RTTY's picture term is RTTY's row's alone", () => {
-  it('no rule but `.rtty-wf-row` reads the measured header height, in either sheet', () => {
-    expect(headVarUsers([...RULES, ...parseRules(PANES_SHEET)])).toEqual(['.rtty-wf-row'])
+  it('nothing but `.rtty-wf-row`’s min-height reads the measured header height, in either sheet', () => {
+    expect(headVarUsers([...RULES, ...parseRules(PANES_SHEET)])).toEqual(['.rtty-wf-row / min-height'])
   })
-  it('the control: the same term planted on another strip is read as another user', () => {
-    const planted = parseRules('.psk-cockpit .waterfall-wrap { min-height: calc(var(--rtty-wf-head-h, 0px) + 40px) }')
-    expect(headVarUsers([...RULES, ...planted]), 'a planted user went unseen').toContain('.psk-cockpit .waterfall-wrap')
+  it('the controls: the term planted on another strip, or in another property of the row, is read as another user', () => {
+    const elsewhere = parseRules('.psk-cockpit .waterfall-wrap { min-height: calc(var(--rtty-wf-head-h, 0px) + 40px) }')
+    expect(headVarUsers([...RULES, ...elsewhere]), 'a planted strip went unseen').toContain('.psk-cockpit .waterfall-wrap / min-height')
+    const inRow = parseRules('.rtty-wf-row { flex-basis: calc(var(--rtty-wf-head-h, 0px) + 300px) }')
+    expect(headVarUsers([...RULES, ...inRow]), 'a planted property of the row went unseen').toContain('.rtty-wf-row / flex-basis')
     expect(() => sharedFloor('psk-cockpit', 'max(8em, calc(var(--rtty-wf-head-h, 0px) + 40px))'), 'the strip check missed it').toThrow()
   })
 })

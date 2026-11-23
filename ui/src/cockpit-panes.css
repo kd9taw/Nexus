@@ -26,6 +26,14 @@
    parked sticky at the bottom. Horizontal surplus has exactly one fate (another column).
    Nothing clips.
 
+   THE ONE MEASURED FLOOR (2026-11-22, the operator's ruling on RTTY's 0 px waterfall picture). A strip's floor is a
+   length in the sheet's own units, never a measurement, with exactly one exception: RTTY's waterfall row
+   (`.rtty-wf-row`, styles.css) floors at max(the shared yielding floor, its waterfall header's measured height + 40 px),
+   the header's height written onto the row as `--rtty-wf-head-h` (RttyCockpit useWaterfallHeadHeight), because the
+   row is a size container and the header's lines never sized it. cockpit-shells.test.ts pins that term to
+   `.rtty-wf-row` / min-height alone, rttyfit bounds it (the row's floor is that max within 1 px) and holds its observer
+   to two writes, and its divider re-reads its range when the row moves (PaneSeam `watchStrip`).
+
    THE REGION'S STATE IS TWO ATTRIBUTES, AND THAT SPLIT IS A BUG FIX (useRegionCols.ts):
      [data-cols='1|2|3'] is a TRACK COUNT — min(measured tier, how many column groups the
        cockpit can fill right now). It drives `grid-template-columns` and NOTHING else,
