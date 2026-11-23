@@ -30636,6 +30636,12 @@ button.sat-chip:disabled {
 .rtty-wf-row > .waterfall-wrap {
   flex: 1 1 0;
   min-width: 0;
+  /* ITS HEADER SCROLLS WITHIN THE ROW where it wraps past it. The row is a size container (the scope's square reads its
+     height), so the header's lines never size it, and on a window dragged below the matrix at 150–175 % the header
+     wrapped onto more lines than the row is tall: its last buttons were drawn under the TX strip at every scroll
+     position, and Tab focused them unseen (700×800 at 175 %, measured). Where the header fits, at every screen of the
+     matrix, nothing overflows and nothing changes. */
+  overflow-y: auto;
 }
 /* JS8's waterfall, SIZED BY ITS DIVIDER (layout L2): the operator drags or arrows its height,
    stored per surface (`nexus.split.js8.waterfall`) and clamped against the live box on load and
