@@ -5,6 +5,11 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **A CQ with a word after it (CQ DX, CQ POTA …) now shows and logs the 4-character grid it sends.** With a 6-character grid in Settings, the TX line, your own overs in Band Activity and ALL.TXT showed all six characters, although only the first four go out on FT8 and FT4, as in WSJT-X. The Field Day CQ (CQ FD) showed and logged six the same way. What goes on the air is unchanged; Nexus now shows what was sent.
+
 ## [1.25.0] — 2026-11-22
 
 ### Added

@@ -20784,11 +20784,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                     s.cq_call_cap = self.cq_call_budget();
                     if let Some(d) = &self.cq_dir {
                         // Directed run: "CQ DX <me> <grid>" instead of plain.
-                        s.override_next(Msg::Cq {
-                            de: mycall.clone(),
-                            grid: mygrid.clone(),
-                            dir: d.clone(),
-                        });
+                        s.set_cq_dir(d);
                     }
                     s
                 }),
@@ -21437,11 +21433,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 s.confirm_with_rrr = self.settings.prefer_rrr;
                 s.cq_call_cap = self.cq_call_budget();
                 if let Some(d) = &self.cq_dir {
-                    s.override_next(Msg::Cq {
-                        de: mycall.clone(),
-                        grid: mygrid.clone(),
-                        dir: d.clone(),
-                    });
+                    s.set_cq_dir(d);
                 }
                 self.mode = Mode::Qso {
                     station: Box::new(s),
@@ -36696,11 +36688,7 @@ contact yourself."
             if let Some(d) = &self.cq_dir {
                 // The directed run stays directed across the pileup (stock: the
                 // edited Tx6 text persists).
-                s.override_next(Msg::Cq {
-                    de: mycall.clone(),
-                    grid: mygrid.clone(),
-                    dir: d.clone(),
-                });
+                s.set_cq_dir(d);
             }
             self.mode = Mode::Qso {
                 station: Box::new(s),

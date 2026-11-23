@@ -4329,12 +4329,12 @@ impl FtMessages {
     }
 
     /// The CQ a running station with these messages calls from `mycall` (`genCQMsg`,
-    /// mainwindow.cpp 9466-9531): `CQ FD` with `mygrid` as Field Day has always sent it,
-    /// `CQ TEST` in the ARRL VHF contests, `CQ WW` in WW Digi, `CQ RU` in the RTTY Roundup, and
-    /// where WSJT-X has no activity the CQ the operator typed in Tx6, `dir` its direction ("" for
-    /// a plain CQ), as WSJT-X's normal mode sends its Tx6; all with `sent_grid`: the contest's own
-    /// `session_grid` where it exchanges one, else `mygrid` cut to the four characters WSJT-X
-    /// sends.
+    /// mainwindow.cpp 9466-9531): `CQ FD` with `mygrid` cut to the four characters WSJT-X sends
+    /// (never a contest GRID), `CQ TEST` in the ARRL VHF contests, `CQ WW` in WW Digi, `CQ RU` in
+    /// the RTTY Roundup, and where WSJT-X has no activity the CQ the operator typed in Tx6, `dir`
+    /// its direction ("" for a plain CQ), as WSJT-X's normal mode sends its Tx6; all but Field
+    /// Day's with `sent_grid`: the contest's own `session_grid` where it exchanges one, else
+    /// `mygrid` cut to four characters.
     ///
     /// ⛔ **A nonstandard `mycall` calls WSJT-X's plain CQ, `CQ <call>`, whatever the messages.**
     /// WSJT-X's `stdCall` (mainwindow.cpp 9541-9552) decides, and for a call that fails it
@@ -4351,7 +4351,8 @@ impl FtMessages {
             };
         }
         let (dir, grid) = match self {
-            Self::FieldDay => ("FD", mygrid.to_string()),
+            // Four characters of the locator, as every other CQ (`genCQMsg`: `grid.left (4)`).
+            Self::FieldDay => ("FD", crate::qso::air_grid(mygrid)),
             Self::NaVhf => ("TEST", sent_grid(session_grid, mygrid)),
             Self::WwDigi => ("WW", sent_grid(session_grid, mygrid)),
             Self::RttyRoundup => ("RU", sent_grid(session_grid, mygrid)),
