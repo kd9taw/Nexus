@@ -25,6 +25,11 @@ asserting it.
 ### WSJT-X — Joe Taylor (K1JT) and the WSJT Development Group
 License: **GNU GPL, version 3** (GPLv3).
 
+The copyright notice WSJT-X asks every derivative work to display
+(WSJT-X 3.0.2, Help ▸ Copyright Notice):
+
+> "The algorithms, source code, look-and-feel of WSJT-X and related programs, and protocol specifications for the modes FSK441, FST4, FT8, JT4, JT6M, JT9, JT65, JTMS, QRA64, Q65, MSK144 are Copyright (C) 2001-2026 by one or more of the following authors: Joseph Taylor, K1JT; Bill Somerville, G4WJS; Steven Franke, K9AN; Nico Palermo, IV3NWV; Greg Beam, KI7MT; Michael Black, W9MDB; Edson Pereira, PY2SDR; Philip Karn, KA9Q; Uwe Risse, DG2YCB; Brian Moran, N9ADG; Roger Rehr, W3SZ; John Nelson, G4KLA; Charlie Suckling, DL3WDG; Terrell Deppe, KJ5HST; and other members of the WSJT Development Group."
+
 Nexus's modem library, `libtempo/`, is derived from WSJT-X. The WSJT-X-derived
 sources are **vendored in this repository** at `libtempo/vendor/wsjtx/` — the
 complete corresponding source (GPL §6) for the modem compiled into the Nexus

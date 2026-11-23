@@ -568,6 +568,8 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   repeater data courtesy of [hearham.com](https://hearham.com) and
   [RepeaterBook.com](https://repeaterbook.com), city search powered by OpenStreetMap.
 
+  "The algorithms, source code, look-and-feel of WSJT-X and related programs, and protocol specifications for the modes FSK441, FST4, FT8, JT4, JT6M, JT9, JT65, JTMS, QRA64, Q65, MSK144 are Copyright (C) 2001-2026 by one or more of the following authors: Joseph Taylor, K1JT; Bill Somerville, G4WJS; Steven Franke, K9AN; Nico Palermo, IV3NWV; Greg Beam, KI7MT; Michael Black, W9MDB; Edson Pereira, PY2SDR; Philip Karn, KA9Q; Uwe Risse, DG2YCB; Brian Moran, N9ADG; Roger Rehr, W3SZ; John Nelson, G4KLA; Charlie Suckling, DL3WDG; Terrell Deppe, KJ5HST; and other members of the WSJT Development Group."
+
 This is **experimental amateur-radio software**. You are responsible for operating within your
 license privileges and local regulations. Nexus never transmits on launch; ARRL Field Day
 prohibits fully-automated contacts, and Nexus's Field Day workflow is operator-initiated by design.
