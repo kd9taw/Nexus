@@ -442,3 +442,51 @@ describe('the roster says who each station is calling, and what state they are i
     expect(calls).toEqual(['CCC', 'AAA', 'BBB'])
   })
 })
+
+// THE OPERATOR'S REPORT (1.25.0): a double-click on a roster row worked the row above or below. The first click
+// selected the row, something above the grid changed height (the Spot button's label, a count, a station joining),
+// and the second click landed on the row that had moved under the pointer. A double-click is ONE gesture aimed at
+// the row its first click landed on: that row is the one it works, and the second click does not re-select.
+describe('a double-click works the row its first click landed on', () => {
+  const calls = ['K0PT', 'KB2DJJ', 'KM7CAB']
+  const mount = () => {
+    const onSelect = vi.fn(), onCall = vi.fn(), onToggleIgnore = vi.fn()
+    const { container } = render(
+      <OperateRoster stations={calls.map((c) => station(c, 100))} myGrid="EN52" currentSlot={100}
+        needByCall={new Map()} selectedCall={null} onSelect={onSelect} onCall={onCall} onToggleIgnore={onToggleIgnore} />)
+    const row = (call: string) => [...container.querySelectorAll('.or-row[role=row]')]
+      .find((r) => r.getAttribute('aria-label')?.startsWith(call))!
+    return { onSelect, onCall, onToggleIgnore, row }
+  }
+
+  it('the grid moved a row between the clicks: the first row is worked, not the one under the second click', () => {
+    const { onSelect, onCall, row } = mount()
+    fireEvent.click(row('KM7CAB'), { detail: 1 })
+    fireEvent.click(row('KB2DJJ'), { detail: 2 })
+    fireEvent.dblClick(row('KB2DJJ'), { detail: 2 })
+    expect(onSelect.mock.calls.map((c) => c[0])).toEqual(['KM7CAB'])
+    expect(onCall).toHaveBeenCalledTimes(1)
+    expect(onCall.mock.calls[0][0]).toBe('KM7CAB')
+  })
+
+  it('Alt+double-click ignores the first row too', () => {
+    const { onCall, onToggleIgnore, row } = mount()
+    fireEvent.click(row('K0PT'), { detail: 1 })
+    fireEvent.click(row('KB2DJJ'), { detail: 2 })
+    fireEvent.dblClick(row('KB2DJJ'), { detail: 2, altKey: true })
+    expect(onToggleIgnore.mock.calls.map((c) => c[0])).toEqual(['K0PT'])
+    expect(onCall).not.toHaveBeenCalled()
+  })
+
+  it('a still double-click works its own row, and a later single click starts afresh', () => {
+    const { onSelect, onCall, row } = mount()
+    fireEvent.click(row('KM7CAB'), { detail: 1 })
+    fireEvent.click(row('KM7CAB'), { detail: 2 })
+    fireEvent.dblClick(row('KM7CAB'), { detail: 2 })
+    fireEvent.click(row('K0PT'), { detail: 1 })
+    fireEvent.click(row('K0PT'), { detail: 2 })
+    fireEvent.dblClick(row('K0PT'), { detail: 2 })
+    expect(onCall.mock.calls.map((c) => c[0])).toEqual(['KM7CAB', 'K0PT'])
+    expect(onSelect.mock.calls.map((c) => c[0])).toEqual(['KM7CAB', 'KM7CAB', 'K0PT', 'K0PT'])
+  })
+})
