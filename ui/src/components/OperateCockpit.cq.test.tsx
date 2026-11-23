@@ -1,19 +1,18 @@
 // @vitest-environment jsdom
 //
-// #254 — "CQ W9ABC POTA" SILENTLY SENT A PLAIN CQ.
+// TX6 GOES OUT AS TYPED, AS WSJT-X'S DOES, until WSJT-X would write it again.
 //
-// The reporter typed their directed CQ with the words the other way round. `cqDirFromText`
-// accepts only WSJT-X's grammar (`CQ [TOKEN] MYCALL [GRID4]`), so it returned `undefined`
-// — and `doTx(6)` read that as "fall back to a plain CQ" and called `startCq(null)`. The
-// Tx6 box still showed what they typed. The radio sent something else.
+// WSJT-X 3.0.2 keys the text of its Tx6 box (`guiUpdate`, widgets/mainwindow.cpp 7801, 7904): a
+// CQ with the grid typed, or free text, whatever packs. Editing the box keeps its second word as
+// the CQ type (`on_tx6_editingFinished`, 10075-10086), and `genStdMsgs` (9566) writes the box
+// again as that type, our call and our grid (`genCQMsg`, 9466) when a caller is answered (9444),
+// on Clear DX (9830), on Generate Std Msgs (10505) and on a band or frequency change (12520,
+// 13858). The row's text goes to the station whole; the station sends what the packer makes of
+// it and refuses, with its reason, a CQ under another call (its tests).
 //
-// THE INVARIANT, and it is the transmit path's: **never transmit a message different from
-// the one shown.** The operator decision (2026-09-14) is WARN-ONLY — WSJT-X's CQ grammar is
-// not widened and nothing on the air is rewritten. A malformed CQ must be refused visibly,
-// before anything keys, with the valid form named where we can derive it honestly.
-//
-// Both directions are asserted, because a refusal that also refuses the valid form is the
-// same defect wearing the other hat: the good text must still reach `startCq` byte for byte.
+// This replaces the refusal of any Tx6 outside WSJT-X's CQ grammar (#254, the operator's
+// 2026-09-14 decision), which the operator reversed to match WSJT-X. The contest's typed CQ
+// keeps that refusal: its Running takes only the direction.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react'
 import { OperateCockpit } from './OperateCockpit'
@@ -35,6 +34,7 @@ vi.mock('../api', () => ({
   notifyErase: vi.fn(async () => null),
   pointRotatorAtCall: vi.fn(async () => null),
   redecode: vi.fn(async () => null),
+  clearDxCall: vi.fn(async () => null),
   startCq: (...a: unknown[]) => startCq(...(a as [])),
   startRunning: (...a: unknown[]) => startRunning(...(a as [string | null])),
   startQsoRecording: vi.fn(async () => null),
@@ -189,60 +189,109 @@ beforeEach(() => {
 })
 afterEach(cleanup)
 
-describe('#254 — a malformed directed CQ is refused, never quietly replaced', () => {
-  it('"CQ W9ABC POTA" does not key, and says so', async () => {
+describe('Tx6 goes out as typed, as WSJT-X does', () => {
+  it('a directed CQ with a typed grid reaches the station whole', async () => {
     renderCockpit()
-    callCq(`CQ ${MYCALL} POTA`)
-
-    await waitFor(() => expect(pushToast).toHaveBeenCalled())
-    expect(
-      startCq,
-      'the words are in the wrong order — nothing may go on the air',
-    ).not.toHaveBeenCalled()
-
-    const [body, kind] = pushToast.mock.calls[0] as [string, string]
-    expect(kind, 'a refusal is an error, not a note').toBe('error')
-    expect(
-      body,
-      'the refusal names the form that would work, so the operator can retype it',
-    ).toContain(`CQ POTA ${MYCALL}`)
-
-    // …and the box still shows what the operator typed. Nothing was rewritten under them.
-    expect(cqField().value).toBe(`CQ ${MYCALL} POTA`)
-  })
-
-  it('a CQ naming somebody else is refused too, with no suggestion invented', async () => {
-    renderCockpit()
-    callCq('CQ POTA W1ABC')
-
-    await waitFor(() => expect(pushToast).toHaveBeenCalled())
-    expect(startCq).not.toHaveBeenCalled()
-    const [body] = pushToast.mock.calls[0] as [string]
-    expect(
-      body,
-      'we must never propose a message the operator did not type',
-    ).not.toContain('W1ABC')
-  })
-
-  // THE POSITIVE CONTROL. A guard that refuses everything is not a guard.
-  it('the valid directed form still calls CQ, byte for byte', async () => {
-    renderCockpit()
-    callCq(`CQ POTA ${MYCALL}`)
+    callCq(`CQ DX ${MYCALL} FN42`)
 
     await waitFor(() => expect(startCq).toHaveBeenCalledTimes(1))
-    expect(startCq).toHaveBeenCalledWith('POTA')
-    expect(pushToast, 'a valid CQ raises nothing').not.toHaveBeenCalled()
+    expect(startCq).toHaveBeenCalledWith(null, `CQ DX ${MYCALL} FN42`)
+    expect(pushToast).not.toHaveBeenCalled()
   })
 
-  it('a plain CQ still calls CQ', async () => {
+  it('a plain CQ reaches the station whole', async () => {
     renderCockpit()
     callCq(`CQ ${MYCALL} EN61`)
 
     await waitFor(() => expect(startCq).toHaveBeenCalledTimes(1))
-    expect(startCq).toHaveBeenCalledWith(null)
+    expect(startCq).toHaveBeenCalledWith(null, `CQ ${MYCALL} EN61`)
     expect(pushToast).not.toHaveBeenCalled()
   })
 
+  it('a row that is no CQ goes to the station too, as WSJT-X sends it as free text', async () => {
+    renderCockpit()
+    callCq(`CQ ${MYCALL} POTA`)
+    await waitFor(() => expect(startCq).toHaveBeenCalledWith(null, `CQ ${MYCALL} POTA`))
+    callCq('TNX QSO 73')
+    await waitFor(() => expect(startCq).toHaveBeenCalledWith(null, 'TNX QSO 73'))
+    expect(pushToast).not.toHaveBeenCalled()
+  })
+
+  it("a CQ under another call is the station's to refuse, and its reason is shown", async () => {
+    const why = 'Tx 6 calls CQ as another station'
+    startCq.mockImplementationOnce(() => Promise.reject(why))
+    renderCockpit()
+    callCq('CQ POTA W1ABC')
+    await waitFor(() => expect(pushToast).toHaveBeenCalledWith(why, 'error'))
+  })
+})
+
+describe("Tx6 is written again at WSJT-X's points, its CQ word kept", () => {
+  const edited = `CQ DX ${MYCALL} FN42`
+  const regenerated = `CQ DX ${MYCALL} EN61`
+
+  it('Generate Std Msgs (mainwindow.cpp 10505)', () => {
+    renderCockpit()
+    fireEvent.change(cqField(), { target: { value: edited } })
+    fireEvent.click(screen.getByText('Generate Std Msgs'))
+    expect(cqField().value).toBe(regenerated)
+  })
+
+  it('Clear DX (9830)', () => {
+    renderCockpit()
+    fireEvent.change(cqField(), { target: { value: edited } })
+    fireEvent.click(screen.getByText('Clear'))
+    expect(cqField().value).toBe(regenerated)
+  })
+
+  it('a station answered (processMessage, 9444)', () => {
+    const { rerender } = renderCockpit()
+    fireEvent.change(cqField(), { target: { value: edited } })
+    rerender(
+      cockpit({
+        ...makeSnap(),
+        qso: { dxcall: 'K1XYZ', dxgrid: 'FN42', state: 'AwaitReport', cqRunning: true } as unknown as AppSnapshot['qso'],
+      }),
+    )
+    expect(cqField().value).toBe(regenerated)
+  })
+
+  it('a band change (12520)', () => {
+    const { rerender } = renderCockpit({ ...makeSnap(), bandChangeTick: 1 } as AppSnapshot)
+    fireEvent.change(cqField(), { target: { value: edited } })
+    rerender(cockpit({ ...makeSnap(), bandChangeTick: 2 } as AppSnapshot))
+    expect(cqField().value).toBe(regenerated)
+  })
+
+  it('a frequency change, not while keyed (12520, 13858)', () => {
+    const snap = makeSnap()
+    const at = (dialMhz: number, transmitting: boolean) =>
+      cockpit({ ...snap, radio: { ...snap.radio, dialMhz, transmitting } })
+    const { rerender } = render(at(14.074, false))
+    fireEvent.change(cqField(), { target: { value: edited } })
+    rerender(at(14.076, true))
+    expect(cqField().value, 'keyed: left alone').toBe(edited)
+    rerender(at(14.076, false))
+    expect(cqField().value).toBe(regenerated)
+  })
+
+  it("free text's second word is its CQ word, as WSJT-X reads it (10082)", () => {
+    renderCockpit()
+    fireEvent.change(cqField(), { target: { value: 'TNX QSO 73' } })
+    fireEvent.click(screen.getByText('Generate Std Msgs'))
+    expect(cqField().value).toBe(`CQ QSO ${MYCALL} EN61`)
+  })
+
+  it('a plain CQ typed makes the CQ plain again', () => {
+    renderCockpit()
+    fireEvent.change(cqField(), { target: { value: edited } })
+    fireEvent.change(cqField(), { target: { value: `CQ ${MYCALL} FN42` } })
+    fireEvent.click(screen.getByText('Generate Std Msgs'))
+    expect(cqField().value).toBe(`CQ ${MYCALL} EN61`)
+  })
+})
+
+describe('the station refuses a CQ', () => {
   // A CQ the station refuses says why, as the contest's run four lines above it always did: the
   // press used to drop it, so CQ from a computer driving a station did nothing and said nothing.
   it('a refused CQ shows the refusal', async () => {
@@ -338,7 +387,7 @@ describe('the Tx6 row while a contest runs', () => {
     expect(tx6Box().value, 'the directed CQ is back').toBe(`CQ POTA ${MYCALL}`)
     expect(tx6Box().readOnly).toBe(false)
     fireEvent.click(cqButton())
-    await waitFor(() => expect(startCq).toHaveBeenCalledWith('POTA'))
+    await waitFor(() => expect(startCq).toHaveBeenCalledWith(null, `CQ POTA ${MYCALL}`))
     expect(startRunning).not.toHaveBeenCalled()
   })
 })

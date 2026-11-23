@@ -1,0 +1,316 @@
+//! An edited Tx6 goes on the air as the operator typed it, as WSJT-X's does, until WSJT-X would
+//! write the box again.
+//!
+//! WSJT-X 3.0.2 keys the text of the Tx6 box itself: `MainWindow::guiUpdate` reads
+//! `ui->tx6->text()` for the over (`widgets/mainwindow.cpp` 7801 and 7904) and hands it to the
+//! packer, a CQ or free text alike. Editing the box keeps only its second word as the CQ type
+//! (`on_tx6_editingFinished`, 10075-10086), and `genCQMsg` (9466) writes the box again as that
+//! type, the Settings call and four characters of the Settings grid whenever `genStdMsgs` runs
+//! (9566): when a caller is answered (`processMessage`, 9444), on Clear DX (9830), Generate Std
+//! Msgs (10505), a report change (12197), and on a band or frequency change (12520, 13858). So the
+//! typed text goes out until a station answers; the return to CQ after that contact is the
+//! regenerated one. These tests hold the engine to that: what the screen shows, what keys, and the
+//! 77 bits the packer makes of the typed text. The box itself is the cockpit's (its own tests).
+
+use super::contest_ft_messages_tests::{air_form, bits77, keyed};
+use super::*;
+
+const ME: &str = "K1ABC";
+/// The Settings locator, which the typed Tx6 must not be replaced with.
+const SETTINGS_GRID: &str = "FN31";
+
+/// A station on 20 m FT8 with the Settings locator, TX on the even slots.
+fn station(tier: Tier) -> Engine {
+    let mut e = Engine::new(ME, SETTINGS_GRID, 0);
+    e.set_tier(tier);
+    e.set_frequency(14.074, "20m", "USB");
+    e.set_tx_offset(1500.0);
+    e
+}
+
+/// The 77 bits FT8 sends for `text`.
+fn ft8_bits(text: &str) -> Vec<i8> {
+    bits77(&modes::make_mode(modes::ModeKind::Ft8).encode(text)).expect("FT8 bits")
+}
+
+/// What the screen shows as the next over.
+fn tx_now(e: &Engine) -> Option<String> {
+    e.snapshot().qso.and_then(|q| q.tx_now)
+}
+
+/// ⭐ THE TYPED TX6 IS THE MESSAGE. A Tx6 of `CQ DX K1ABC FN42` with `FN31` in Settings shows and
+/// keys `CQ DX K1ABC FN42` on FT8 and FT4, a standard CQ that decodes back verbatim, and the bits
+/// on the air are the typed text's, not the Settings CQ's.
+#[test]
+fn an_edited_tx6_goes_on_the_air_as_typed() {
+    for tier in [Tier::Ft8, Tier::Ft4] {
+        let mut e = station(tier);
+        e.start_cq_as_typed("CQ DX K1ABC FN42")
+            .expect("a directed run");
+        let want = "CQ DX K1ABC FN42";
+        assert_eq!(tx_now(&e).as_deref(), Some(want), "{tier:?}: the screen");
+        assert_eq!(
+            keyed(&mut e, 0).as_deref(),
+            Some(want),
+            "{tier:?}: the over"
+        );
+    }
+    assert_eq!(
+        air_form("CQ DX K1ABC FN42"),
+        ("i3=1".to_string(), "CQ DX K1ABC FN42".to_string()),
+        "a standard CQ on the air"
+    );
+    assert_ne!(
+        ft8_bits("CQ DX K1ABC FN42"),
+        ft8_bits("CQ DX K1ABC FN31"),
+        "premise: the typed grid is in the bits"
+    );
+}
+
+/// A typed CQ that is not directed, and one typed with no grid at all, are sent as typed too:
+/// WSJT-X keys the box, and `CQ DX K1ABC` packs as a standard CQ with a blank grid.
+#[test]
+fn a_plain_and_a_gridless_tx6_go_on_the_air_as_typed() {
+    for typed in ["CQ K1ABC FN42", "CQ DX K1ABC", "CQ K1ABC"] {
+        let mut e = station(Tier::Ft8);
+        e.start_cq_as_typed(typed).expect("a run");
+        assert_eq!(tx_now(&e).as_deref(), Some(typed), "{typed}: the screen");
+        assert_eq!(
+            keyed(&mut e, 0).as_deref(),
+            Some(typed),
+            "{typed}: the over"
+        );
+        assert_eq!(
+            air_form(typed),
+            ("i3=1".to_string(), typed.to_string()),
+            "{typed}: a standard CQ"
+        );
+    }
+}
+
+/// Lower case and extra spaces are the same message: the packer upper-cases and collapses the
+/// text (`split77`), so the screen shows what goes out.
+#[test]
+fn a_tx6_typed_in_lower_case_shows_what_is_packed() {
+    let mut e = station(Tier::Ft8);
+    e.start_cq_as_typed("  cq dx  k1abc fn42 ").expect("a run");
+    assert_eq!(tx_now(&e).as_deref(), Some("CQ DX K1ABC FN42"));
+}
+
+/// A six-character grid typed into Tx6 goes out as four, which is all the packer reads of it
+/// (`packjt77.f90` `pack77_1`, `is_grid4(w(nwords)(1:4))`); WSJT-X's TX line shows the text the
+/// packer sent back (`msgsent`), so Nexus shows and logs four characters as well, and the bits are
+/// the bits of the six-character text.
+#[test]
+fn a_six_character_grid_typed_into_tx6_goes_out_as_four() {
+    let mut e = station(Tier::Ft8);
+    e.start_cq_as_typed("CQ DX K1ABC FN42ab").expect("a run");
+    assert_eq!(tx_now(&e).as_deref(), Some("CQ DX K1ABC FN42"));
+    assert_eq!(keyed(&mut e, 0).as_deref(), Some("CQ DX K1ABC FN42"));
+    assert_eq!(ft8_bits("CQ DX K1ABC FN42"), ft8_bits("CQ DX K1ABC FN42AB"));
+}
+
+/// The typed CQ is called again on every over nobody answers, as WSJT-X keys the same Tx6 box
+/// each period.
+#[test]
+fn the_typed_cq_repeats_until_answered() {
+    let mut e = station(Tier::Ft8);
+    e.start_cq_as_typed("CQ DX K1ABC FN42").expect("a run");
+    for slot in [0, 2, 4] {
+        assert_eq!(
+            keyed(&mut e, slot).as_deref(),
+            Some("CQ DX K1ABC FN42"),
+            "slot {slot}"
+        );
+    }
+}
+
+/// The bits on the air are the typed text's: the over keyed packs to exactly what the text packs
+/// to, on FT8.
+#[test]
+fn the_packed_bits_are_the_typed_texts() {
+    for typed in ["CQ DX K1ABC FN42", "CQ K1ABC FN42", "TNX QSO 73"] {
+        let mut e = station(Tier::Ft8);
+        e.start_cq_as_typed(typed).expect("a run");
+        let sent = keyed(&mut e, 0).expect("an over");
+        assert_eq!(ft8_bits(&sent), ft8_bits(typed), "{typed}");
+    }
+}
+
+/// Work a contact from the run: a caller, our report, their roger, our RR73, and the next period.
+fn work_a_contact(e: &mut Engine) {
+    e.hear_for_test("K1ABC W9XYZ EN37", -12, 2);
+    assert_eq!(
+        keyed(e, 2).as_deref(),
+        Some("W9XYZ K1ABC -12"),
+        "premise: the report"
+    );
+    e.hear_for_test("K1ABC W9XYZ R-05", -12, 4);
+    assert_eq!(
+        keyed(e, 4).as_deref(),
+        Some("W9XYZ K1ABC RR73"),
+        "premise: the RR73"
+    );
+    e.hear_for_test("CQ N0OTH EM48", -3, 6);
+}
+
+/// ⭐ THE RETURN TO CQ IS WSJT-X'S REGENERATED TX6. Answering the caller runs `genStdMsgs`
+/// (`processMessage`, mainwindow.cpp 9444), whose `genCQMsg` (9466) writes Tx6 again as the typed
+/// CQ type, the Settings call and the Settings grid cut to four: the direction is kept, the typed
+/// grid is not.
+#[test]
+fn the_return_to_cq_after_a_contact_keeps_the_direction_and_takes_the_settings_grid() {
+    let mut e = station(Tier::Ft8);
+    e.start_cq_as_typed("CQ DX K1ABC FN42").expect("a run");
+    assert_eq!(keyed(&mut e, 0).as_deref(), Some("CQ DX K1ABC FN42"));
+    work_a_contact(&mut e);
+    assert_eq!(keyed(&mut e, 6).as_deref(), Some("CQ DX K1ABC FN31"));
+}
+
+/// Clear DX is `genStdMsgs` too (`clearDX`, mainwindow.cpp 9830): the run calls the regenerated
+/// CQ, the direction kept.
+#[test]
+fn clear_dx_keeps_the_direction_and_takes_the_settings_grid() {
+    let mut e = station(Tier::Ft8);
+    e.start_cq_as_typed("CQ DX K1ABC FN42").expect("a run");
+    assert_eq!(keyed(&mut e, 0).as_deref(), Some("CQ DX K1ABC FN42"));
+    e.hear_for_test("K1ABC W9XYZ EN37", -12, 2);
+    assert_eq!(
+        keyed(&mut e, 2).as_deref(),
+        Some("W9XYZ K1ABC -12"),
+        "premise"
+    );
+    // Clear DX turns Enable Tx off, as WSJT-X's does; the operator turns it back on.
+    e.clear_dx_call();
+    e.set_tx_enabled_by_operator(true);
+    assert_eq!(keyed(&mut e, 4).as_deref(), Some("CQ DX K1ABC FN31"));
+}
+
+/// ⭐ A TX6 THAT IS NO CQ GOES OUT AS FREE TEXT, as WSJT-X keys any Tx6 that packs. This reverses
+/// the earlier refusal of such a row. A free-text frame holds 13 characters (`packtext77`), so a
+/// longer row goes out as its first 13, and that is what the screen shows, as WSJT-X's TX line
+/// shows the `msgsent` the packer read back.
+#[test]
+fn a_tx6_that_is_no_cq_goes_out_as_free_text() {
+    for (typed, on_air) in [
+        ("TNX QSO 73", "TNX QSO 73"),
+        ("TNX FOR THE QSO 73", "TNX FOR THE Q"),
+    ] {
+        let mut e = station(Tier::Ft8);
+        e.start_cq_as_typed(typed).expect("free text goes out");
+        assert_eq!(tx_now(&e).as_deref(), Some(on_air), "{typed}: the screen");
+        assert_eq!(
+            keyed(&mut e, 0).as_deref(),
+            Some(on_air),
+            "{typed}: the over"
+        );
+        assert_eq!(
+            air_form(typed),
+            ("i3=0 n3=0".to_string(), on_air.to_string()),
+            "{typed}: free text on the air"
+        );
+    }
+}
+
+/// While Tx6 is free text the station is still calling CQ (WSJT-X: `m_bCallingCQ = 6 == m_ntx`,
+/// mainwindow.cpp 8079), so a caller is answered; the return to CQ is then the regenerated one,
+/// whose CQ type is the free text's second word where it is one a CQ can carry (`TNX QSO 73` gives
+/// `CQ QSO`, as `on_tx6_editingFinished` reads it, 10082), else a plain CQ.
+#[test]
+fn a_free_text_tx6_answers_a_caller_and_returns_to_the_regenerated_cq() {
+    for (typed, back) in [
+        ("TNX QSO 73", "CQ QSO K1ABC FN31"),
+        ("73 TO ALL 2026", "CQ TO K1ABC FN31"),
+        ("QRT 73 TNX", "CQ K1ABC FN31"),
+    ] {
+        let mut e = station(Tier::Ft8);
+        e.start_cq_as_typed(typed).expect("free text goes out");
+        assert!(keyed(&mut e, 0).is_some(), "{typed}: premise");
+        work_a_contact(&mut e);
+        assert_eq!(keyed(&mut e, 6).as_deref(), Some(back), "{typed}");
+    }
+}
+
+/// ⚠️ THE ONE DELIBERATE DIFFERENCE FROM WSJT-X: a CQ under somebody else's call is refused before
+/// anything keys, with the reason, and the station is left as it was. WSJT-X would send it. An
+/// empty row sends nothing (WSJT-X stops TX on one, mainwindow.cpp 7802-7803), and a row the
+/// encoder cannot make a frame of is refused as Tx 5's is.
+#[test]
+fn a_cq_under_another_call_an_empty_row_and_an_unencodable_one_are_refused() {
+    for typed in [
+        "CQ DX W1XYZ FN42",
+        "CQ W1XYZ FN42",
+        "CQ W1XYZ",
+        "CQ W1XYZ POTA",
+        "CQ POTA W1XYZ",
+        "",
+        "   ",
+        "TNX É 73",
+    ] {
+        let mut e = station(Tier::Ft8);
+        let why = e
+            .start_cq_as_typed(typed)
+            .expect_err(&format!("{typed:?} is refused"));
+        assert!(!why.is_empty(), "{typed:?}: a reason is given");
+        assert_eq!(tx_now(&e), None, "{typed:?}: no CQ run");
+        assert_eq!(keyed(&mut e, 0), None, "{typed:?}: nothing keys");
+    }
+}
+
+/// The CQ goes out under the Settings call exactly: a portable form of it typed into Tx6
+/// (`CQ K1ABC/P`) is refused with the reason rather than accepted and then held at the key. A
+/// grid and the word RR73 are no callsign to this check.
+#[test]
+fn only_the_settings_call_calls_cq() {
+    let mut e = station(Tier::Ft8);
+    assert!(e.start_cq_as_typed("CQ K1ABC/P").is_err());
+    assert_eq!(keyed(&mut e, 0), None);
+    e.start_cq_as_typed("CQ K1ABC FN42")
+        .expect("a grid is no call");
+    assert_eq!(keyed(&mut e, 0).as_deref(), Some("CQ K1ABC FN42"));
+}
+
+/// `CQ <MYCALL> POTA`, the word order the packer does not read as a directed CQ, goes out as
+/// WSJT-X's packer makes it: `pack77_1` reads the call and drops the word it cannot place, so a
+/// receiving station decodes `CQ K1ABC`, and that is what the screen shows, as WSJT-X's TX line
+/// shows `msgsent`.
+#[test]
+fn cq_mycall_pota_goes_out_as_the_packer_makes_it() {
+    let mut e = station(Tier::Ft8);
+    e.start_cq_as_typed("CQ K1ABC POTA").expect("it packs");
+    let (_, decoded) = air_form("CQ K1ABC POTA");
+    assert_eq!(
+        tx_now(&e),
+        Some(decoded.clone()),
+        "the screen shows what is sent"
+    );
+    assert_eq!(keyed(&mut e, 0), Some(decoded));
+}
+
+/// The typed CQ goes through every gate a CQ run does. The identity backstop at the key wants the
+/// station's own callsign and Settings grid before any standard message goes out, and a grid typed
+/// into Tx6 does not stand in for a Settings grid that is missing.
+#[test]
+fn a_typed_cq_passes_the_identity_gate() {
+    let mut e = Engine::new(ME, "", 0);
+    e.set_tier(Tier::Ft8);
+    e.set_frequency(14.074, "20m", "USB");
+    let _ = e.start_cq_as_typed("CQ DX K1ABC FN42");
+    assert_eq!(
+        keyed(&mut e, 0),
+        None,
+        "nothing keys without a Settings grid"
+    );
+}
+
+/// A plain start after a typed one (the strip's Call CQ, the Remote page) calls the Settings CQ:
+/// the typed grid is the Tx6 row's and nobody else's.
+#[test]
+fn a_plain_start_after_a_typed_one_calls_the_settings_cq() {
+    let mut e = station(Tier::Ft8);
+    e.start_cq_as_typed("CQ DX K1ABC FN42").expect("a run");
+    e.start_cq(None).expect("a plain run");
+    assert_eq!(tx_now(&e).as_deref(), Some("CQ K1ABC FN31"));
+    e.start_cq(Some("DX")).expect("a directed run");
+    assert_eq!(tx_now(&e).as_deref(), Some("CQ DX K1ABC FN31"));
+}

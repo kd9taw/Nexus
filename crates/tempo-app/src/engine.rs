@@ -139,6 +139,9 @@ mod ft_own_call_tests;
 /// FT8/FT4 never key an over the encoder refuses, on every path that queues an operator's text.
 #[cfg(test)]
 mod ft_refused_text_tests;
+/// An edited Tx6 goes on the air as typed, as WSJT-X's does.
+#[cfg(test)]
+mod ft_tx6_as_typed_tests;
 /// A contact logged with no grid: the grid the station sent on the air, else a callbook's, which
 /// counts toward nothing and is sent nowhere.
 #[cfg(test)]
@@ -32397,6 +32400,14 @@ contact yourself."
             .map(|d| d.trim().to_uppercase())
             .filter(|d| !d.is_empty());
         self.set_mode("qso-run")
+    }
+
+    /// Start a CQ run with the Tx6 row's text. Today only the direction word is taken from it, as
+    /// the cockpit has done, and the rest of the CQ is built from Settings.
+    pub fn start_cq_as_typed(&mut self, text: &str) -> Result<(), String> {
+        let words: Vec<String> = text.split_whitespace().map(str::to_uppercase).collect();
+        let dir = (words.len() >= 4 && words[0] == "CQ").then(|| words[1].clone());
+        self.start_cq(dir.as_deref())
     }
 
     /// The Operate strip's Call CQ: a plain CQ run ([`Self::start_cq`]), but one:

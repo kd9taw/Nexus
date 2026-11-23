@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   clampOffsetHz,
   cqDirFromText,
+  cqTypeFromTx6,
+  cqWithType,
   cqSuggestionFromText,
   formatReport,
   genStdMessages,
@@ -425,6 +427,34 @@ describe('cqDirFromText — directed CQ parser for Tx6', () => {
 
   it('plain CQ with trailing invalid grid returns undefined', () => {
     expect(cqDirFromText('CQ KD9TAW EXTRA STUFF', MY)).toBeUndefined()
+  })
+
+  // WSJT-X sends a Tx6 typed with a six-character grid; the packer reads the first four.
+  it('accepts a six-character grid, which goes out as four', () => {
+    expect(cqDirFromText('CQ DX KD9TAW EN52ab', MY)).toBe('DX')
+    expect(cqDirFromText('CQ KD9TAW EN52AB', MY)).toBeNull()
+    expect(cqDirFromText('CQ KD9TAW EN52A', MY)).toBeUndefined()
+  })
+})
+
+// WSJT-X's `m_CQtype` (on_tx6_editingFinished, mainwindow.cpp 10075-10086) and `genCQMsg` (9466).
+describe('cqTypeFromTx6 / cqWithType — the CQ word an edited Tx6 leaves behind', () => {
+  it('is the second word when a CQ can carry it', () => {
+    expect(cqTypeFromTx6('CQ DX KD9TAW EN52')).toBe('DX')
+    expect(cqTypeFromTx6('cq pota kd9taw')).toBe('POTA')
+    expect(cqTypeFromTx6('CQ 040 KD9TAW')).toBe('040')
+    expect(cqTypeFromTx6('TNX QSO 73')).toBe('QSO')
+  })
+  it('is a plain CQ otherwise, and unchanged for a row of one word', () => {
+    expect(cqTypeFromTx6('CQ KD9TAW EN52')).toBeNull()
+    expect(cqTypeFromTx6('CQ NEXUS KD9TAW')).toBeNull()
+    expect(cqTypeFromTx6('QRT')).toBeUndefined()
+    expect(cqTypeFromTx6(' CQ')).toBeUndefined()
+  })
+  it('puts the word before the call', () => {
+    expect(cqWithType('CQ KD9TAW EN52', 'DX')).toBe('CQ DX KD9TAW EN52')
+    expect(cqWithType('CQ KD9TAW EN52', null)).toBe('CQ KD9TAW EN52')
+    expect(cqWithType('', 'DX')).toBe('')
   })
 })
 
