@@ -1951,7 +1951,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ========================================================================
-cookie 0.18.1 — MIT OR Apache-2.0 (MIT elected)
+cookie 0.18.3 — MIT OR Apache-2.0 (MIT elected)
 https://github.com/SergioBenitez/cookie-rs
 
 LICENSE-MIT
