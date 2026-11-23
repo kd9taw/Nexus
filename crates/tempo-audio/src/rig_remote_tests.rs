@@ -278,6 +278,8 @@ pub(crate) fn retuning_peer(
             "m" => format!("{}\n2400\n", state.mode),
             "t" => format!("{}\n", u8::from(state.keyed)),
             "s" => "0\nVFOB\n".into(),
+            // A radio that is not in split takes split off, as any rigctld answers it.
+            "S 0 VFOA" => "RPRT 0\n".into(),
             "T 0" => {
                 state.keyed = false;
                 "RPRT 0\n".into()

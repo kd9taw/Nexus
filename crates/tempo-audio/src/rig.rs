@@ -724,6 +724,14 @@ pub struct Rig {
     /// confirmed TX mode that the radio took, a raw write, a dial read that differs, and every
     /// refused or late split write.
     pub(crate) split_confirmed: Option<SplitConfirmed>,
+    /// The radio confirmed split OFF (`RPRT 0` to `S 0`, or a link with no split to turn off)
+    /// through this connection, for Split Operation Fake It or None on the digital screens
+    /// (`slot::apply_tx_dial_shift`, the radio loop's split off while receiving). Forgotten by a new
+    /// or dropped connection, any split, TX-dial or TX-mode write (`S`, `I`, `X`) and any raw
+    /// write, which are what can put the radio in split; the radio loop forgets it too on entering
+    /// the digital screens and at a change of band. A dial, mode or level write keeps it: none of
+    /// those turns split on.
+    pub(crate) split_off_confirmed: bool,
     /// True when the CAT link is a NETWORK transport (rigctld → SmartSDR / remote radio), where a
     /// reply can legitimately take seconds. Serial rigs answer in milliseconds, so a serial link
     /// uses a much shorter per-command deadline — a stalled serial read then can't hold the radio
@@ -782,6 +790,9 @@ pub struct Rig {
     /// [`Self::take_split_confirmed`]'s own look at it and the over's first split write.
     #[cfg(test)]
     pub(crate) test_debt_lapses_after_split_take: bool,
+    /// A test's radio that confirms split off on every connection ([`Self::rigctld_split_off`]).
+    #[cfg(test)]
+    pub(crate) test_split_off_on_connect: bool,
 }
 
 /// The owed answers one command reads ([`Rig::command_lines`]): how many are still owed, the bytes
@@ -1029,6 +1040,7 @@ impl Rig {
             split_release_pending: false,
             split_refused_at_key: false,
             split_confirmed: None,
+            split_off_confirmed: false,
             slow_transport: false,
             network_chain: false,
             owed_replies: 0,
@@ -1049,6 +1061,8 @@ impl Rig {
             test_reply_deadline_ms: None,
             #[cfg(test)]
             test_debt_lapses_after_split_take: false,
+            #[cfg(test)]
+            test_split_off_on_connect: false,
         }
     }
 
@@ -1141,6 +1155,18 @@ impl Rig {
     pub fn vox() -> Self {
         Self::with_control(None, PttMode::Vox)
     }
+    /// [`Self::rigctld`] for a scene about the key or the over, not the radio's split: the radio
+    /// has already confirmed its split off on this connection ([`Self::split_off_confirmed`]), so
+    /// Split Operation Fake It or None sends no `S 0` ahead of the key here (`split_overs` pins
+    /// that it does when nothing was confirmed).
+    #[cfg(test)]
+    pub(crate) fn rigctld_split_off(addr: &str) -> Self {
+        let mut rig = Self::rigctld(addr);
+        rig.split_off_confirmed = true;
+        rig.test_split_off_on_connect = true;
+        rig
+    }
+
     /// A CAT rig keyed via CAT: control + PTT both over rigctld at `addr`.
     pub fn rigctld(addr: &str) -> Self {
         Self::with_control(Some(addr.to_string()), PttMode::Cat)
@@ -1170,6 +1196,11 @@ impl Rig {
                 self.stream = Some(s);
                 // A new connection may be to a radio (or a daemon) that holds nothing we confirmed.
                 self.split_confirmed = None;
+                self.split_off_confirmed = false;
+                #[cfg(test)]
+                {
+                    self.split_off_confirmed = self.test_split_off_on_connect;
+                }
             }
         }
         self.stream
@@ -1204,6 +1235,7 @@ impl Rig {
         self.owed_buf.clear();
         self.split_confirmed = None;
         self.connection_drops += 1;
+        self.split_off_confirmed = false;
     }
 
     /// How many times the connection has been dropped: unchanged across a run of commands, they
@@ -2491,6 +2523,7 @@ impl Rig {
             return false;
         }
         self.split_confirmed = None;
+        self.split_off_confirmed = false;
         self.command_lines(
             &format!("W {raw} 0\n"),
             Some(PTT_DEADLINE_MS),
@@ -2511,6 +2544,8 @@ impl Rig {
     /// the transport's normal deadline.
     pub fn send_raw_within(&mut self, raw: &str, deadline_ms: Option<u64>) -> Option<String> {
         self.control.as_ref()?;
+        // A raw line may be any command: what was confirmed off may no longer be.
+        self.split_off_confirmed = false;
         let line = format!("w {raw}\n");
         let reply = match deadline_ms {
             Some(ms) => self.command_ending_by(&line, ms),
@@ -2557,6 +2592,7 @@ impl Rig {
         }
         let line = split_line(true, tx_vfo);
         self.split_confirmed = None;
+        self.split_off_confirmed = false;
         self.split_writes += 1;
         let (sent, refused) = match self.command(&line) {
             Ok(reply) => (
@@ -2584,12 +2620,18 @@ impl Rig {
         }
         let line = split_line(on, tx_vfo);
         self.split_confirmed = None;
+        self.split_off_confirmed = false;
         self.split_writes += 1;
         let reply = self.command(&line)?;
         if matches!(rprt_code(&reply), Some(-11 | -4)) {
+            // No split to control: none to be in, so off is as good as confirmed.
+            self.split_off_confirmed = !on;
             return Ok(false);
         }
-        Self::cat_reply(&line, &reply).map(|()| true)
+        Self::cat_reply(&line, &reply).map(|()| {
+            self.split_off_confirmed = !on;
+            true
+        })
     }
     /// Set the split (TX) frequency in Hz.
     pub fn set_split_freq(&mut self, hz: u64) -> std::io::Result<()> {
@@ -2651,6 +2693,7 @@ impl Rig {
         }
         let line = split_mode_line(mode, passband_hz);
         self.split_confirmed = None;
+        self.split_off_confirmed = false;
         let reply = self.command(&line)?;
         if rprt_code(&reply) == Some(-11) {
             return Ok(false);
@@ -2884,6 +2927,9 @@ impl Rig {
             return Ok(());
         }
         self.split_confirmed = None;
+        if line.starts_with(['S', 'I', 'X']) {
+            self.split_off_confirmed = false;
+        }
         let reply = self.command(line)?;
         Self::cat_reply(line, &reply)
     }

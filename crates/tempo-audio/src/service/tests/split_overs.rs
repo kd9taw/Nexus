@@ -2547,7 +2547,8 @@ fn through_hamlib_a_split_never_answered_is_released_by_a_native_read_of_split_o
 /// The same radio, its split read never answered either: nothing can confirm the release, so it
 /// stays owed through retries and through a rebuild to the same radio (a saved baud change). The
 /// operator disconnecting the radio (Rig Model None, saved)
-/// ends it, and with the radio chosen again Fake It keys.
+/// ends it. With the radio chosen again, Fake It keys nothing while the radio answers no split
+/// command (it turns split off first), and keys once it answers.
 #[test]
 fn through_hamlib_an_unconfirmable_release_ends_when_the_operator_disconnects_the_radio() {
     let mut b = hamlib_bench(SplitMode::Rig, 1441.0, None);
@@ -2594,9 +2595,28 @@ fn through_hamlib_an_unconfirmable_release_ends_when_the_operator_disconnects_th
         !b.rig.split_release_pending,
         "owed on the radio chosen again"
     );
+    // Fake It turns the radio's split off before it keys, and this radio still answers no split
+    // command: nothing keys, and the line says why. Once it answers, Fake It keys.
     b.fake_it_cq();
+    let across = b.ticks(1_600);
+    assert!(
+        !across.iter().any(|l| l == "T 1"),
+        "Fake It keyed: {across:?}"
+    );
+    let refused = b.engine.lock().unwrap().snapshot().radio.slot_key_refused;
+    assert!(
+        refused.as_ref().is_some_and(|r| r.split_failed),
+        "not told as the split: {refused:?}"
+    );
+    b.radio.vfos.lock().unwrap().split_no_answer = false;
+    b.fake_it_cq();
+    b.slot = (b.t / 30_000.0).ceil() * 30_000.0;
     let overs = b.overs(1);
-    assert_eq!(overs[0].key, ["F 14073500", "T 1"], "Fake It");
+    assert_eq!(
+        overs[0].key[overs[0].key.len() - 2..],
+        ["F 14073500", "T 1"],
+        "Fake It"
+    );
 }
 
 /// A K3 refusing split while VFO B is in a mode it will not pair with VFO A's (WSJT-X 3.0.2 notes it
