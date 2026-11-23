@@ -1564,18 +1564,28 @@ export async function redecode(): Promise<AppSnapshot> {
 }
 
 /** Start a CQ run; `dir` = a directed token ("DX"/"NA"/"POTA"/…) or null for a
- * plain CQ (clears a sticky directed token). */
-export async function startCq(dir: string | null): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('start_cq', { dir })
+ * plain CQ (clears a sticky directed token). `text` = the CQ typed in the Tx6 row, which the
+ * station sends as typed, grid included, as WSJT-X keys its Tx6 box (`dir` is then its direction). */
+export async function startCq(dir: string | null, text?: string): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('start_cq', { dir, text })
+}
+
+/** The Tx6 box as WSJT-X's `genCQMsg` wrote it again mid-run (Generate Std Msgs, a frequency or
+ * mode change): a station calling CQ keys `text` at its next over, as WSJT-X keys its box, so the
+ * box and the TX line agree (`Engine::rewrite_cq`). Starts nothing. */
+export async function rewriteCq(text: string): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('start_cq', { dir: null, text, rewrite: true })
 }
 
 /** The Operate strip's Call CQ on this computer (`Engine::start_running_with_cq`), and the Tx6 row's
  * while a contest runs (`snap.contestCq`, `snap.contestCqTyped`). `dir` is the direction of the CQ
  * typed in Tx6, which the contest's Running calls where WSJT-X has no activity for the contest
- * (`snap.contestCqTyped`); null for a plain CQ. Outside a contest the row, and the Remote page
- * always, call `startCq`, which sends the CQ they show. */
-export async function startRunning(dir: string | null = null): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('start_running', { dir })
+ * (`snap.contestCqTyped`); null for a plain CQ. `text` = the Tx6 row's text, which Call CQ calls as
+ * typed, as WSJT-X's Call CQ keys its Tx6 (`Engine::start_running_as_typed`); it stands in for `dir`.
+ * Outside a contest the row, and the Remote page always, call `startCq`, which sends the CQ they
+ * show. */
+export async function startRunning(dir: string | null = null, text?: string): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('start_running', { dir, text })
 }
 
 /** The Operate strip's S&P on this computer (`Engine::start_search_and_pounce`). The Remote page's

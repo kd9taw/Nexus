@@ -2935,8 +2935,6 @@ export const IT: PartialCatalog = {
   "operate.tx.tx6.contest.hint": "Il CQ del contest — Tx 6 lo chiama come fa Chiama CQ",
   "operate.tx.callCq.title": "Chiama CQ (Alt+6)",
   "operate.tx.send.title": "Invia questo come prossima trasmissione (Alt+{{n}})",
-  "operate.tx.cq.malformed.try": "Nulla inviato — questo non è un CQ che Nexus può chiamare. Prova: {{fix}}",
-  "operate.tx.cq.malformed": "Nulla inviato — questo non è un CQ che Nexus può chiamare. Il formato è CQ, una parola di direzione facoltativa, poi {{mycall}} e il tuo locatore.",
   "waterfall.palette.aria.scoped": "Palette colori del waterfall (questo modo)",
   "waterfall.palette.aria.shared": "Palette colori del waterfall (Fonia, CW, RTTY e SSTV — FT ha la sua)",
   "waterfall.palette.title.scoped": "Palette colori del waterfall — vale per questo modo",

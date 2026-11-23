@@ -33144,16 +33144,28 @@ fn redecode(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
 }
 
 /// Start a CQ run; `dir` = a directed-CQ token ("DX"/"NA"/"POTA"/…) or None
-/// for a plain CQ (also clears a sticky directed token). `afar`: as [`set_tx_enabled`]'s.
+/// for a plain CQ (also clears a sticky directed token). `text`: the CQ typed in the Tx6 row,
+/// which is sent as typed and stands in for `dir`
+/// ([`tempo_app::engine::Engine::start_cq_as_typed`]); a caller that sends none (the Remote page)
+/// gets the CQ built from Settings. `rewrite`: `text` is the Tx6 box as WSJT-X's `genCQMsg`
+/// wrote it again mid-run, which a station calling CQ keys at its next over and nothing else
+/// reads ([`tempo_app::engine::Engine::rewrite_cq`]); no run is started. `afar`: as
+/// [`set_tx_enabled`]'s.
 #[tauri::command(async)]
 fn start_cq(
     state: State<'_, SharedEngine>,
     dir: Option<String>,
+    text: Option<String>,
+    rewrite: Option<bool>,
     afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
-    eng.start_cq(dir.as_deref())?;
+    match (text.as_deref(), rewrite == Some(true)) {
+        (Some(typed), true) => eng.rewrite_cq(typed)?,
+        (Some(typed), false) => eng.start_cq_as_typed(typed)?,
+        (None, _) => eng.start_cq(dir.as_deref())?,
+    }
     command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(eng.snapshot())
 }
@@ -33162,14 +33174,17 @@ fn start_cq(
 /// row's while a contest runs. `dir` is the direction of the CQ typed in the Tx6 row, which the
 /// contest's Running calls where WSJT-X has no activity for the contest; `None` for a plain CQ,
 /// and from a caller that sends none. Outside a contest the row keeps `start_cq`, which sends the
-/// CQ it shows. `afar`: as [`set_tx_enabled`]'s.
+/// CQ it shows. `text`: the Tx6 row's text, which Call CQ calls as typed, as WSJT-X's Call CQ keys
+/// its Tx6 ([`tempo_app::engine::Engine::start_running_as_typed`]); it stands in for `dir`.
+/// `afar`: as [`set_tx_enabled`]'s.
 #[tauri::command(async)]
 fn start_running(
     state: State<'_, SharedEngine>,
     dir: Option<String>,
+    text: Option<String>,
     afar: Option<command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
-    start_running_on(&state, dir, afar.as_ref())
+    start_running_on(&state, dir, text, afar.as_ref())
 }
 
 /// [`start_running`]'s body, over a plain handle. Call CQ can enter the contest's Running from
@@ -33178,6 +33193,7 @@ fn start_running(
 fn start_running_on(
     engine: &SharedEngine,
     dir: Option<String>,
+    text: Option<String>,
     afar: Option<&command_dispatch::Afar>,
 ) -> Result<AppSnapshot, String> {
     tempo_app::engine::act_opening_session(
@@ -33185,7 +33201,10 @@ fn start_running_on(
         |eng| eng.start_running_opens_session(),
         |eng| {
             command_dispatch::still_bound(eng, afar)?;
-            eng.start_running_with_cq(dir.as_deref())?;
+            match text.as_deref() {
+                Some(typed) => eng.start_running_as_typed(typed)?,
+                None => eng.start_running_with_cq(dir.as_deref())?,
+            }
             command_dispatch::started_from_afar(eng, afar);
             Ok(())
         },
@@ -76509,7 +76528,7 @@ mod contest_entry_command_tests {
     #[test]
     fn call_cq_enters_the_contest_with_its_rows() {
         let (dir, engine) = back_in_ft8_qso_mode("contest-entry-cq");
-        let snap = crate::start_running_on(&engine, None, None).expect("the run starts");
+        let snap = crate::start_running_on(&engine, None, None, None).expect("the run starts");
         let fd = snap.field_day.as_ref().expect("in the contest");
         assert!(fd.running, "the contest's Running");
         assert!(k9new_worked(&snap), "the session's sweep holds K9NEW");

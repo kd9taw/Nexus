@@ -2996,8 +2996,6 @@ export const RU: PartialCatalog = {
   "operate.tx.tx6.contest.hint": "CQ соревнования — Tx 6 передаёт его так же, как «Дать CQ»",
   "operate.tx.callCq.title": "Дать CQ (Alt+6)",
   "operate.tx.send.title": "Передать это следующим (Alt+{{n}})",
-  "operate.tx.cq.malformed.try": "Ничего не отправлено — Nexus не может передать такой CQ. Попробуйте: {{fix}}",
-  "operate.tx.cq.malformed": "Ничего не отправлено — Nexus не может передать такой CQ. Формат: CQ, необязательное слово-направление, затем {{mycall}} и ваш локатор.",
   "waterfall.palette.aria.scoped": "Цветовая палитра водопада (этот режим)",
   "waterfall.palette.aria.shared": "Цветовая палитра водопада (Телефон, CW, RTTY и SSTV — у FT своя)",
   "waterfall.palette.title.scoped": "Цветовая палитра водопада — применяется к этому режиму",

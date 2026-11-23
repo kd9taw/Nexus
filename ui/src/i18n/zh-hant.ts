@@ -2855,8 +2855,6 @@ export const ZH_HANT: PartialCatalog = {
   "operate.tx.tx6.contest.hint": "競賽的 CQ — Tx 6 像呼叫 CQ 那樣呼叫它",
   "operate.tx.callCq.title": "呼叫 CQ（Alt+6）",
   "operate.tx.send.title": "將此作為下一次發射傳送（Alt+{{n}}）",
-  "operate.tx.cq.malformed.try": "未傳送 — 這不是 Nexus 能呼叫的 CQ。試試：{{fix}}",
-  "operate.tx.cq.malformed": "未傳送 — 這不是 Nexus 能呼叫的 CQ。格式為 CQ，可選的方向詞，然後是 {{mycall}} 和你的網格。",
   "waterfall.palette.aria.scoped": "瀑布圖調色盤（本模式）",
   "waterfall.palette.aria.shared": "瀑布圖調色盤（語音、CW、RTTY 與 SSTV — FT 單獨）",
   "waterfall.palette.title.scoped": "瀑布圖調色盤 — 應用於本模式",

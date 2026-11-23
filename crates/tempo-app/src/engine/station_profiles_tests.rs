@@ -2695,6 +2695,49 @@ fn without_profiles_a_stale_tx_row_naming_the_old_call_is_refused_on_a_new_conta
     );
 }
 
+/// ⛔ A Tx row under another FORM of one of this station's calls is refused, and nothing keys.
+/// A portable form the frame carries whole (`KD9TAW/P`, an old call; `KD9TAW/P`, another
+/// profile's) is the station's own call: it meets the key-time call check, which says why. A
+/// prefix or a long suffix (`VE3/KD9TAW`, `KD9TAW/QRP`) is no part of a standard frame, so the
+/// packer would send the bare `KD9TAW`, another message than the row's: that is refused at the
+/// press, with the message it would have been.
+#[test]
+fn a_tx_row_under_a_form_of_an_old_or_profile_call_is_refused() {
+    let old_call = |row: &str| {
+        let mut e = plain_ft8();
+        settings_call_edit(&mut e, "W9XYZ");
+        let pressed = e.override_next_tx_checked("W1AW", Some("FN31"), row);
+        (pressed, keyed(&mut e, 0..2), ft_notice(&e))
+    };
+    assert_eq!(
+        old_call("W1AW KD9TAW/P -05"),
+        (Ok(()), Vec::<String>::new(), Some(CALL_CHANGED.into())),
+        "a portable form of an old call: refused at the key"
+    );
+    for row in ["W1AW VE3/KD9TAW -05", "W1AW KD9TAW/QRP 73"] {
+        let (pressed, keyed, _) = old_call(row);
+        let why = pressed.expect_err(row);
+        assert!(
+            why.contains("would go out as \"W1AW KD9TAW"),
+            "{row}: {why}"
+        );
+        assert_eq!(keyed, Vec::<String>::new(), "{row}: nothing keys");
+    }
+    let (mut e, _) = ft8_station();
+    let mut club = portable();
+    club.name = "Club".into();
+    club.call = "W9ABC".into();
+    let club = e.save_station_profile(club).unwrap();
+    e.switch_station_profile(&club).unwrap();
+    e.call_station("W1AW");
+    e.override_next_tx("W1AW", None, "W1AW KD9TAW/P 73");
+    assert_eq!(
+        (keyed(&mut e, 0..2), ft_notice(&e)),
+        (Vec::<String>::new(), Some(CALL_CHANGED.into())),
+        "a portable form of another profile's call: refused at the key"
+    );
+}
+
 /// ⛔ No profiles, Q65: free text the operator queues for W1AW, which Nexus prefixes with the
 /// station's call, goes out under the call the station has when it keys. Saved as W9XYZ between
 /// the queue and the key, it is "W1AW W9XYZ TU", not the old call. CONTROL: unchanged,

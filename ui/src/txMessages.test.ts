@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   clampOffsetHz,
-  cqDirFromText,
-  cqSuggestionFromText,
+  cqTypeFromTx6,
+  cqWithType,
   formatReport,
   genStdMessages,
   gridFromMessage,
@@ -373,100 +373,24 @@ describe('the pairs the packer cannot express — panel parity with the air', ()
   })
 })
 
-describe('cqDirFromText — directed CQ parser for Tx6', () => {
-  const MY = 'KD9TAW'
-
-  it('plain CQ (no token) returns null', () => {
-    expect(cqDirFromText('CQ KD9TAW EN52', MY)).toBeNull()
-    expect(cqDirFromText('CQ KD9TAW', MY)).toBeNull()
-    expect(cqDirFromText('cq kd9taw en52', MY)).toBeNull()
+// WSJT-X's `m_CQtype` (on_tx6_editingFinished, mainwindow.cpp 10075-10086) and `genCQMsg` (9466).
+describe('cqTypeFromTx6 / cqWithType — the CQ word an edited Tx6 leaves behind', () => {
+  it('is the second word when a CQ can carry it', () => {
+    expect(cqTypeFromTx6('CQ DX KD9TAW EN52')).toBe('DX')
+    expect(cqTypeFromTx6('cq pota kd9taw')).toBe('POTA')
+    expect(cqTypeFromTx6('CQ 040 KD9TAW')).toBe('040')
+    expect(cqTypeFromTx6('TNX QSO 73')).toBe('QSO')
   })
-
-  it('returns the token for directed CQs — letter tokens', () => {
-    expect(cqDirFromText('CQ DX KD9TAW EN52', MY)).toBe('DX')
-    expect(cqDirFromText('CQ NA KD9TAW', MY)).toBe('NA')
-    expect(cqDirFromText('CQ POTA KD9TAW', MY)).toBe('POTA')
-    expect(cqDirFromText('CQ TEST KD9TAW EN52', MY)).toBe('TEST')
+  it('is a plain CQ otherwise, and unchanged for a row of one word', () => {
+    expect(cqTypeFromTx6('CQ KD9TAW EN52')).toBeNull()
+    expect(cqTypeFromTx6('CQ NEXUS KD9TAW')).toBeNull()
+    expect(cqTypeFromTx6('QRT')).toBeUndefined()
+    expect(cqTypeFromTx6(' CQ')).toBeUndefined()
   })
-
-  it('returns the token for 3-digit zone directed CQs', () => {
-    expect(cqDirFromText('CQ 040 KD9TAW', MY)).toBe('040')
-    expect(cqDirFromText('CQ 005 KD9TAW EN52', MY)).toBe('005')
-  })
-
-  it('is case-insensitive on keyword and token', () => {
-    expect(cqDirFromText('cq dx kd9taw', MY)).toBe('DX')
-    expect(cqDirFromText('CQ dx KD9TAW', MY)).toBe('DX')
-  })
-
-  it('returns undefined for garbage / wrong callsign', () => {
-    expect(cqDirFromText('', MY)).toBeUndefined()
-    expect(cqDirFromText('DE KD9TAW', MY)).toBeUndefined()
-    expect(cqDirFromText('CQ W1ABC EN52', MY)).toBeUndefined()   // wrong callsign
-    expect(cqDirFromText('CQ DX W1ABC EN52', MY)).toBeUndefined() // token present, wrong call
-    expect(cqDirFromText('KD9TAW W1ABC EN52', MY)).toBeUndefined() // not a CQ
-  })
-
-  it('returns undefined when myCall is blank', () => {
-    expect(cqDirFromText('CQ KD9TAW EN52', '')).toBeUndefined()
-  })
-
-  it('rejects 2-digit or 4-digit "zone" tokens (only exactly 3 digits)', () => {
-    // 2-digit: interpreted as... not a valid token under the rule
-    expect(cqDirFromText('CQ 04 KD9TAW', MY)).toBeUndefined()
-    // 4-digit: looks like a GRID — invalid position
-    expect(cqDirFromText('CQ 0400 KD9TAW', MY)).toBeUndefined()
-  })
-
-  it('rejects tokens longer than 4 letters', () => {
-    // NEXUS = 5 letters — not a valid token
-    expect(cqDirFromText('CQ NEXUS KD9TAW', MY)).toBeUndefined()
-  })
-
-  it('plain CQ with trailing invalid grid returns undefined', () => {
-    expect(cqDirFromText('CQ KD9TAW EXTRA STUFF', MY)).toBeUndefined()
-  })
-})
-
-// #254 — the refusal's hint. `cqDirFromText` stays exactly as it is (WSJT-X's grammar is the
-// contract); this is only what we SHOW the operator when it says no. Everything here is a
-// re-ordering of words the operator typed — an invented message is the very fault #254 is.
-describe('cqSuggestionFromText — the valid form to offer a refused Tx6', () => {
-  const MY = 'W9ABC'
-
-  it('re-orders the reporter’s own text into WSJT-X order', () => {
-    expect(cqSuggestionFromText('CQ W9ABC POTA', MY)).toBe('CQ POTA W9ABC')
-    expect(cqSuggestionFromText('cq w9abc dx', MY)).toBe('CQ DX W9ABC')
-    expect(cqSuggestionFromText('CQ W9ABC 040', MY)).toBe('CQ 040 W9ABC')
-  })
-
-  it('keeps a grid, wherever it was typed', () => {
-    expect(cqSuggestionFromText('CQ W9ABC POTA EN61', MY)).toBe('CQ POTA W9ABC EN61')
-    expect(cqSuggestionFromText('CQ W9ABC EN61 POTA', MY)).toBe('CQ POTA W9ABC EN61')
-  })
-
-  it('invents nothing — a callsign that is not ours gets no suggestion', () => {
-    expect(cqSuggestionFromText('CQ POTA W1ABC', MY)).toBeNull()
-    expect(cqSuggestionFromText('CQ W1ABC POTA', MY)).toBeNull()
-    // A typo in our own call is a different call, and guessing it would be the #254 defect.
-    expect(cqSuggestionFromText('CQ W9ACB POTA', MY)).toBeNull()
-  })
-
-  it('refuses to guess when the words do not add up', () => {
-    expect(cqSuggestionFromText('CQ W9ABC POTA SOTA', MY), 'two tokens').toBeNull()
-    expect(cqSuggestionFromText('CQ W9ABC NEXUS', MY), 'not a legal token').toBeNull()
-    expect(cqSuggestionFromText('CQ W9ABC', MY), 'no token at all').toBeNull()
-    expect(cqSuggestionFromText('DE W9ABC POTA', MY), 'not a CQ').toBeNull()
-    expect(cqSuggestionFromText('CQ W9ABC POTA', ''), 'no callsign set').toBeNull()
-  })
-
-  it('has nothing to suggest for text that is already valid', () => {
-    // Everything cqDirFromText accepts must produce no suggestion — the two agree on the
-    // grammar or the operator is shown a "fix" identical to what they typed.
-    for (const ok of ['CQ POTA W9ABC', 'CQ DX W9ABC EN61', 'CQ 040 W9ABC', 'CQ W9ABC EN61']) {
-      expect(cqDirFromText(ok, MY), `control: ${ok} is accepted`).not.toBeUndefined()
-      expect(cqSuggestionFromText(ok, MY), ok).toBeNull()
-    }
+  it('puts the word before the call', () => {
+    expect(cqWithType('CQ KD9TAW EN52', 'DX')).toBe('CQ DX KD9TAW EN52')
+    expect(cqWithType('CQ KD9TAW EN52', null)).toBe('CQ KD9TAW EN52')
+    expect(cqWithType('', 'DX')).toBe('')
   })
 })
 

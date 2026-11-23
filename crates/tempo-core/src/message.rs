@@ -153,7 +153,7 @@ pub fn is_my_base_call(de: &str, mycall: &str) -> bool {
 
 /// A valid WSJT-X directed-CQ token: 1–4 letters ("DX", "NA", "POTA", "TEST")
 /// or exactly 3 digits (a kHz QSY like "CQ 040 …").
-fn is_cq_dir(s: &str) -> bool {
+pub fn is_cq_dir(s: &str) -> bool {
     (!s.is_empty() && s.len() <= 4 && s.chars().all(|c| c.is_ascii_alphabetic()))
         || (s.len() == 3 && s.chars().all(|c| c.is_ascii_digit()))
 }

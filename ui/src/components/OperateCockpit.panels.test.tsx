@@ -299,15 +299,18 @@ describe('OperateCockpit — TX controls are not panels', () => {
 // way to send that without going back to Classic. I can change it in Classic and it will work
 // for one call, then revert back to just 'CQ' unless I go back to Classic and change it again."
 //
-// The Tx6 field IS the way — `cqDirFromText` parses it and Tx6 fires `startCq(dir)`. What broke
+// The Tx6 field IS the way — Tx6 sends it as typed (`startCq(null, tx6)`). What broke
 // it is that the stock "Clear DX call and grid after logging" option wiped Tx6 too, so the
 // directed CQ survived exactly one contact.
 //
 // WSJT-X keeps the two apart: editing Tx6 sets `m_CQtype` (`on_tx6_editingFinished`), which the
-// DX-clear never touches. The option's own name says what it clears, and the CQ message is not
-// the DX call.
+// DX-clear never touches. Its clear does write Tx6 again (`genStdMsgs`, mainwindow.cpp 9830), from
+// that CQ word, our call and our Settings grid: the direction survives, a grid typed into the row
+// does not.
 describe('a directed CQ survives the after-logging DX clear', () => {
   const TX6 = 'CQ DX KD9TAW EN52'
+  /** The row as WSJT-X writes it again: the CQ word kept, the Settings grid (EN61). */
+  const AGAIN = 'CQ DX KD9TAW EN61'
 
   function tx6Field(): HTMLInputElement | null {
     // The Tx6 row's editable text input, found by its current value.
@@ -325,11 +328,11 @@ describe('a directed CQ survives the after-logging DX clear', () => {
 
     // The QSO logs and the stock option fires the DX clear, on the SAME instance.
     bumpDxClear(1)
-    expect(tx6Field()?.value, 'the directed CQ must survive the DX clear').toBe(TX6)
+    expect(tx6Field()?.value, 'the directed CQ must survive the DX clear').toBe(AGAIN)
 
     // …and again, because a pileup is many contacts, not one.
     bumpDxClear(2)
-    expect(tx6Field()?.value).toBe(TX6)
+    expect(tx6Field()?.value).toBe(AGAIN)
   })
 })
 

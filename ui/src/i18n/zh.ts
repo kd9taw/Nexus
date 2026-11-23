@@ -2853,8 +2853,6 @@ export const ZH: PartialCatalog = {
   "operate.tx.tx6.contest.hint": "竞赛的 CQ — Tx 6 像呼叫 CQ 那样呼叫它",
   "operate.tx.callCq.title": "呼叫 CQ（Alt+6）",
   "operate.tx.send.title": "将此作为下一次发射发送（Alt+{{n}}）",
-  "operate.tx.cq.malformed.try": "未发送 — 这不是 Nexus 能呼叫的 CQ。试试：{{fix}}",
-  "operate.tx.cq.malformed": "未发送 — 这不是 Nexus 能呼叫的 CQ。格式为 CQ，可选的方向词，然后是 {{mycall}} 和你的网格。",
   "waterfall.palette.aria.scoped": "瀑布图调色板（本模式）",
   "waterfall.palette.aria.shared": "瀑布图调色板（语音、CW、RTTY 与 SSTV — FT 单独）",
   "waterfall.palette.title.scoped": "瀑布图调色板 — 应用于本模式",
