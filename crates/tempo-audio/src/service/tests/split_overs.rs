@@ -5694,26 +5694,65 @@ fn fake_it_and_none_never_touch_the_split_off_the_digital_screens() {
     }
 }
 
-/// ⛔ A SPLIT OFF THE RADIO REJECTS KEYS NOTHING, AND SAYS WHY. Fake It on 12 m, the radio left in its
-/// 10 m split and refusing `S 0`: the over keys nothing, TX stops, and the refused key's line says
-/// it was the split.
+/// ⛔ A SPLIT OFF THE RADIO NEVER ANSWERS KEYS NOTHING, AND SAYS WHY. Fake It on 12 m, the radio
+/// left in its 10 m split: one that answers every split command with Hamlib's "the rig did not
+/// answer" (`RPRT -5`), and a link that answers none in time at all. The over keys nothing, TX
+/// stops, and the refused key's line says it was the split.
 #[test]
-fn fake_it_keys_nothing_when_the_radio_rejects_split_off() {
-    let engine = cq_engine_at(SplitMode::FakeIt, Tier::Ft8, 24.915, "12m", 1958.0);
-    let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, Some(STALE_10M_VFO_B));
-    b.radio.vfos.lock().unwrap().refuse_split_off = true;
-    let w = b.ticks(900);
-    assert!(!w.iter().any(|l| l == "T 1"), "keyed: {w:?}");
-    assert!(
-        w.iter().any(|l| l == "S 0 VFOA"),
-        "premise: split off asked: {w:?}"
-    );
-    let e = b.engine.lock().unwrap();
-    assert!(!e.tx_enabled(), "TX still on");
-    let refused = e
-        .snapshot()
-        .radio
-        .slot_key_refused
-        .expect("nothing says why the over was not sent");
-    assert!(refused.split_failed, "not told as the split: {refused:?}");
+fn fake_it_keys_nothing_when_the_radio_never_answers_split_off() {
+    for (what, no_answer) in [("RPRT -5", true), ("no answer in time", false)] {
+        let engine = cq_engine_at(SplitMode::FakeIt, Tier::Ft8, 24.915, "12m", 1958.0);
+        let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, Some(STALE_10M_VFO_B));
+        if no_answer {
+            b.radio.vfos.lock().unwrap().split_no_answer = true;
+        } else {
+            b.rig.test_reply_deadline_ms = Some(300);
+            b.radio.vfos.lock().unwrap().split_write_delay_ms = 1_000;
+        }
+        // Connected 2 s before this station's own slot: the key's own split off decides.
+        b.t = b.slot - 2_000.0;
+        let w = b.ticks(200);
+        assert!(!w.iter().any(|l| l == "T 1"), "{what}: keyed: {w:?}");
+        assert!(
+            w.iter().any(|l| l == "S 0 VFOA"),
+            "{what}: premise: split off asked: {w:?}"
+        );
+        let e = b.engine.lock().unwrap();
+        assert!(!e.tx_enabled(), "{what}: TX still on");
+        let refused = e
+            .snapshot()
+            .radio
+            .slot_key_refused
+            .expect("nothing says why the over was not sent");
+        assert!(
+            refused.split_failed,
+            "{what}: not told as the split: {refused:?}"
+        );
+    }
+}
+
+/// ⭐ A RADIO THAT REFUSES SPLIT OFF KEYS AS BEFORE, ASKED ONCE PER CONNECTION. Fake It and None on
+/// 12 m, the radio refusing every split off with an error code (`RPRT -9`): it cannot control
+/// split, so the overs key as they always did, and split off is asked once on the connection, not
+/// before every over. (Its split, if any, is the radio's own: Nexus could not have changed it.)
+#[test]
+fn fake_it_and_none_key_as_before_on_a_radio_that_refuses_split_off() {
+    for split in [SplitMode::FakeIt, SplitMode::None] {
+        let engine = cq_engine_at(split, Tier::Ft8, 24.915, "12m", 1958.0);
+        let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, None);
+        b.radio.vfos.lock().unwrap().refuse_split_off = true;
+        let _ = b.overs(2);
+        let asked = writes_of(&b.radio)
+            .iter()
+            .filter(|l| *l == "S 0 VFOA")
+            .count();
+        assert_eq!(asked, 1, "{split:?}: split off asked {asked} times");
+        let e = b.engine.lock().unwrap();
+        assert!(e.tx_enabled(), "{split:?}: TX halted");
+        assert_eq!(
+            e.snapshot().radio.slot_key_refused,
+            None,
+            "{split:?}: refused"
+        );
+    }
 }

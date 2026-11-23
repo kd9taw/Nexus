@@ -732,6 +732,9 @@ pub struct Rig {
     /// the digital screens and at a change of band. A dial, mode or level write keeps it: none of
     /// those turns split on.
     pub(crate) split_off_confirmed: bool,
+    /// The radio refused split off on this connection and the log has said so once
+    /// ([`Self::turn_split_off`]): not said again for every over.
+    split_off_refusal_logged: bool,
     /// True when the CAT link is a NETWORK transport (rigctld → SmartSDR / remote radio), where a
     /// reply can legitimately take seconds. Serial rigs answer in milliseconds, so a serial link
     /// uses a much shorter per-command deadline — a stalled serial read then can't hold the radio
@@ -1041,6 +1044,7 @@ impl Rig {
             split_refused_at_key: false,
             split_confirmed: None,
             split_off_confirmed: false,
+            split_off_refusal_logged: false,
             slow_transport: false,
             network_chain: false,
             owed_replies: 0,
@@ -1197,6 +1201,7 @@ impl Rig {
                 // A new connection may be to a radio (or a daemon) that holds nothing we confirmed.
                 self.split_confirmed = None;
                 self.split_off_confirmed = false;
+                self.split_off_refusal_logged = false;
                 #[cfg(test)]
                 {
                     self.split_off_confirmed = self.test_split_off_on_connect;
@@ -2632,6 +2637,42 @@ impl Rig {
             self.split_off_confirmed = !on;
             true
         })
+    }
+    /// Split Operation Fake It or None's split off (`S 0 VFOA`), confirming it on this connection
+    /// ([`Self::split_off_confirmed`]). `Err` only when the radio never answered (the link's own
+    /// deadline, a dropped connection, Hamlib's "the rig did not answer"): then nothing may key.
+    ///
+    /// ⭐ A REFUSAL IS "THIS LINK CANNOT CONTROL SPLIT", NOT A REASON TO KEY NOTHING (the operator,
+    /// 2026-11-23). Split Operation None is the default, so every FT station sends this; a radio
+    /// whose Hamlib backend answers split off with an error code (not only `RPRT -11` or `-4`) would
+    /// otherwise never transmit FT again, where it always had. A radio that refuses split commands
+    /// is not one Nexus could have taken out of a split either. So a refusal is taken as done, and
+    /// the log says so once per connection, not for every over.
+    pub(crate) fn turn_split_off(&mut self) -> std::io::Result<()> {
+        if self.control.is_none() {
+            self.split_off_confirmed = true;
+            return Ok(());
+        }
+        let line = split_line(false, "VFOA");
+        self.split_confirmed = None;
+        self.split_writes += 1;
+        let reply = self.command(&line)?;
+        match rprt_code(&reply) {
+            Some(code) if code != 0 && !rprt_is_link_fault(code) => {
+                if !std::mem::replace(&mut self.split_off_refusal_logged, true) {
+                    tempo_core::applog::info(
+                        "tx",
+                        &format!(
+                            "Split Operation: the radio does not take split off (RPRT {code}); \
+                             taken as a link that cannot control split, transmitting as before"
+                        ),
+                    );
+                }
+                self.split_off_confirmed = true;
+                Ok(())
+            }
+            _ => Self::cat_reply(&line, &reply).map(|()| self.split_off_confirmed = true),
+        }
     }
     /// Set the split (TX) frequency in Hz.
     pub fn set_split_freq(&mut self, hz: u64) -> std::io::Result<()> {

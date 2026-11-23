@@ -601,17 +601,18 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
     // still in a split it was left in (an earlier session, another program, its own SPLIT key)
     // transmits from VFO B, on whatever band that is: on 10 m from a 12 m session. On the digital
     // screens, unless the radio already confirmed split off on this connection
-    // ([`Rig::split_off_confirmed`]), `S 0 VFOA` goes before the key, and a radio that refuses it
-    // or never answers keys nothing, as WSJT-X stops on a Hamlib error. A cluster SPLIT-on-Work
-    // owns VFO B and is left alone; the CW and Phone screens' split is the operator's.
+    // ([`Rig::split_off_confirmed`]), `S 0 VFOA` goes before the key, and a radio that never
+    // answers it keys nothing; one that refuses it cannot control split and keys as before
+    // ([`Rig::turn_split_off`]). A cluster SPLIT-on-Work owns VFO B and is left alone; the CW and
+    // Phone screens' split is the operator's.
     if eng.settings().split_mode != SplitMode::Rig
         && eng.settings().operating_mode == tempo_app::settings::OperatingMode::Digital
         && !eng.cluster_split_active()
         && !rig.split_off_confirmed
     {
-        if let Err(e) = rig.set_split_where_available(false, "VFOA") {
+        if let Err(e) = rig.turn_split_off() {
             return SplitApply {
-                refused: Some(format!("the radio did not turn its split off ({e})")),
+                refused: Some(format!("the radio did not answer split off ({e})")),
                 ..none
             };
         }

@@ -8682,9 +8682,8 @@ impl RadioLoop {
         // (`slot::apply_tx_dial_shift`), or the key goes out with nothing.
         if split_off && !rig.split_off_confirmed && rig.has_control() {
             return rig
-                .set_split_where_available(false, "VFOA")
-                .map(|_| ())
-                .map_err(|e| format!("the radio did not turn its split off ({e})"));
+                .turn_split_off()
+                .map_err(|e| format!("the radio did not answer split off ({e})"));
         }
         if !at.ft_rig || at.cluster_active || !rig.has_control() {
             return Ok(());
@@ -17473,8 +17472,8 @@ impl RadioLoop {
         // engine lock, as the pre-set.
         if !preset_ran && self.split_off_due(&eng, rig, now, lead_ms, reconnected) {
             drop(eng);
-            match rig.set_split_where_available(false, "VFOA") {
-                Ok(_) => tempo_core::applog::info(
+            match rig.turn_split_off() {
+                Ok(()) => tempo_core::applog::info(
                     "tx",
                     "Split Operation: the radio's split turned off for the digital screens",
                 ),
@@ -17483,7 +17482,7 @@ impl RadioLoop {
                     tempo_core::applog::info(
                         "tx",
                         &format!(
-                            "Split Operation: the radio did not turn its split off ({e}); the \
+                            "Split Operation: the radio did not answer split off ({e}); the \
                              next key asks again"
                         ),
                     );
