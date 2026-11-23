@@ -440,7 +440,9 @@ if [ -n "$DSHARD" ]; then
   # Each probe is capped to catch a hang, not to race a slow one. The slowest probe's CI time
   # (stopvisible, 593 s on 2026-11-16) sat 7 s under the old 600 s cap and timed out on a
   # loaded runner; keep the cap at least half again above the slowest probe in the list above.
-  PROBE_CAP_S=900
+  # Since the Tab walk came to cover every keyboard cockpit (2026-11-22) stopvisible takes about
+  # 1000 s alone on the development box (its rows finish at 860-880 s), past the 900 s cap.
+  PROBE_CAP_S=1500
   red=()
   for s in "${mine[@]}"; do
     t0=$SECONDS
