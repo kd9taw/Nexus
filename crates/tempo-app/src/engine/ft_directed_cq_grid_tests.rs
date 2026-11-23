@@ -11,7 +11,7 @@
 //! return after Clear DX, and the Tx6 that follows a partner's 73) to the text WSJT-X would send, and
 //! check the packer sends it as a standard (`i3=1`) CQ that decodes back verbatim.
 
-use super::contest_ft_messages_tests::{air_form, keyed};
+use super::contest_ft_messages_tests::{air_form, bits77, engine_for, keyed};
 use super::*;
 use crate::test_util::StoredLog;
 
@@ -29,8 +29,47 @@ fn station(grid: &str, tier: Tier) -> Engine {
     e
 }
 
-/// The over `slot` keys must be `want`, and the packer must send it as a standard message that a
-/// receiving station decodes as exactly that text.
+/// What `kind`'s encoder sends for `text`: every channel tone, and on FT8 the 77 message bits read
+/// back out of them. The tones are a fixed function of the 77 bits (CRC and LDPC parity added), so
+/// equal tones are equal bits on FT4 too.
+fn frame(kind: modes::ModeKind, text: &str) -> (Vec<i32>, Option<Vec<i8>>) {
+    let tones = modes::make_mode(kind).encode(text);
+    assert!(!tones.is_empty(), "{text:?} encodes");
+    let bits = (kind == modes::ModeKind::Ft8).then(|| bits77(&tones).expect("FT8 bits"));
+    (tones, bits)
+}
+
+/// ⭐ THE FIX CHANGES NO TRANSMITTED BIT. `sent` (the CQ as it is built now) and the CQ as it was
+/// built before, with the Settings locator `settings_grid` as typed, are the same 77 bits on
+/// `kind`: only the text Nexus shows and logs changed.
+fn same_frame_as_before(kind: modes::ModeKind, sent: &str, settings_grid: &str, what: &str) {
+    let Msg::Cq { de, dir, .. } = Msg::parse(sent) else {
+        panic!("{what}: a CQ: {sent}");
+    };
+    let before = Msg::Cq {
+        de,
+        grid: settings_grid.to_string(),
+        dir,
+    }
+    .to_text();
+    assert_eq!(
+        frame(kind, sent),
+        frame(kind, &before),
+        "{what}: {sent:?} and the {before:?} it replaces are one frame"
+    );
+}
+
+/// The FT encoder `tier` keys.
+fn kind_of(tier: Tier) -> modes::ModeKind {
+    match tier {
+        Tier::Ft4 => modes::ModeKind::Ft4,
+        _ => modes::ModeKind::Ft8,
+    }
+}
+
+/// The over `slot` keys must be `want`, the packer must send it as a standard message that a
+/// receiving station decodes as exactly that text, and it must be the frame the CQ built from the
+/// Settings locator as typed was.
 fn keys_standard(e: &mut Engine, slot: u64, want: &str, what: &str) {
     assert_eq!(keyed(e, slot).as_deref(), Some(want), "{what}: the over");
     assert_eq!(
@@ -38,6 +77,8 @@ fn keys_standard(e: &mut Engine, slot: u64, want: &str, what: &str) {
         ("i3=1".to_string(), want.to_string()),
         "{what}: a standard CQ on the air, not free text"
     );
+    let grid = e.settings.mygrid.clone();
+    same_frame_as_before(kind_of(e.app.tier()), want, &grid, what);
 }
 
 /// ⭐ THE DIRECTED CQ CARRIES FOUR CHARACTERS. A six-character locator in Settings calls
@@ -139,6 +180,26 @@ fn the_tx6_after_the_partners_73_keeps_four_characters() {
         Some("CQ DX KR4FQG EM64"),
         "the Tx6 after the partner's 73"
     );
+    same_frame_as_before(
+        modes::ModeKind::Ft8,
+        "CQ DX KR4FQG EM64",
+        MY_GRID6,
+        "the Tx6 after the partner's 73",
+    );
+}
+
+/// The Field Day CQ with a six-character locator: `CQ FD <call> <grid4>`, WSJT-X's own form
+/// (`genCQMsg` rebuilds the Tx6 it made from `grid.left (4)` with `FD` in front), on FT8 and FT4,
+/// and the frame the locator as typed made.
+#[test]
+fn the_field_day_cq_sends_four_characters_and_the_same_frame() {
+    for tier in [Tier::Ft8, Tier::Ft4] {
+        let what = format!("{tier:?} CQ FD");
+        let mut e = engine_for("arrlfd", "FN42ab");
+        e.set_tier(tier);
+        e.start_running().expect("the run starts");
+        keys_standard(&mut e, 0, "CQ FD K1ABC FN42", &what);
+    }
 }
 
 /// What the packer makes of six characters: it reads only the first four characters of a grid

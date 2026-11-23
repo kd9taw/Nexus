@@ -216,7 +216,7 @@ fn heard(text: &str) -> modes::Decode {
 
 /// A station in `contest`, with the master switch on and every Settings field a contest on
 /// the list sends filled for an out-of-state entrant in Massachusetts.
-fn engine_for(contest: &str, grid: &str) -> Engine {
+pub(super) fn engine_for(contest: &str, grid: &str) -> Engine {
     let mut e = Engine::new(ME, grid, 0);
     let mut s = e.settings().clone();
     s.fd_event = contest.into();
