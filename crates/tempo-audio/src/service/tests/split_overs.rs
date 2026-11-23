@@ -4936,7 +4936,7 @@ fn a_release_never_restores_a_split_on_another_band() {
     let w = writes_of(&b.radio);
     assert!(!w.iter().any(|l| l == "T 1"), "premise: refused: {w:?}");
     assert!(
-        !w.iter().any(|l| *l == stale),
+        !w.contains(&stale),
         "a refused over: the 10 m VFO B put back: {w:?}"
     );
     assert!(
@@ -4972,7 +4972,7 @@ fn a_release_never_restores_a_split_on_another_band() {
         .collect();
     assert_eq!(w, ["S 0 VFOA"], "a band change");
     assert!(
-        !writes_of(&b.radio).iter().any(|l| *l == stale),
+        !writes_of(&b.radio).contains(&stale),
         "the 10 m VFO B written: {:?}",
         writes_of(&b.radio)
     );
