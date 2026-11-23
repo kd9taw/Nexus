@@ -5756,3 +5756,148 @@ fn a_rejected_split_off_still_keys_logged_once() {
         );
     }
 }
+
+/// ⛔ A RAW READ KEEPS SPLIT OFF CONFIRMED. The TX ALC poll (`RM4;`) after every over on an FTDX10,
+/// the scope's span read every few seconds: none of them can put the radio in split, so split off
+/// is not sent again for them. Four None overs with the ALC read between each send split off once.
+#[test]
+fn a_raw_read_keeps_split_off_confirmed() {
+    let engine = engine_at(SplitMode::None, Tier::Ft8, 24.915, "12m", 1958.0);
+    let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, Some(STALE_10M_VFO_B));
+    b.rig.turn_split_off().unwrap();
+    assert!(b.rig.split_off_confirmed, "premise");
+    let _ = b.rig.send_raw("RM4;");
+    assert!(b.rig.split_off_confirmed, "a raw read forgot split off");
+
+    let engine = cq_engine_at(SplitMode::None, Tier::Ft8, 24.915, "12m", 1958.0);
+    let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, Some(STALE_10M_VFO_B));
+    let _ = b.overs(1);
+    for _ in 0..3 {
+        let _ = b.rig.send_raw("RM4;");
+        b.slot = (b.t / 30_000.0).ceil() * 30_000.0;
+        let _ = b.overs(1);
+    }
+    let n = writes_of(&b.radio)
+        .iter()
+        .filter(|l| *l == "S 0 VFOA")
+        .count();
+    assert_eq!(n, 1, "split off sent {n} times in 4 overs");
+}
+
+/// ⛔ A CLUSTER SPLIT-ON-WORK OWNS VFO B, AND FAKE IT LEAVES IT ON. Fake It on 12 m with a spot's
+/// SPLIT-on-Work to 24.920 MHz: the split goes to the radio, and Fake It never turns it off; the
+/// over goes out of VFO B, where the spot asked.
+#[test]
+fn fake_it_leaves_a_cluster_split_on_work_on() {
+    let engine = cq_engine_at(SplitMode::FakeIt, Tier::Ft8, 24.915, "12m", 1958.0);
+    let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, None);
+    b.engine.lock().unwrap().request_split(Some(24.920));
+    let (at, before) = first_key_of(&mut b, 1_500);
+    let on = before.iter().rposition(|l| l.starts_with("S 1"));
+    assert!(
+        on.is_some(),
+        "premise: the cluster split went to the radio: {before:?}"
+    );
+    assert!(
+        !before[on.unwrap()..].iter().any(|l| l == "S 0 VFOA"),
+        "Fake It turned the cluster split off: {before:?}"
+    );
+    assert_eq!(
+        at.first(),
+        Some(&24_920_000),
+        "keyed off the cluster's TX dial: {before:?}"
+    );
+}
+
+/// ⛔ STOP TX DURING A SLOW SPLIT OFF KEYS NOTHING: at a slot over's key, before a Tune and before
+/// the PTT. None on 12 m, the radio left in its 10 m split and 600 ms to answer each split command,
+/// Stop TX pressed 100 ms into the split off: no key follows.
+#[test]
+fn stop_tx_during_a_slow_split_off_keys_nothing() {
+    type Press = fn(&mut Engine);
+    let cases: [(&str, Press, bool); 3] = [
+        ("a slot over", |_| {}, true),
+        ("Tune", |e| e.set_tune(true), false),
+        ("the PTT", |e| e.set_ptt(true), false),
+    ];
+    for (what, press, slot) in cases {
+        let engine = if slot {
+            cq_engine_at(SplitMode::None, Tier::Ft8, 24.915, "12m", 1958.0)
+        } else {
+            engine_at(SplitMode::None, Tier::Ft8, 24.915, "12m", 1958.0)
+        };
+        let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, Some(STALE_10M_VFO_B));
+        b.rig.test_reply_deadline_ms = Some(2_000);
+        b.radio.vfos.lock().unwrap().split_write_delay_ms = 600;
+        b.t = b.slot - 2_000.0;
+        {
+            let mut e = b.engine.lock().unwrap();
+            e.set_tx_enabled(true);
+            press(&mut e);
+        }
+        let engine = b.engine.clone();
+        let stop = engine.lock().unwrap().stop_tx_handle();
+        let lines = b.radio.peer.lines.clone();
+        let presser = std::thread::spawn(move || {
+            let t0 = std::time::Instant::now();
+            while !lines.lock().unwrap().iter().any(|l| l == "S 0 VFOA") {
+                if t0.elapsed() > std::time::Duration::from_secs(20) {
+                    return false;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            stop.press();
+            engine.lock().unwrap().halt_tx();
+            true
+        });
+        let mut n = 0;
+        while n < 400 && !presser.is_finished() {
+            let _ = b.ticks(1);
+            n += 1;
+        }
+        let _ = b.ticks(10);
+        assert!(presser.join().unwrap(), "{what}: premise: split off asked");
+        let w = writes_of(&b.radio);
+        assert!(
+            !w.iter().any(|l| l == "T 1"),
+            "{what}: keyed after Stop TX: {w:?}"
+        );
+    }
+}
+
+/// ⛔ COMING BACK TO THE DIGITAL SCREENS FROM ANY OTHER SCREEN TURNS SPLIT OFF AGAIN, not only from
+/// CW or Phone: Fake It on 12 m, split off confirmed; on the RTTY screen the radio is put in split
+/// (its own SPLIT key); back on the FT screens, split off goes again before the over keys, on 12 m.
+#[test]
+fn coming_back_from_the_rtty_screen_turns_split_off_again() {
+    let engine = cq_engine_at(SplitMode::FakeIt, Tier::Ft8, 24.915, "12m", 1958.0);
+    let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, None);
+    let _ = b.ticks(100);
+    assert!(b.rig.split_off_confirmed, "premise: split off confirmed");
+    b.engine.lock().unwrap().set_operating_mode("rtty", false);
+    let _ = b.ticks(10);
+    {
+        let mut v = b.radio.vfos.lock().unwrap();
+        v.split = true;
+        v.b = STALE_10M_VFO_B;
+        v.tx_at_key.clear();
+    }
+    b.radio.peer.lines.lock().unwrap().clear();
+    {
+        let mut e = b.engine.lock().unwrap();
+        e.set_operating_mode("digital", false);
+        e.set_frequency(24.915, "12m", "USB");
+    }
+    b.call_cq_now();
+    let (at, before) = first_key_of(&mut b, 1_600);
+    assert_eq!(
+        at.first(),
+        Some(&FT8_12M_DIAL),
+        "keyed off 12 m: {before:?}"
+    );
+    assert!(
+        before.iter().any(|l| l == "S 0 VFOA"),
+        "keyed with split not turned off after coming back: {before:?}"
+    );
+}
