@@ -1048,7 +1048,6 @@ impl Rig {
             #[cfg(test)]
             test_reply_deadline_ms: None,
             #[cfg(test)]
-            #[cfg(test)]
             test_debt_lapses_after_split_take: false,
         }
     }

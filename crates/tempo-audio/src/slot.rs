@@ -3005,6 +3005,86 @@ mod tests {
         scenes[2].dropped_at_once(500, 1, "FT4, 9.5 s");
     }
 
+    /// ⛔ NO SLOT TIER PLAYS PAST ITS OWN PERIOD, NOT ONLY FT8 AND FT4. FT2 (a 3.75 s period, no WSJT-X
+    /// window of its own) with the cold split's four writes at 600 ms and 1.1 s each and the key at
+    /// 100 ms: at 600 ms the carrier comes about 2.5 s in, and only what fits before 3.75 s plays;
+    /// at 1.1 s it comes about 4.5 s in, past the period, and is unkeyed at once with nothing
+    /// played, TX left on, as an FT8 key past its period is. It used to play the whole 2.52 s
+    /// over from the key, to about 7.3 s, in the other station's period.
+    #[test]
+    fn an_ft2_key_a_slow_split_takes_late_never_plays_past_its_period() {
+        for split_ms in [600u64, 1_100] {
+            let s = slow_split_boundary(tempo_app::dto::Tier::Ft2, 0.0, split_ms, 100);
+            let key_at = s.came("T 1");
+            let played_ms = s.played.len() as f64 * 1000.0 / tempo_fast::SAMPLE_RATE as f64;
+            let what = format!("{split_ms} ms a write: keyed {key_at:.0} ms in");
+            if key_at + 100.0 >= s.period_ms {
+                assert!(
+                    s.played.is_empty() && !s.act.tx_this_slot,
+                    "{what}: played {played_ms:.0} ms past its {} ms period",
+                    s.period_ms
+                );
+                assert!(s.eng.tx_enabled(), "{what}: TX halted");
+            } else {
+                assert!(s.act.tx_this_slot, "{what}: premise: keyed in its period");
+                assert!(
+                    key_at + played_ms <= s.period_ms + 150.0,
+                    "{what}: played {played_ms:.0} ms, to {:.0} ms of a {} ms period",
+                    key_at + played_ms,
+                    s.period_ms
+                );
+                assert!(
+                    s.act
+                        .tx_until_ms
+                        .is_some_and(|t| t - s.slot_start <= s.period_ms),
+                    "{what}: PTT held past the period: {:?}",
+                    s.act.tx_until_ms.map(|t| t - s.slot_start)
+                );
+            }
+        }
+    }
+
+    /// ⛔ STOP TX LANDS BETWEEN THE SPLIT WRITES, NOT AFTER THEM ALL. A radio at 300 ms a split write,
+    /// Stop TX pressed 400 ms into the over's key-time writes (counted without the engine's lock,
+    /// which the over holds): the write in flight finishes, nothing more is sent, and nothing keys.
+    /// The over is back within one write's time of the press.
+    #[test]
+    fn stop_tx_during_the_split_writes_keys_nothing_and_lands_within_one_write() {
+        use std::sync::atomic::{AtomicBool, AtomicU64};
+        use std::sync::Arc;
+        let (addr, log) = split_link(
+            300,
+            Arc::new(AtomicU64::new(14_074_000)),
+            Arc::new(AtomicBool::new(false)),
+        );
+        let mut rig = Rig::rigctld(&addr);
+        rig.set_slow_transport(true);
+        let eng = rig_split_cq_at(750.0);
+        let stop = eng.stop_tx_handle();
+        let press = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            stop.press();
+            std::time::Instant::now()
+        });
+        let (act, backend, _eng, sent) = over_through(eng, &mut rig, &log);
+        let returned = std::time::Instant::now();
+        let pressed = press.join().unwrap();
+        assert!(
+            !sent.iter().any(|l| l == "T 1"),
+            "keyed after Stop TX: {sent:?}"
+        );
+        assert!(
+            backend.played.is_empty() && !act.tx_this_slot,
+            "the over went out"
+        );
+        assert_eq!(sent, ["S 1 VFOB", "I 14073000"], "written after Stop TX");
+        let late = returned.saturating_duration_since(pressed);
+        assert!(
+            late < std::time::Duration::from_millis(450),
+            "Stop TX landed {late:?} after the press"
+        );
+    }
+
     #[test]
     fn a_fast_key_on_split_still_plays_its_over_on_time() {
         // Control: the same split answered at once. The FT8 over keyed on the boundary plays whole

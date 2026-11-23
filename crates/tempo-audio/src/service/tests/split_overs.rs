@@ -5279,3 +5279,120 @@ fn the_pre_set_waits_for_cw_and_the_pc_microphone() {
     b.state.pc_mic_open = None;
     assert!(due(&mut b), "premise: due once it is closed");
 }
+
+// ── The second TX review: a late start past its period, a loop hold with no rig hold, a Tune at a
+// band change, a radio switch ───────────────────────────────────────────────────────────────────
+
+/// ⛔ A LATE START NEVER PLAYS PAST ITS PERIOD EITHER. FT2 on 12 m, the radio at 1.1 s a split write,
+/// Call CQ 100 ms into this station's own slot, right after connecting: the four cold writes take
+/// about 4.4 s, so the key comes past FT2's 3.75 s period, and nothing plays. It used to play the
+/// whole over from the key, in the other station's period.
+#[test]
+fn a_late_start_whose_split_writes_run_past_its_period_plays_nothing() {
+    let engine = engine_at(SplitMode::Rig, Tier::Ft2, 24.915, "12m", 1958.0);
+    let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, Some(STALE_10M_VFO_B));
+    b.rig.test_reply_deadline_ms = Some(3_000);
+    b.radio.vfos.lock().unwrap().split_write_delay_ms = 1_100;
+    b.t = b.slot + 100.0;
+    b.call_cq_now();
+    let started = std::time::Instant::now();
+    let key = b.ticks_to_key(5);
+    let took = started.elapsed();
+    assert!(
+        took >= std::time::Duration::from_millis(3_750),
+        "premise: the writes ran past the period: {took:?} {key:?}"
+    );
+    assert!(
+        b.backend.played.is_empty(),
+        "played {} samples past the period: {key:?}",
+        b.backend.played.len()
+    );
+}
+
+/// ⛔ A HOLD THE LOOP BELIEVES IN AND THE RIG DOES NOT STILL WRITES THE DIAL'S SPLIT FIRST. The loop
+/// holds a split on 12 m (`audio_rig_split`) that this link never took (`tx_split_held` false: a
+/// rebuild replaced the rig without a let-go), the radio left in its 10 m split: a Tune writes
+/// split on, VFO B on the 12 m dial, its mode and split on last before its key.
+#[test]
+fn a_loop_hold_without_a_rig_hold_writes_the_dials_split_before_a_tune() {
+    let engine = engine_at(SplitMode::Rig, Tier::Ft8, 24.915, "12m", 1958.0);
+    let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, Some(STALE_10M_VFO_B));
+    b.state.audio_rig_split = true;
+    b.state.rig_split_dial = FT8_12M_DIAL;
+    assert!(!b.rig.tx_split_held, "premise");
+    {
+        let mut e = b.engine.lock().unwrap();
+        e.set_tx_enabled(true);
+        e.set_tune(true);
+    }
+    let (at, before) = keyed_after(&mut b, 50);
+    assert_eq!(
+        at.first(),
+        Some(&FT8_12M_DIAL),
+        "keyed off 12 m: {before:?}"
+    );
+    assert!(
+        ends_with_xit_0_on(&before, FT8_12M_DIAL),
+        "keyed without the 12 m split first: {before:?}"
+    );
+}
+
+/// ⛔ A TUNE ON THE TICK OF A BAND CHANGE WRITES THE NEW BAND'S SPLIT FIRST. A split held on 10 m,
+/// the band changed to 12 m and Tune pressed in the same moment, before the loop's quiet point lets
+/// go of the 10 m split: the Tune lets go of it, then writes split on, VFO B on the 12 m dial, its
+/// mode and split on last, and only then keys, on 12 m.
+#[test]
+fn a_tune_at_a_band_change_writes_the_new_bands_split_before_its_key() {
+    let engine = cq_engine_at(SplitMode::Rig, Tier::Ft8, 28.074, "10m", 1008.0);
+    let mut b = hamlib_bench_on(engine, FT8_10M_DIAL, Some(STALE_10M_VFO_B));
+    let _ = b.overs(1);
+    assert!(b.state.audio_rig_split, "premise: held on 10 m");
+    b.radio.vfos.lock().unwrap().tx_at_key.clear();
+    b.radio.peer.lines.lock().unwrap().clear();
+    {
+        let mut e = b.engine.lock().unwrap();
+        e.set_frequency(24.915, "12m", "USB");
+        e.set_tx_enabled(true);
+        e.set_tune(true);
+    }
+    let (at, before) = keyed_after(&mut b, 50);
+    assert_eq!(
+        at.first(),
+        Some(&FT8_12M_DIAL),
+        "the tune keyed off 12 m: {before:?}"
+    );
+    assert!(
+        ends_with_xit_0_on(&before, FT8_12M_DIAL),
+        "the tune keyed without the 12 m split first: {before:?}"
+    );
+}
+
+/// ⭐ A RADIO SWITCH OWES THE PRE-SET EVEN ON THE SAME BAND. The pre-set has gone at connect; the
+/// loop then hands over to another radio on an already-open link (the radio pool's handoff), the
+/// dial unchanged, the new radio in its own stale split. The new radio gets its split for the dial
+/// while the station receives, so its first over does not write it cold at the key.
+#[test]
+fn a_radio_switch_on_the_same_band_owes_the_pre_set() {
+    let engine = engine_at(SplitMode::Rig, Tier::Ft8, 24.915, "12m", 1958.0);
+    let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, Some(STALE_10M_VFO_B));
+    let _ = b.ticks(100);
+    assert_eq!(
+        b.radio.vfos.lock().unwrap().b,
+        FT8_12M_DIAL,
+        "premise: pre-set"
+    );
+    // The handoff: what this loop held is forgotten, and the new radio holds nothing confirmed.
+    b.state.reset_for_handoff();
+    b.rig.tx_split_held = false;
+    b.rig.split_confirmed = None;
+    {
+        let mut v = b.radio.vfos.lock().unwrap();
+        v.split = true;
+        v.b = STALE_10M_VFO_B;
+    }
+    let after = b.ticks(100);
+    assert!(
+        split_writes(&after).ends_with(&["S 1 VFOB", "I 24915000", "X PKTUSB -1", "S 1 VFOB"]),
+        "no pre-set after the switch: {after:?}"
+    );
+}

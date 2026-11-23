@@ -3985,6 +3985,45 @@ const LOG_SFI_MAX_AGE_SECS: u64 = 48 * 3600;
 /// was typed in afterwards, and today's values may not be what it was made with.
 const STATION_FIELDS_MAX_AGE_SECS: u64 = SPACE_WEATHER_MAX_AGE_SECS;
 
+/// ⛔ STOP TX, COUNTED OUTSIDE THE ENGINE'S LOCK. The radio loop holds the engine through an over's
+/// key: Split Operation's writes go out under it, one radio round trip each, seconds in all on a
+/// slow radio, and only then the key. A Stop TX that waits for the lock lands after the key, the
+/// over already on the air. So every stop is counted here too: [`Engine::halt_tx`] counts it, and
+/// the station's own Stop TX button counts it before it even asks for the lock
+/// ([`press_station_stop_tx`]); the loop reads the count between the writes and just before the
+/// key, and keys nothing once it has moved.
+#[derive(Clone, Default)]
+pub struct StopTx(std::sync::Arc<std::sync::atomic::AtomicU64>);
+
+impl StopTx {
+    /// Count a press.
+    pub fn press(&self) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// How many presses so far: compare two reads to see whether one came between them.
+    pub fn presses(&self) -> u64 {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// The station's own engine's [`StopTx`], set once the app has built it
+/// ([`register_station_stop_tx`]).
+static STATION_STOP_TX: std::sync::OnceLock<StopTx> = std::sync::OnceLock::new();
+
+/// Make `stop` the one [`press_station_stop_tx`] presses: the app's own engine's, once, at start.
+pub fn register_station_stop_tx(stop: StopTx) {
+    let _ = STATION_STOP_TX.set(stop);
+}
+
+/// Count a Stop TX press on the station's own engine without its lock, ahead of the
+/// [`Engine::halt_tx`] that waits for the lock. Nothing before the app has registered its engine.
+pub fn press_station_stop_tx() {
+    if let Some(stop) = STATION_STOP_TX.get() {
+        stop.press();
+    }
+}
+
 pub struct Engine {
     pub app: AppState,
     settings: Settings,
@@ -4218,6 +4257,9 @@ pub struct Engine {
     /// The last such over, for its status lane: until an over keys in its period or TX is turned on
     /// again, and shown only while TX is on.
     slot_over_dropped: Option<crate::dto::SlotOverDropped>,
+    /// Stop TX presses, counted where the radio loop can read them without this engine's lock
+    /// ([`Self::stop_tx_handle`]).
+    stop_tx: StopTx,
     /// The operator's PTT press Nexus's own Flex client kept off the air because the radio still
     /// took its transmit audio from the DAX Nexus set, not its mic ([`Engine::set_ptt_refused`]).
     /// Kept until a press keys, or fails for another reason.
@@ -7903,6 +7945,7 @@ impl Engine {
             slot_audio_lost: None,
             overs_dropped_in_a_row: 0,
             slot_over_dropped: None,
+            stop_tx: StopTx::default(),
             ptt_refused: None,
             tx_watchdog_start: None,
             cq_pause_until: None,
@@ -23318,6 +23361,13 @@ Pick the one you operate from on the Contesting tab in Settings.",
         Ok(())
     }
 
+    /// The count of Stop TX presses for this engine, readable without its lock: the radio loop
+    /// holds the lock through an over's key-time CAT (Split Operation's writes), and a stop
+    /// pressed then must land before the key, not after every write ([`StopTx`]).
+    pub fn stop_tx_handle(&self) -> StopTx {
+        self.stop_tx.clone()
+    }
+
     /// Update the next-slot-boundary countdown (ms) shown in the UI TopBar.
     pub fn set_slot_timing(&mut self, next_slot_ms: u64) {
         self.app.set_slot_timing(next_slot_ms);
@@ -23327,6 +23377,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// clear the TX indicator. Wired to the WSJT-X UDP "HaltTx" control so a
     /// logger / JTAlert can stop Tempo keying.
     pub fn halt_tx(&mut self) {
+        self.stop_tx.press();
         self.remote_transmit = None;
         // Kill any over planned before this instant — even one whose gate values
         // all match again by commit time (commit_tx checks the generation).
