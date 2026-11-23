@@ -433,7 +433,7 @@ mod tests {
         held: bool,
     ) -> (crate::slot::SlotAction, MockBackend, Vec<String>, f64, f64) {
         let (addr, log) = rigctld(key_ms);
-        let mut rig = Rig::rigctld(&addr);
+        let mut rig = Rig::rigctld_split_off(&addr);
         let mut backend = SlowCard {
             card: MockBackend::new(),
             open_ms,

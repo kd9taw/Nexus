@@ -4644,6 +4644,15 @@ const TUNE_IN_CW_NO_CARRIER: &str = "Tune keyed the radio, but in CW most radios
      Nexus's tune tone, so there may be no carrier. Use the radio's own TUNE, or pick the WinKeyer \
      or serial keyline keyer in Settings ▸ CW: Tune then keys a real CW carrier through it.";
 
+/// Whether Split Operation Fake It or None wants the radio's split off: on the digital screens,
+/// with no cluster SPLIT-on-Work owning VFO B ([`Rig::split_off_confirmed`]).
+fn split_off_wanted(eng: &Engine) -> bool {
+    let s = eng.settings();
+    s.split_mode != tempo_app::settings::SplitMode::Rig
+        && s.operating_mode == tempo_app::settings::OperatingMode::Digital
+        && !eng.cluster_split_active()
+}
+
 /// What letting go of Nexus's Rig split needs to know about the station, read under the engine
 /// lock and carried past it, since the release itself is CAT (`RadioLoop::let_go_of_rig_split`).
 #[derive(Clone, Copy)]
@@ -5331,6 +5340,13 @@ struct RadioLoop {
     /// The receive-time pre-set of Split Operation = Rig's TX dial still owed for a connection or a
     /// change of named band: how many tries it has had (at most two). `None` when none is owed.
     split_preset: Option<u8>,
+    /// Whether the last tick was on the digital screens, and the engine's dial then (Hz): entering
+    /// them or a change of band forgets a split off the radio confirmed
+    /// ([`Rig::split_off_confirmed`], `Self::split_off_watch`).
+    split_off_seen: (bool, u64),
+    /// Tries at turning the radio's split off while it receives that it did not take, since the
+    /// last connection, screen entry or band change (`Self::split_off_due`), at most two.
+    split_off_tries: u8,
     /// The rig's OWN split state, observed while Nexus was not holding split, as
     /// `(split_on, tx_vfo, tx_freq_hz)` — what the teardown RESTORES, off the FT screens only and
     /// only on the dial's own band ([`Self::split_to_put_back`]).
@@ -5984,6 +6000,8 @@ impl RadioLoop {
             split_preset_seen_dial: 0,
             split_preset_moved_at: 0.0,
             split_preset: None,
+            split_off_seen: (false, 0),
+            split_off_tries: 0,
             rig_split_restore: None,
             rig_split_put_back: None,
             split_detect: None,
@@ -8651,14 +8669,22 @@ impl RadioLoop {
         engine: &Arc<Mutex<Engine>>,
         rig: &mut Rig,
     ) -> Result<(), String> {
-        let (at, md, stop) = {
+        let (at, md, stop, split_off) = {
             let eng = engine_lock(engine);
             (
                 SplitLetGo::of(&eng),
                 eng.rig_mode_effective(),
                 eng.stop_tx_handle(),
+                split_off_wanted(&eng),
             )
         };
+        // ⛔ Fake It and None: the radio's split off first, as before a slot over
+        // (`slot::apply_tx_dial_shift`), or the key goes out with nothing.
+        if split_off && !rig.split_off_confirmed && rig.has_control() {
+            return rig
+                .turn_split_off()
+                .map_err(|e| format!("the radio did not answer split off ({e})"));
+        }
         if !at.ft_rig || at.cluster_active || !rig.has_control() {
             return Ok(());
         }
@@ -8668,6 +8694,70 @@ impl RadioLoop {
             self.hold_rig_split(at.dial);
         }
         sent.map_err(|e| e.to_string())
+    }
+
+    /// Forget a split off the radio confirmed ([`Rig::split_off_confirmed`]) where the radio may have
+    /// gone back into split unseen: on entering the digital screens (the CW and Phone screens'
+    /// split is the operator's, set from the radio's own key as often as from Nexus) and at a
+    /// change of band, so the split off goes again, while receiving or at the next key.
+    ///
+    /// The limit, as Rig's hold has it: a press of the radio's own SPLIT key while on the digital
+    /// screens is seen only at the next band change, reconnect or screen entry. Split off before
+    /// every over would see it at once, at one more line a key; WSJT-X does not re-assert it either.
+    fn split_off_watch(&mut self, engine: &Arc<Mutex<Engine>>, rig: &mut Rig) {
+        let (digital, dial) = {
+            let e = engine_lock(engine);
+            (
+                e.settings().operating_mode == tempo_app::settings::OperatingMode::Digital,
+                e.settings().dial_hz(),
+            )
+        };
+        let (was_digital, was_dial) = self.split_off_seen;
+        if digital && (!was_digital || !same_named_band(was_dial, dial)) {
+            rig.split_off_confirmed = false;
+            self.split_off_tries = 0;
+        }
+        self.split_off_seen = (digital, dial);
+    }
+
+    /// Whether Split Operation Fake It or None wants the radio's split turned off now, while it
+    /// receives ([`split_off_wanted`]): not yet confirmed off on this connection, at a quiet point
+    /// with the pre-set's lead to the next boundary (`Self::preset_rig_split_due`), on a link this
+    /// loop owns, with no Rig split of Nexus's still held or owed (its own release turns it off),
+    /// and fewer than two tries the radio did not take since the last connection, screen entry
+    /// or band change; the key asks again after those.
+    fn split_off_due(
+        &mut self,
+        eng: &Engine,
+        rig: &Rig,
+        now: f64,
+        lead_ms: f64,
+        reconnected: bool,
+    ) -> bool {
+        if reconnected {
+            self.split_off_tries = 0;
+        }
+        let quiet = self.tx_until_ms.is_none()
+            && !self.manual_ptt_applied
+            && !self.tuning_keyed
+            && self.pc_mic_open.is_none()
+            && now >= self.cw_keying_until + CW_HANG_MS
+            && !rig.keyed
+            && !self.rig_keyed
+            && lead_ms >= crate::slot::SPLIT_PRESET_LEAD_MS
+            && self.last_slot == Some(self.clock.slot_index(now));
+        let free = self.may_key()
+            && rig.has_control()
+            && !reconnected
+            && rig.connection_open()
+            && !rig.split_release_pending
+            && !rig.tx_split_held
+            && !self.audio_rig_split;
+        split_off_wanted(eng)
+            && !rig.split_off_confirmed
+            && self.split_off_tries < 2
+            && quiet
+            && free
     }
 
     /// The raw ALC read ([`crate::rigmodels::raw_alc_query`]) to ask once, to learn whether this
@@ -9135,6 +9225,9 @@ impl RadioLoop {
         match done {
             Some(how) => {
                 rig.split_release_pending = false;
+                // Taken, or read off by the radio itself: confirmed off on this connection, as
+                // Fake It and None want it (`Rig::split_off_confirmed`).
+                rig.split_off_confirmed = true;
                 self.rig_split_release_at = None;
                 tempo_core::applog::info("tx", &format!("Split Operation: {how}"));
             }
@@ -9926,6 +10019,7 @@ impl RadioLoop {
         // Remote TX expiry is station-owned and does not depend on the host
         // receiving another socket message. Native operation has no permit.
         engine_lock(engine).poll_remote_transmit(self.mono_now(now));
+        self.split_off_watch(engine, rig);
 
         // Continuously fold captured audio into the rolling RX window. Always drain the soundcard
         // ring (so it can't overflow), but when native Flex DAX RX audio is the active source, use
@@ -17370,6 +17464,30 @@ impl RadioLoop {
         {
             drop(eng);
             self.preset_rig_split(rig, dial, tx_dial, &md);
+            eng = engine_lock(engine);
+            preset_ran = true;
+        }
+        // ⭐ SPLIT OPERATION FAKE IT OR NONE: THE RADIO'S SPLIT OFF WHILE IT RECEIVES, as the pre-set
+        // puts Rig's on, so the next key finds it confirmed (`Self::split_off_due`). Outside the
+        // engine lock, as the pre-set.
+        if !preset_ran && self.split_off_due(&eng, rig, now, lead_ms, reconnected) {
+            drop(eng);
+            match rig.turn_split_off() {
+                Ok(()) => tempo_core::applog::info(
+                    "tx",
+                    "Split Operation: the radio's split turned off for the digital screens",
+                ),
+                Err(e) => {
+                    self.split_off_tries += 1;
+                    tempo_core::applog::info(
+                        "tx",
+                        &format!(
+                            "Split Operation: the radio did not answer split off ({e}); the \
+                             next key asks again"
+                        ),
+                    );
+                }
+            }
             eng = engine_lock(engine);
             preset_ran = true;
         }

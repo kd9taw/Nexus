@@ -597,6 +597,26 @@ pub(crate) fn apply_tx_dial_shift(eng: &mut Engine, rig: &mut Rig) -> SplitApply
             ..none
         };
     }
+    // ⛔ FAKE IT AND NONE TRANSMIT FROM THE ONE VFO, SO THE RADIO'S SPLIT GOES OFF FIRST. A radio
+    // still in a split it was left in (an earlier session, another program, its own SPLIT key)
+    // transmits from VFO B, on whatever band that is: on 10 m from a 12 m session. On the digital
+    // screens, unless the radio already confirmed split off on this connection
+    // ([`Rig::split_off_confirmed`]), `S 0 VFOA` goes before the key, and a radio that never
+    // answers it keys nothing; one that refuses it cannot control split and keys as before
+    // ([`Rig::turn_split_off`]). A cluster SPLIT-on-Work owns VFO B and is left alone; the CW and
+    // Phone screens' split is the operator's.
+    if eng.settings().split_mode != SplitMode::Rig
+        && eng.settings().operating_mode == tempo_app::settings::OperatingMode::Digital
+        && !eng.cluster_split_active()
+        && !rig.split_off_confirmed
+    {
+        if let Err(e) = rig.turn_split_off() {
+            return SplitApply {
+                refused: Some(format!("the radio did not answer split off ({e})")),
+                ..none
+            };
+        }
+    }
     // Rig split writes for every over on the digital screens, whatever the mode and the shift, and
     // for every over while Nexus holds the split (above).
     let rig_split_writes = eng.settings().split_mode == SplitMode::Rig
@@ -1394,7 +1414,7 @@ mod tests {
                     .unwrap(),
                 now,
             ));
-            let mut rig = Rig::rigctld(&peer.address);
+            let mut rig = Rig::rigctld_split_off(&peer.address);
             let mut backend = MockBackend::new();
             let mut rx = RxRing::with_capacity(120);
             if scene == "beforeKey" {
@@ -1464,7 +1484,7 @@ mod tests {
                     .unwrap(),
                 now,
             ));
-            let mut rig = Rig::rigctld(&peer.address);
+            let mut rig = Rig::rigctld_split_off(&peer.address);
             let mut backend = MockBackend::new();
             if scene == "beforeKey" {
                 // The radio is already keyed (an over's hold) when the revoke is seen.
@@ -1912,7 +1932,7 @@ mod tests {
         let offset = eng.clock_offset_ms().unwrap_or(0) - stale_ms as i64;
         eng.set_clock_offset_ms(Some(offset));
         assert_eq!(eng.clock_offset_ms(), Some(offset), "premise: steered");
-        let mut rig = Rig::rigctld(&slow_rigctld(key_ms));
+        let mut rig = Rig::rigctld_split_off(&slow_rigctld(key_ms));
         let mut backend = MockBackend::new();
         let mut rx = RxRing::new();
         let steered = steered_now_ms(&eng);
@@ -1990,7 +2010,7 @@ mod tests {
         let mut eng = armed_engine();
         let late = steered_now_ms(&eng) + 13_200.0;
         let (addr, log, _) = keying_rigctld("RPRT 0", 0);
-        let mut rig = Rig::rigctld(&addr);
+        let mut rig = Rig::rigctld_split_off(&addr);
         let mut backend = MockBackend::new();
         let mut rx = RxRing::new();
         let act = slot_tx_phase(
@@ -2065,7 +2085,7 @@ mod tests {
     ) -> (SlotAction, MockBackend, Vec<String>) {
         let slot_start = steered_slot_start(eng);
         let (addr, log, _) = keying_rigctld("RPRT 0", 0);
-        let mut rig = Rig::rigctld(&addr);
+        let mut rig = Rig::rigctld_split_off(&addr);
         let mut backend = MockBackend::new();
         let mut rx = RxRing::new();
         let act = slot_tx_phase(
@@ -2143,7 +2163,7 @@ mod tests {
             eng.set_clock_offset_ms(Some(offset));
             assert_eq!(eng.clock_offset_ms(), Some(offset), "premise: steered");
             let (addr, log, _) = keying_rigctld("RPRT 0", 0);
-            let mut rig = Rig::rigctld(&addr);
+            let mut rig = Rig::rigctld_split_off(&addr);
             let mut backend = MockBackend::new();
             let mut rx = RxRing::new();
             let tick_read = steered_now_ms(&eng) - 2_000.0;
@@ -2437,7 +2457,7 @@ mod tests {
         // The stand-in rigctld first, so nothing between the steer and the decision's clock read
         // spends the 300 ms between 10.95 s and the latest key.
         let (addr, log, _) = keying_rigctld("RPRT 0", 0);
-        let mut rig = Rig::rigctld(&addr);
+        let mut rig = Rig::rigctld_split_off(&addr);
         let mut backend = SlowOpen {
             open: std::time::Duration::from_millis(2_400),
             played: Vec::new(),
@@ -2489,7 +2509,7 @@ mod tests {
         let offset = eng.clock_offset_ms().unwrap_or(0) - 5_000;
         eng.set_clock_offset_ms(Some(offset));
         assert_eq!(eng.clock_offset_ms(), Some(offset), "premise: steered");
-        let mut rig = Rig::rigctld(&slow_rigctld(600));
+        let mut rig = Rig::rigctld_split_off(&slow_rigctld(600));
         let mut backend = MockBackend::new();
         let mut rx = RxRing::new();
         let tick = steered_now_ms(&eng);
@@ -2572,7 +2592,7 @@ mod tests {
         // spends the 175 ms between 5.45 s and the latest key, and a thread started on a loaded
         // box can take that. Steered last, as the slow-split scenes are.
         let (addr, log, _) = keying_rigctld("RPRT 0", 0);
-        let mut rig = Rig::rigctld(&addr);
+        let mut rig = Rig::rigctld_split_off(&addr);
         let mut backend = MockBackend::new();
         let mut rx = RxRing::new();
         // The wall clock 5.45 s into the slot; the tick read 5.60 s, ahead of it, so the decision is
@@ -2633,7 +2653,7 @@ mod tests {
             let mut eng = armed_engine_on(tempo_app::dto::Tier::Ft4);
             let tick = steered_slot_start(&eng) - 2.0 * FT4_PERIOD_MS + into_ms;
             let (addr, log, _) = keying_rigctld("RPRT 0", 0);
-            let mut rig = Rig::rigctld(&addr);
+            let mut rig = Rig::rigctld_split_off(&addr);
             let mut backend = MockBackend::new();
             let mut rx = RxRing::new();
             let act = slot_tx_phase(
@@ -2804,7 +2824,7 @@ mod tests {
     ) -> SlowSplit {
         let period_ms = eng.active_slot_secs() * 1000.0;
         let (addr, log) = slow_split_rigctld(split_ms, key_ms);
-        let mut rig = Rig::rigctld(&addr);
+        let mut rig = Rig::rigctld_split_off(&addr);
         rig.set_slow_transport(true);
         rig.test_reply_deadline_ms = Some(SLOW_SPLIT_DEADLINE_MS);
         let mut backend = MockBackend::new();
@@ -3152,7 +3172,7 @@ mod tests {
             Arc::new(AtomicU64::new(14_074_000)),
             Arc::new(AtomicBool::new(false)),
         );
-        let mut rig = Rig::rigctld(&addr);
+        let mut rig = Rig::rigctld_split_off(&addr);
         rig.set_slow_transport(true);
         let eng = rig_split_cq_at(750.0);
         let stop = eng.stop_tx_handle();
@@ -3192,7 +3212,7 @@ mod tests {
             }
             Some("RPRT 0\n".to_string())
         });
-        let mut rig = Rig::rigctld(&addr);
+        let mut rig = Rig::rigctld_split_off(&addr);
         let eng = split_cq_engine(tempo_app::settings::SplitMode::FakeIt);
         let stop = eng.stop_tx_handle();
         let press = std::thread::spawn(move || {
@@ -3430,7 +3450,7 @@ mod tests {
         // FT2: the key-relative deadline this guards is every slot tier's but FT8's and FT4's
         // (see `armed_engine_on`).
         let mut eng = armed_engine_on(tempo_app::dto::Tier::Ft2);
-        let mut rig = Rig::rigctld(&slow_rigctld(KEY_MS));
+        let mut rig = Rig::rigctld_split_off(&slow_rigctld(KEY_MS));
         let mut backend = MockBackend::new();
         let mut rx = RxRing::new();
 
@@ -3642,7 +3662,7 @@ mod tests {
         eng.broadcast("CQ W9XYZ EN37");
 
         let (addr, log) = logging_rigctld();
-        let mut rig = Rig::rigctld(&addr);
+        let mut rig = Rig::rigctld_split_off(&addr);
         let mut backend = MockBackend::new();
         let mut rx = RxRing::new();
         let md = eng.rig_mode_effective();
@@ -3842,7 +3862,7 @@ mod tests {
         addr: &str,
         deadline_ms: Option<u64>,
     ) -> (SlotAction, MockBackend, Engine, Rig) {
-        let mut rig = Rig::rigctld(addr);
+        let mut rig = Rig::rigctld_split_off(addr);
         rig.test_reply_deadline_ms = deadline_ms;
         let mut backend = MockBackend::new();
         let mut rx = RxRing::new();
@@ -4272,7 +4292,7 @@ mod tests {
                 Arc::new(AtomicU64::new(14_074_000)),
                 Arc::new(AtomicBool::new(false)),
             );
-            let mut rig = Rig::rigctld(&addr);
+            let mut rig = Rig::rigctld_split_off(&addr);
             rig.set_slow_transport(true);
             let started = std::time::Instant::now();
             let (act, backend, eng, sent) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
@@ -4300,7 +4320,7 @@ mod tests {
         let dial = Arc::new(AtomicU64::new(14_074_000));
         let refuse_i = Arc::new(AtomicBool::new(false));
         let (addr, log) = split_link(0, dial.clone(), refuse_i.clone());
-        let mut rig = Rig::rigctld(&addr);
+        let mut rig = Rig::rigctld_split_off(&addr);
         let over = |tx_hz: f32, rig: &mut Rig, want: &[&str], what: &str| {
             let (act, backend, eng, sent) = over_through(rig_split_cq_at(tx_hz), rig, &log);
             assert_eq!(sent, want, "{what}: on the wire");
@@ -4373,7 +4393,7 @@ mod tests {
                 .to_string(),
             )
         });
-        let mut rig = Rig::rigctld(&addr);
+        let mut rig = Rig::rigctld_split_off(&addr);
         let (act, backend, eng, sent) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
         assert_eq!(
             sent,
@@ -4404,7 +4424,7 @@ mod tests {
         for split in [SplitMode::FakeIt, SplitMode::None] {
             let what = format!("{split:?}");
             let (addr, log) = scripted_rigctld(|_: &str| Some("RPRT 0\n".to_string()));
-            let mut rig = Rig::rigctld(&addr);
+            let mut rig = Rig::rigctld_split_off(&addr);
             rig.tx_split_held = true;
             let (act, backend, mut eng, sent) =
                 over_through(split_cq_engine(split), &mut rig, &log);
@@ -4412,7 +4432,7 @@ mod tests {
         }
         // The control: Split Operation still Rig keys from the held split.
         let (addr, log) = scripted_rigctld(|_: &str| Some("RPRT 0\n".to_string()));
-        let mut rig = Rig::rigctld(&addr);
+        let mut rig = Rig::rigctld_split_off(&addr);
         rig.tx_split_held = true;
         let (act, backend, eng, _) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
         keyed_as_before("still Rig", &act, &backend, &eng);
@@ -4457,7 +4477,7 @@ mod tests {
         use std::sync::Arc;
         let lose = Arc::new(AtomicBool::new(false));
         let (addr, log, connections) = a_link_that_loses_one_key_answer(lose.clone());
-        let mut rig = Rig::rigctld(&addr);
+        let mut rig = Rig::rigctld_split_off(&addr);
         rig.set_owed_bound_for_test(std::time::Duration::from_millis(1_500));
         let (act, backend, eng, sent) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
         assert_eq!(
@@ -4495,7 +4515,7 @@ mod tests {
         use std::sync::Arc;
         let lose = Arc::new(AtomicBool::new(false));
         let (addr, log, connections) = a_link_that_loses_one_key_answer(lose.clone());
-        let mut rig = Rig::rigctld(&addr);
+        let mut rig = Rig::rigctld_split_off(&addr);
         let (act, backend, eng, sent) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
         assert_eq!(
             sent,
@@ -4536,7 +4556,7 @@ mod tests {
         use std::sync::Arc;
         let lose = Arc::new(AtomicBool::new(false));
         let (addr, log, connections) = a_link_that_loses_one_key_answer(lose.clone());
-        let mut rig = Rig::rigctld(&addr);
+        let mut rig = Rig::rigctld_split_off(&addr);
         let (act, backend, eng, sent) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
         assert_eq!(
             sent,
@@ -4599,7 +4619,7 @@ mod tests {
                 .to_string(),
             )
         });
-        let mut rig = Rig::rigctld(&addr);
+        let mut rig = Rig::rigctld_split_off(&addr);
         let (act, backend, eng, sent) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
         assert_eq!(
             sent,
@@ -4648,7 +4668,7 @@ mod tests {
                         .to_string(),
                     )
                 });
-                let mut rig = Rig::rigctld(&addr);
+                let mut rig = Rig::rigctld_split_off(&addr);
                 let (act, backend, eng, _) = over_through(rig_split_cq_at(750.0), &mut rig, &log);
                 keyed_as_before(&what, &act, &backend, &eng);
                 late.store(late_ms, Ordering::SeqCst);
@@ -5007,7 +5027,7 @@ mod tests {
             align_to_slot_start(&mut eng, 0);
             assert!(eng.tx_enabled(), "{what}: premise: TX is armed");
             let (addr, log, _) = keying_rigctld(answer, 0);
-            let mut rig = Rig::rigctld(&addr);
+            let mut rig = Rig::rigctld_split_off(&addr);
             let mut backend = MockBackend::new();
             let act = key_one_over(&mut eng, &mut rig, &mut backend);
             assert_sent_nothing_and_halted(&what, &mut eng, &act, &backend, &log);
@@ -5018,7 +5038,7 @@ mod tests {
         // The control, in the same scene: a radio that keys gets its over, and TX stays on.
         let mut eng = armed_engine();
         let (addr, _log, _) = keying_rigctld("RPRT 0", 0);
-        let mut rig = Rig::rigctld(&addr);
+        let mut rig = Rig::rigctld_split_off(&addr);
         let mut backend = MockBackend::new();
         let act = key_one_over(&mut eng, &mut rig, &mut backend);
         assert!(
@@ -5066,7 +5086,7 @@ mod tests {
         };
         let key = |eng: &mut Engine, answer: &str, slot: u64, waves: Vec<Vec<f32>>| {
             let (addr, log, _) = keying_rigctld(answer, 0);
-            let keyed = phase(eng, &mut Rig::rigctld(&addr), slot, waves);
+            let keyed = phase(eng, &mut Rig::rigctld_split_off(&addr), slot, waves);
             assert!(
                 log.lock().unwrap().iter().any(|l| l == "T 1"),
                 "{answer}: premise: the over asserted PTT"
@@ -5136,7 +5156,7 @@ mod tests {
             authority.revoke();
             let (addr, log, _) = keying_rigctld("RPRT 0", 0);
             assert!(
-                !phase(&mut eng, &mut Rig::rigctld(&addr), 10, waves),
+                !phase(&mut eng, &mut Rig::rigctld_split_off(&addr), 10, waves),
                 "{tier:?}: premise: the tick saw the revoke"
             );
             assert!(
@@ -5156,7 +5176,7 @@ mod tests {
             assert!(
                 !key_slot_transmitter(
                     &mut eng,
-                    &mut Rig::rigctld(&addr),
+                    &mut Rig::rigctld_split_off(&addr),
                     &mut MockBackend::new(),
                     false
                 ),
@@ -5178,7 +5198,7 @@ mod tests {
         // CONTROL: an FT8 over whose PTT is asserted is not a beacon over.
         let mut eng = armed_engine();
         let (addr, log, _) = keying_rigctld("RPRT 0", 0);
-        let mut rig = Rig::rigctld(&addr);
+        let mut rig = Rig::rigctld_split_off(&addr);
         let act = key_one_over(&mut eng, &mut rig, &mut MockBackend::new());
         assert!(act.tx_this_slot, "premise: the FT8 over keyed");
         assert!(log.lock().unwrap().iter().any(|l| l == "T 1"));
@@ -5210,7 +5230,7 @@ mod tests {
             let mut eng = armed_engine();
             assert!(eng.tx_enabled(), "{what}: premise: TX is armed");
             let (addr, log, _) = keying_rigctld(&what, 0);
-            let mut rig = Rig::rigctld(&addr);
+            let mut rig = Rig::rigctld_split_off(&addr);
             let mut backend = MockBackend::new();
             let act = key_one_over(&mut eng, &mut rig, &mut backend);
             assert_sent_nothing_and_halted(&what, &mut eng, &act, &backend, &log);
@@ -5226,7 +5246,7 @@ mod tests {
         // between 500 ms reads (an answer inside the first second is still taken as keyed).
         let mut eng = armed_engine();
         let (addr, log, _) = keying_rigctld("RPRT 0", 1_500);
-        let mut rig = Rig::rigctld(&addr);
+        let mut rig = Rig::rigctld_split_off(&addr);
         let mut backend = MockBackend::new();
         let act = key_one_over(&mut eng, &mut rig, &mut backend);
         assert!(
@@ -5254,7 +5274,7 @@ mod tests {
         // key, as it always did, and as the other modes' `service::KeyUp::Held` does.
         let mut eng = armed_engine();
         let (addr, log, _) = keying_rigctld("RPRT -1", 0);
-        let mut rig = Rig::rigctld(&addr);
+        let mut rig = Rig::rigctld_split_off(&addr);
         let mut backend = MockBackend::new();
         let mut rx = RxRing::new();
         let now = steered_now_ms(&eng);
@@ -5300,7 +5320,7 @@ mod tests {
             // random phase past the last tone would key nothing at all (see `armed_engine`).
             align_to_slot_start(&mut eng, 0);
             let (addr, log, _) = keying_rigctld("RPRT 0", 0);
-            let mut rig = Rig::rigctld(&addr);
+            let mut rig = Rig::rigctld_split_off(&addr);
             let mut backend = MockBackend::new();
             backend.tx_open_error = Some(NO_OUTPUT.to_string());
             let act = key_one_over(&mut eng, &mut rig, &mut backend);
@@ -5335,7 +5355,7 @@ mod tests {
         // The control, in the same scene: the same over on an output that opens keys and plays.
         let mut eng = armed_engine();
         let (addr, log, _) = keying_rigctld("RPRT 0", 0);
-        let mut rig = Rig::rigctld(&addr);
+        let mut rig = Rig::rigctld_split_off(&addr);
         let mut backend = MockBackend::new();
         let act = key_one_over(&mut eng, &mut rig, &mut backend);
         assert_eq!(*log.lock().unwrap(), ["T 1"], "control: the key");
@@ -5381,7 +5401,7 @@ mod tests {
             // pinned here is every slot tier's.
             let mut eng = armed_engine_on(tempo_app::dto::Tier::Ft2);
             let (addr, log, answered) = keying_rigctld("RPRT 0", KEY_MS);
-            let mut rig = Rig::rigctld(&addr);
+            let mut rig = Rig::rigctld_split_off(&addr);
             let mut backend = StampedBackend::default();
             let called = std::time::Instant::now();
             let act = key_one_over(&mut eng, &mut rig, &mut backend);
