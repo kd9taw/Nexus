@@ -1795,17 +1795,23 @@ pub struct SlotAudioLost {
     pub at: u64,
 }
 
-/// The last FT8 or FT4 over Nexus dropped because the radio keyed it only after its period had
-/// ended ([`RadioStatus::slot_over_dropped`]).
+/// The last slot over Nexus dropped with TX left on ([`RadioStatus::slot_over_dropped`]): an FT8
+/// or FT4 over the radio keyed only after its period had ended, or (`split_late`) an over whose
+/// Split Operation = Rig commands the radio took, but too slowly to key it on time.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SlotOverDropped {
     /// When, in Unix seconds.
     pub at: u64,
-    /// How long after its period had ended the radio keyed it, "1.2 s". Data: shown as it is.
+    /// How long after its period had ended the radio keyed it, "1.2 s"; with `split_late`, how long
+    /// the radio took to confirm the split commands, "0.77 s". Data: shown as it is.
     pub late: String,
     /// How many in a row, this one included.
     pub count: u32,
+    /// Dropped before the key because the split commands, every one taken, came too late; nothing
+    /// was keyed.
+    #[serde(default)]
+    pub split_late: bool,
 }
 
 /// The radio's own scope stream, measured: see [`RadioStatus::scope_rate`].

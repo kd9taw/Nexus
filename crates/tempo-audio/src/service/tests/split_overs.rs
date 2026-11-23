@@ -5096,6 +5096,13 @@ fn a_split_the_radio_takes_too_slowly_costs_one_over_not_the_session() {
         b.engine.lock().unwrap().tx_enabled(),
         "TX halted for a split the radio took: {first:?}"
     );
+    let dropped = b.engine.lock().unwrap().snapshot().radio.slot_over_dropped;
+    assert!(
+        dropped
+            .as_ref()
+            .is_some_and(|d| d.split_late && d.count == 1),
+        "the dropped over not on screen as a slow split: {dropped:?}"
+    );
     let key = b.ticks_to_key(1_600);
     assert!(b.radio.keyed(), "the next own slot did not key: {key:?}");
     assert_eq!(
@@ -5134,4 +5141,142 @@ fn a_split_the_radio_takes_too_slowly_costs_one_over_not_the_session() {
         .slot_key_refused
         .expect("nothing says why TX halted");
     assert!(refused.split_failed, "not told as the split: {refused:?}");
+}
+
+// ── Every key on the digital screens, not only an FT over ─────────────────────────────────────
+// WSJT-X writes the TX frequency at its start and at every band change for every mode with split
+// on, XIT 0 where the mode has none (`widgets/mainwindow.cpp:12378-12387`), and before every key
+// with split on (`Transceiver/TransceiverBase.cpp:165-171`). So on the digital screens with Split
+// Operation = Rig, a Tune, the operator's PTT, a CW ID and an over in any slot mode go out only
+// once Nexus has put split on with VFO B on the dial and the radio has confirmed it, or not at all.
+
+/// Where `b`'s radio transmitted, and the split writes before its first key, after `n` ticks.
+fn keyed_after(b: &mut Bench<Hamlib>, n: usize) -> (Vec<u64>, Vec<String>) {
+    let _ = b.ticks_to_key(n);
+    let at = b.radio.vfos.lock().unwrap().tx_at_key.clone();
+    (at, split_writes_before_first_key(&b.radio))
+}
+
+/// ⛔ A KEY THAT IS NOT A SLOT OVER, RIGHT AFTER CONNECTING, NEVER GOES OUT OF THE OLD VFO B. The
+/// radio left in its 10 m split, Nexus on 12 m on the FT8 and FT2 screens, Split Operation = Rig:
+/// Tune, the operator's PTT and a CW word on the first tick, before any pre-set. Each one used to
+/// key at once with nothing written, out of the 10 m VFO B. Now split on, VFO B on the 12 m dial,
+/// its mode and split on last go first, and the radio transmits on 12 m.
+#[test]
+fn a_non_slot_key_right_after_connecting_never_keys_the_old_vfo_b() {
+    type Press = fn(&mut Engine);
+    let presses: [(&str, Press); 3] = [
+        ("Tune", |e| e.set_tune(true)),
+        ("PTT", |e| e.set_ptt(true)),
+        ("a CW word", |e| {
+            let mycall = e.settings().mycall.clone();
+            e.send_cw(&mycall);
+        }),
+    ];
+    for tier in [Tier::Ft8, Tier::Ft2] {
+        for (what, press) in presses {
+            let what = format!("{tier:?}, {what}");
+            let engine = engine_at(SplitMode::Rig, tier, 24.915, "12m", 1958.0);
+            let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, Some(STALE_10M_VFO_B));
+            press(&mut b.engine.lock().unwrap());
+            let (at, before) = keyed_after(&mut b, 50);
+            assert!(
+                !at.contains(&STALE_10M_VFO_B),
+                "{what}: keyed out of the old 10 m VFO B: {before:?}"
+            );
+            assert_eq!(at.first(), Some(&FT8_12M_DIAL), "{what}: {before:?}");
+            assert!(
+                ends_with_xit_0_on(&before, FT8_12M_DIAL),
+                "{what}: keyed without VFO B written on the dial: {before:?}"
+            );
+        }
+    }
+}
+
+/// ⛔ AN OVER IN A SLOT MODE SPLIT OPERATION HAS NO SHIFT FOR NEVER KEYS THE OLD VFO B EITHER.
+/// MSK144, Q65, JT65 and FST4 on 12 m, the radio left in its 10 m split: each first over used to
+/// key with nothing written, out of the 10 m VFO B. Now VFO B is on the 12 m dial, written and
+/// confirmed, before the key.
+#[test]
+fn an_over_in_any_slot_mode_never_keys_the_old_vfo_b() {
+    for tier in [Tier::Msk144, Tier::Q65, Tier::Jt65, Tier::Fst4] {
+        let engine = cq_engine_at(SplitMode::Rig, tier, 24.915, "12m", 1500.0);
+        let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, Some(STALE_10M_VFO_B));
+        let (at, before) = keyed_after(&mut b, 5_000);
+        assert!(
+            b.radio.keyed() || !at.is_empty(),
+            "{tier:?}: premise: keyed"
+        );
+        assert_eq!(
+            at.first(),
+            Some(&FT8_12M_DIAL),
+            "{tier:?}: keyed off 12 m: {before:?}"
+        );
+        assert!(
+            ends_with_xit_0_on(&before, FT8_12M_DIAL),
+            "{tier:?}: keyed without VFO B written on the dial: {before:?}"
+        );
+    }
+}
+
+/// ⭐ THE PRE-SET IS OWED AT CONNECT AND AT EVERY RECONNECT, WITH NO BAND CHANGE. The radio left in
+/// its 10 m split, Nexus on 12 m with TX off: within the first seconds, while it receives, split
+/// on, VFO B on the 12 m dial, its mode and split on last. The link then drops and the radio is
+/// put back in its 10 m split meanwhile: the new connection writes VFO B on the dial again.
+#[test]
+fn the_pre_set_is_owed_at_connect_and_at_every_reconnect() {
+    let engine = engine_at(SplitMode::Rig, Tier::Ft8, 24.915, "12m", 1958.0);
+    let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, Some(STALE_10M_VFO_B));
+    let first = split_writes(&b.ticks(100))
+        .into_iter()
+        .map(String::from)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        first,
+        ["S 1 VFOB", "I 24915000", "X PKTUSB -1", "S 1 VFOB"],
+        "at connect"
+    );
+    {
+        let mut v = b.radio.vfos.lock().unwrap();
+        assert_eq!((v.split, v.b), (true, FT8_12M_DIAL), "premise: pre-set");
+        v.b = STALE_10M_VFO_B;
+    }
+    b.rig.reconnect_for_test();
+    let again = b.ticks(100);
+    assert!(
+        split_writes(&again).ends_with(&["I 24915000", "X PKTUSB -1", "S 1 VFOB"]),
+        "at the reconnect: {again:?}"
+    );
+    assert_eq!(b.radio.vfos.lock().unwrap().b, FT8_12M_DIAL);
+}
+
+/// ⛔ THE PRE-SET WAITS WHILE CW IS KEYING OR THE PC MICROPHONE IS OPEN, as it waits for an over or
+/// a tune: split writes under a carrier are a synthesiser re-lock on the air. Nothing is written
+/// while either lasts (CW for its hang time too); the pre-set goes once both have ended.
+#[test]
+fn the_pre_set_waits_for_cw_and_the_pc_microphone() {
+    for what in ["CW", "the PC microphone"] {
+        let engine = engine_at(SplitMode::Rig, Tier::Ft8, 24.915, "12m", 1958.0);
+        let mut b = hamlib_bench_on(engine, FT8_12M_DIAL, Some(STALE_10M_VFO_B));
+        let quiet_at = b.t + 3_000.0;
+        if what == "CW" {
+            b.state.cw_keying_until = quiet_at - 1_000.0; // and its 1 s hang
+        } else {
+            b.state.pc_mic_open = Some(("mic".to_string(), 0));
+        }
+        let during = b.ticks(140);
+        assert!(
+            !during.iter().any(|l| l.starts_with(['S', 'I', 'X'])),
+            "{what}: written while it lasted: {during:?}"
+        );
+        b.state.pc_mic_open = None;
+        while b.t < quiet_at {
+            let _ = b.ticks(1);
+        }
+        let after = b.ticks(100);
+        assert!(
+            after.iter().any(|l| l == "I 24915000"),
+            "{what}: no pre-set once it ended: {after:?}"
+        );
+    }
 }

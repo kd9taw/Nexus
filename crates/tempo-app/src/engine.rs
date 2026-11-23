@@ -24016,6 +24016,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             at: now_unix_secs(),
             late,
             count,
+            split_late: false,
         });
     }
 

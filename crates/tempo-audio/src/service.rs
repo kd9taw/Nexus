@@ -28788,6 +28788,77 @@ mod tests {
         );
     }
 
+    /// ⛔ AN OWED RELEASE CHECKS THE BAND AGAIN BEFORE IT PUTS A SPLIT BACK. Nexus let go of its
+    /// split off the FT screens, on 20 m, and was to put back the operator's own split there
+    /// (VFO B 14.075 MHz), but the radio did not take it, so the release is owed. The band then
+    /// changes to 15 m before the retry: the retry turns split off instead, and 14.075 MHz is never
+    /// written.
+    #[test]
+    fn an_owed_release_re_checks_the_band_before_putting_a_split_back() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.split_mode = tempo_app::settings::SplitMode::Rig;
+            e.apply_settings(s);
+            e.set_operating_mode("phone", false);
+            e.set_frequency(21.074, "15m", "USB");
+        }
+        let mut backend = MockBackend::new();
+        let (addr, log) = mock_split_on_rigctld();
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        state.last_mode = engine.lock().unwrap().rig_mode_effective();
+        state.last_dial = engine.lock().unwrap().settings().dial_hz();
+        state.rx_ranges_probed = true;
+        state.tuner_probed = true;
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut t = 99_000.0;
+        for _ in 0..5 {
+            state
+                .step(
+                    &engine,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    t,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                )
+                .unwrap();
+            t += 20.0;
+        }
+        // The release owed from 20 m, its put-back decided there, and due now.
+        state.rig_split_restore = Some((true, "VFOB".to_string(), Some(14_075_000)));
+        state.rig_split_put_back = Some(("VFOB".to_string(), 14_075_000));
+        rig.split_release_pending = true;
+        state.rig_split_release_at = Some(0.0);
+        log.lock().unwrap().clear();
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                t,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        let sent = log.lock().unwrap().clone();
+        assert!(
+            !sent
+                .iter()
+                .any(|l| l == "I 14075000" || l.starts_with("S 1")),
+            "a 20 m split put back on 15 m: {sent:?}"
+        );
+        assert!(sent.iter().any(|l| l == "S 0 VFOA"), "not let go: {sent:?}");
+        assert!(!rig.split_release_pending, "still owed");
+    }
+
     /// A rigctld that answers `v` (get_vfo) with `vfo`, serves a `\dump_caps` whose
     /// `Can get VFO:` line is `get_vfo_cap`, and logs every command line it was sent.
     fn mock_vfo_rigctld(vfo: &'static str, get_vfo_cap: char) -> (String, Arc<Mutex<Vec<String>>>) {
