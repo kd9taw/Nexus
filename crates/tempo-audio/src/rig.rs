@@ -728,7 +728,7 @@ pub struct Rig {
     /// through this connection, for Split Operation Fake It or None on the digital screens
     /// (`slot::apply_tx_dial_shift`, the radio loop's split off while receiving). Forgotten by a new
     /// or dropped connection, any split, TX-dial or TX-mode write (`S`, `I`, `X`) and any raw
-    /// write, which are what can put the radio in split; the radio loop forgets it too on entering
+    /// write (never a raw read), which are what can put the radio in split; the radio loop forgets it too on entering
     /// the digital screens and at a change of band. A dial, mode or level write keeps it: none of
     /// those turns split on.
     pub(crate) split_off_confirmed: bool,
@@ -2549,8 +2549,10 @@ impl Rig {
     /// the transport's normal deadline.
     pub fn send_raw_within(&mut self, raw: &str, deadline_ms: Option<u64>) -> Option<String> {
         self.control.as_ref()?;
-        // A raw line may be any command: what was confirmed off may no longer be.
-        self.split_off_confirmed = false;
+        // ⚠️ A raw READ keeps a split off the radio confirmed: the TX ALC poll (`RM4;`), the
+        // scope's span (`SS05;`, `SS06;`), the temperature, filter, mode and EX menu reads and the
+        // `ID;` probe are every caller, all reads. Forgetting it here sent split off again after
+        // every over. A raw write goes through `raw_set`, which forgets it.
         let line = format!("w {raw}\n");
         let reply = match deadline_ms {
             Some(ms) => self.command_ending_by(&line, ms),
