@@ -588,3 +588,38 @@ fn a_rewrite_keeps_the_runs_count_of_cqs() {
     assert_eq!(keyed(&mut e, 4), None, "two CQs, and no more");
     assert_eq!(keyed(&mut e, 6), None);
 }
+
+/// ⛔ WHAT A TX ROW SENDS IS WHAT IT SAYS. A Tx-slot row that the station would read, or the packer
+/// would send, as another message than its text is refused at the press with the reason, as Tx 6
+/// and Tx 5 refuse one, and nothing keys: `CQ W1XYZ K1ABC FN31` reads as `CQ K1ABC FN31` and names
+/// W1XYZ where a CQ names its caller; `CQ K1ABC POTA` packs as `CQ K1ABC`. Our own sender does not
+/// excuse it. CONTROLS: the rows this station draws key as they read, a report written `-5` is the
+/// report `-05`, and free text longer than a frame still keys.
+#[test]
+fn a_tx_row_that_would_go_out_as_another_message_is_refused_at_the_press() {
+    for row in [
+        "CQ W1XYZ K1ABC FN31",
+        "CQ K1ABC POTA",
+        "W1AW K1ABC FN31 EXTRA",
+    ] {
+        let mut e = station(Tier::Ft8);
+        let why = e
+            .override_next_tx_checked("W1AW", Some("FN31"), row)
+            .expect_err(&format!("{row:?} is refused"));
+        assert!(!why.is_empty(), "{row}");
+        assert_eq!(keyed(&mut e, 0), None, "{row}: nothing keys");
+    }
+    for (row, sent) in [
+        ("W1AW K1ABC FN31", "W1AW K1ABC FN31"),
+        ("W1AW K1ABC -05", "W1AW K1ABC -05"),
+        ("W1AW K1ABC -5", "W1AW K1ABC -05"),
+        ("W1AW K1ABC RR73", "W1AW K1ABC RR73"),
+        // Free text is exempt: it keys, as it did (a Tx-slot press shows the row on the TX line).
+        ("TNX FOR THE QSO 73", "TNX FOR THE QSO 73"),
+    ] {
+        let mut e = station(Tier::Ft8);
+        e.override_next_tx_checked("W1AW", Some("FN31"), row)
+            .unwrap_or_else(|why| panic!("{row}: {why}"));
+        assert_eq!(keyed(&mut e, 0).as_deref(), Some(sent), "{row}");
+    }
+}

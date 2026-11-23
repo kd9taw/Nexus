@@ -22602,11 +22602,13 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let own_call = Msg::parse(&on_air)
             .sender()
             .is_some_and(|de| self.is_own_call(de));
-        self.ft_refusal(&on_air).or_else(|| {
-            (!own_call)
-                .then(|| self.sender_refusal(text, &on_air))
-                .flatten()
-        })
+        self.ft_refusal(&on_air)
+            .or_else(|| self.row_reading_refusal(text, &on_air))
+            .or_else(|| {
+                (!own_call)
+                    .then(|| self.sender_refusal(text, &on_air))
+                    .flatten()
+            })
     }
 
     // ----- command delegates ----------------------------------------------
@@ -32598,6 +32600,78 @@ contact yourself."
         })?;
         Some(format!(
             "\"{typed}\" would go out as {sender}, not as your call {mycall}, so nothing goes out."
+        ))
+    }
+
+    /// ⛔ **What a Tx row sends is what it says**: why the Tx-slot row `typed`, which goes on the
+    /// air as `on_air`, would go out as another message than its text, or `None`. Refused at the
+    /// press, as Tx 6 and Tx 5 refuse such a text, whoever its sender is:
+    /// - a row naming a station other than ours where `CQ`, `QRZ` or `DE` names the caller
+    ///   (`CQ W1XYZ K1ABC FN31`);
+    /// - a row the station reads as a standard message with other words than the row's
+    ///   (`CQ W1XYZ K1ABC FN31` reads as `CQ K1ABC FN31`);
+    /// - a row packed as a structured frame that a receiver decodes as other words than the row's
+    ///   (`CQ K1ABC POTA` goes out as `CQ K1ABC`). Free text is exempt: a free-text frame holds 13
+    ///   characters, as in WSJT-X, and so does the TX line.
+    ///
+    /// Words are compared with a hashed call's brackets dropped and a report in its standard form
+    /// (`-5` is `-05`), the forms the station itself writes a row in ([`QsoStation::on_air_form`]).
+    fn row_reading_refusal(&self, typed: &str, on_air: &str) -> Option<String> {
+        use tempo_core::message::unhash_call;
+        let words = |text: &str| -> Vec<String> {
+            text.split_whitespace()
+                .map(|w| {
+                    let w = unhash_call(w).to_uppercase();
+                    let (r, n) = w.strip_prefix('R').map_or(("", w.as_str()), |n| ("R", n));
+                    match n.parse::<i32>() {
+                        Ok(snr) if n.starts_with(['+', '-']) => format!("{r}{snr:+03}"),
+                        _ => w.clone(),
+                    }
+                })
+                .collect()
+        };
+        let row = words(typed);
+        let differs = |text: String| {
+            (words(&text) != row).then(|| {
+                format!(
+                    "\"{typed}\" would go out as \"{text}\", so nothing goes out. Send what the row \
+                     says, or type it as the message you mean."
+                )
+            })
+        };
+        let mycall = self.settings.mycall.trim().to_uppercase();
+        if let Some(why) = self.named_foreign(typed, &mycall) {
+            return Some(why);
+        }
+        let read = Msg::parse(&row.join(" "));
+        if !matches!(read, Msg::Other(_)) {
+            if let Some(why) = differs(read.to_text()) {
+                return Some(why);
+            }
+        }
+        if self.frame_kind(on_air).is_some_and(|kind| kind != (0, 0)) {
+            let sent = self.tx6_packed_text(on_air)?;
+            if !sent.contains("<...>") {
+                return differs(sent);
+            }
+        }
+        None
+    }
+
+    /// The other station's call `text` names where `CQ`, `QRZ` or `DE` names the caller, as the
+    /// refusal [`Self::sender_refusal`] gives, or `None`.
+    fn named_foreign(&self, text: &str, mycall: &str) -> Option<String> {
+        use tempo_core::message::{is_callsign, is_valid_grid, unhash_call};
+        let words: Vec<String> = text.split_whitespace().map(str::to_uppercase).collect();
+        if !matches!(words.first().map(String::as_str), Some("CQ" | "QRZ" | "DE")) {
+            return None;
+        }
+        let call = words[1..].iter().find(|w| {
+            let u = unhash_call(w);
+            is_callsign(u) && !is_valid_grid(u) && u != "RR73" && !names_whole_call(w, mycall)
+        })?;
+        Some(format!(
+            "\"{text}\" would go out as {call}, not as your call {mycall}, so nothing goes out."
         ))
     }
 
