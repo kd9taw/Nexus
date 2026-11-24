@@ -7,6 +7,7 @@
 import { useMemo, useState } from 'react'
 import type { Conversation as Conv, NeedAlert, NeedTag, Station, Tier } from '../types'
 import { StationCard } from './StationCard'
+import { useFirstClick } from '../useFirstClick'
 import { confirmOnlyOnWorkedBand, tagsForSurface } from '../features/needs'
 import { matchAnyTerm } from '../searchQuery'
 import { t, type MessageKey } from '../i18n'
@@ -207,6 +208,10 @@ export function StationList({
       (a, b) => order[a.presence] - order[b.presence] || b.snr - a.snr,
     )
   }, [stations, filter, query, needByCall, needAlertsByCall, band, feedMode, currentSlot, dropAfterCycles, watchOf])
+  // A card's double-click works the card its FIRST click landed on (useFirstClick): the list re-sorts
+  // as stations are heard, and the selected card grows its path line, so another card can slide under
+  // the pointer between the two clicks.
+  const firstClick = useFirstClick((call) => filtered.find((s) => s.call === call))
 
   return (
     <aside className="station-list panel">
@@ -334,6 +339,7 @@ export function StationList({
             watch={watchOf({ call: s.call, entity: s.country, grid: s.grid })}
             onSelect={onSelect}
             onCall={onCall}
+            gesture={firstClick}
           />
         ))}
       </div>
