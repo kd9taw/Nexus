@@ -1449,8 +1449,10 @@ impl Rig {
                 }
                 if let Some(down) = key_down {
                     self.owed_key_down = down;
-                    self.owed_release = !down;
                 }
+                // Only a release that is the LAST line owed decides by its answer: a stop owed
+                // behind it answers for itself, not for the release.
+                self.owed_release = key_down == Some(false);
                 if key_down == Some(true) {
                     self.owed_keys.push_back(OwedKey {
                         ahead: owed,
@@ -5012,6 +5014,34 @@ mod tests {
                 .count();
             assert_eq!(unkeys, 1, "{rt} ms");
         }
+    }
+
+    /// ⛔ A LATE `RPRT 0` TO A LINE OWED AFTER THE RELEASE IS NOT THE RELEASE'S. The radio refuses
+    /// PTT off late (`RPRT -1` at 3.5 s), and a CW stop goes owed behind it; a poll later takes both
+    /// answers. The last one, the stop's `RPRT 0`, used to clear the keyed belief as if the radio
+    /// had let go, and the unkey was given up. Only a release that is the last line owed decides.
+    #[test]
+    fn a_late_answer_to_a_stop_owed_after_the_release_never_unkeys() {
+        let (addr, _) = mock_rigctld_paced(|l| match l {
+            "T 0" => Some((Duration::from_millis(3_500), "RPRT -1\n".to_string())),
+            "f" => Some((Duration::from_millis(30), "14074000\n".to_string())),
+            _ => Some((Duration::from_millis(30), "RPRT 0\n".to_string())),
+        });
+        let mut rig = Rig::rigctld(&addr);
+        rig.set_slow_transport(true);
+        rig.set_unkey_retried(true);
+        assert!(rig.ptt(true).is_ok());
+        assert!(rig.ptt(false).is_err(), "premise: the release is owed");
+        assert!(
+            rig.stop_morse().is_err(),
+            "premise: the stop is owed behind it"
+        );
+        std::thread::sleep(Duration::from_millis(3_000));
+        let _ = rig.read_freq();
+        assert!(
+            rig.keyed,
+            "the radio refused PTT off; the keyed belief stays"
+        );
     }
 
     /// A late `RPRT 0` to a release with a key written after it unkeys nothing: the radio holds
