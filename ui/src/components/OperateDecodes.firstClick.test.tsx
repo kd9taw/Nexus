@@ -22,8 +22,9 @@ function row(message: string, freqHz: number): DecodeRow {
 function pane(decodes: DecodeRow[]) {
   const onCall = vi.fn(), onSelectDecode = vi.fn(), onToggleIgnore = vi.fn()
   const props = { rxOffsetHz: 1500, band: '20m', tier: 'FT8' as const, harqRescues: 0, onCall, onSelectDecode, onToggleIgnore }
-  const view = render(<OperateDecodes decodes={decodes} slot={11} {...props} />)
-  const rerender = (next: DecodeRow[]) => view.rerender(<OperateDecodes decodes={next} slot={11} {...props} />)
+  const view = render(<OperateDecodes decodes={decodes} slot={11} clearTick={0} {...props} />)
+  const rerender = (next: DecodeRow[], clearTick = 0) =>
+    view.rerender(<OperateDecodes decodes={next} slot={11} clearTick={clearTick} {...props} />)
   const rowFor = (message: string) => {
     const el = [...view.container.querySelectorAll('.decode-row')].find((r) => r.textContent?.includes(message))
     expect(el, `no row for ${message}`).toBeDefined()
@@ -60,7 +61,9 @@ describe('a decode double-click works the row its first click landed on', () => 
   it('the first row left the feed in between: nothing is worked', () => {
     const { onCall, rerender, rowFor } = pane([A, B])
     fireEvent.click(rowFor('CQ KM7CAB'), { detail: 1 })
-    rerender([B])
+    // The pane is cleared (a logger's Clear over UDP) and the next period brings only KB2DJJ.
+    rerender([], 1)
+    rerender([B], 1)
     fireEvent.click(rowFor('CQ KB2DJJ'), { detail: 2 })
     fireEvent.doubleClick(rowFor('CQ KB2DJJ'), { detail: 2 })
     expect(onCall).not.toHaveBeenCalled()
