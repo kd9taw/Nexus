@@ -52,6 +52,19 @@
 //! program that never asked the engine. It refuses no unkey or stop: `T 0`, `\stop_morse`,
 //! `\stop_voice_mem`, `U VOX 0` and the key-up at teardown always go out. The engine refuses
 //! the same overs earlier, before PTT, with its own reason; this is the second layer.
+//!
+//! ## On a virtual port (wfview's), whose radio may be across a network
+//!
+//! The engine waits [`VIRTUAL_PORT_DEADLINE`] (1 s, Hamlib's Icom per-try time) for each answer,
+//! and an unkey the radio does not answer is sent once more ([`Link::port`],
+//! [`RigBackend::try_set_ptt`]); Hamlib's Icom backend tries up to four times, with 100 ms between
+//! tries, about 4.3 s on a silent radio, where Nexus tries twice, about 2 s. The release that
+//! decides a slot over's halt waits for both tries (`rig::Rig::unkey_deciding_halt`, 2.5 s), so a
+//! radio that never answers PTT off is heard saying so (`RPRT -5`) and the over halts, as WSJT-X
+//! does, while a slow round trip is simply answered. ⚠️ The cost: a radio that never answers holds
+//! the radio loop, and the engine lock, about 2 s once per dead over. Every other release (the idle
+//! self-heal, a second unkey in the same tick) keeps the 700 ms PTT deadline, and the self-heal
+//! tries once per 2.5 s there. A real COM port keeps the serial bus's 300 ms and one try.
 
 use std::net::{SocketAddr, TcpListener};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -167,6 +180,18 @@ pub enum KeyingPolicy {
     Refused(&'static str),
 }
 
+/// How long the engine waits for one reply on a VIRTUAL port ([`Link::port`]), where the serial
+/// bus waits [`super::engine::REQUEST_DEADLINE`].
+///
+/// ⛔ THE RADIO BEHIND A VIRTUAL PORT MAY BE ACROSS A NETWORK. wfview's port passes each frame to
+/// the radio and hands back the radio's own answer, and over wfview Remote that answer takes the
+/// network's round trip. 300 ms is a USB cable's time; a late `FB` to the unkey became `RPRT -5`,
+/// and a slot over halted with "PTT OFF FAILED" although the radio had unkeyed (#559). This is the
+/// time Hamlib's Icom backends give each try on any port (`timeout = 1000, retry = 3`, Hamlib 4.6.5
+/// `rigs/icom/ic7300.c`; the tries are `icom_transaction` in `rigs/icom/frame.c`), which WSJT-X
+/// uses on the same port, and the radio's own network connection's deadline (`icomlan`).
+pub const VIRTUAL_PORT_DEADLINE: Duration = Duration::from_millis(1_000);
+
 /// What differs between the transports a [`CivDaemon`] can run over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Link {
@@ -176,7 +201,8 @@ pub struct Link {
     /// Another controller may share this bus: a virtual port another program (wfview) forwards
     /// to the radio it also drives. The engine then never turns the radio's scope output OFF
     /// (`27 11 00`), because that would stop the other program's waterfall too; see
-    /// [`super::engine::CivEngine::start_on_bus`].
+    /// [`super::engine::CivEngine::start_on_bus`]. An unkey the radio did not answer is sent
+    /// once more there ([`RigBackend::try_set_ptt`]).
     pub shared: bool,
 }
 
@@ -187,6 +213,20 @@ impl Link {
             deadline: super::engine::REQUEST_DEADLINE,
             keying: KeyingPolicy::Allowed,
             shared: false,
+        }
+    }
+
+    /// The link a COM port opens: [`Self::serial`] on a real port. A virtual one (wfview's, a
+    /// socat link) is a bus another controller shares, and it gets [`VIRTUAL_PORT_DEADLINE`]: the
+    /// radio behind it may be across a network.
+    pub fn port(virtual_port: bool) -> Link {
+        if !virtual_port {
+            return Link::serial();
+        }
+        Link {
+            deadline: VIRTUAL_PORT_DEADLINE,
+            shared: true,
+            ..Link::serial()
         }
     }
 }
@@ -260,6 +300,12 @@ pub struct CivBackend {
     rx_addressing: RxAddressing,
     /// Whether the keying verbs may reach the radio — see the module note.
     keying: KeyingPolicy,
+    /// Send an unanswered unkey once more ([`RigBackend::try_set_ptt`]): a shared bus
+    /// ([`Link::shared`]), whose radio may be across a network.
+    retry_unkey: bool,
+    /// How many keys (`1C 00 01`) this backend has sent, from every connection: an unkey's retry
+    /// is skipped when one went out since its first try ([`RigBackend::try_set_ptt`]).
+    keys_written: std::sync::atomic::AtomicU64,
 }
 
 /// The operator's filter memories a mode change can land in, for [`CivBackend::fil_memory`]: an
@@ -323,7 +369,15 @@ impl CivBackend {
             }),
             rx_addressing: RxAddressing::for_model(model),
             keying: KeyingPolicy::Allowed,
+            retry_unkey: false,
+            keys_written: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// The same backend sending an unanswered unkey once more (`retry`).
+    pub fn with_unkey_retry(mut self, retry: bool) -> Self {
+        self.retry_unkey = retry;
+        self
     }
 
     /// The same backend under `keying`.
@@ -1513,12 +1567,40 @@ impl RigBackend for CivBackend {
     /// any frame goes out) is a refusal; no `FB` before the deadline, or no engine left, is no
     /// answer, since the frame may already be on the wire and the radio keyed. The frame is the
     /// same one either way.
+    ///
+    /// ⛔ ON A SHARED BUS AN UNKEY THE RADIO DID NOT ANSWER GOES OUT ONCE MORE. Hamlib's Icom
+    /// backend sends a timed-out command again, up to three times with 100 ms between tries
+    /// (`icom_transaction`, Hamlib 4.6.5 `rigs/icom/frame.c`); this sends it once more: one more
+    /// unkey on the wire for a radio across a network. Only after both tries is the unkey answered
+    /// `RPRT -5`, about two deadlines out, and Nexus's client waits that long for the release that
+    /// decides a slot over's halt (`rig::Rig::unkey_deciding_halt`), so a radio that never answers
+    /// PTT off halts the over with that reason, as WSJT-X does. A key is never sent twice, and a serial bus
+    /// keeps its one try.
+    ///
+    /// ⛔ NOT OVER A LATER KEY. Another connection may key while the first try waits; the retry,
+    /// queued behind that key, would unkey it with the key told `RPRT 0`. So a key written since
+    /// the first try ([`CivBackend::keys_written`]) skips the retry, and the unanswered unkey is
+    /// answered `RPRT -5` as it stands. Within one connection this cannot happen: its lines are
+    /// served in order, so its next key is read only after both tries.
     fn try_set_ptt(&self, on: bool) -> Result<(), SetFault> {
         // A key is refused where the link may not key; an unkey never is.
         if on && self.keying_refused("T 1").is_some() {
             return Err(SetFault::Refused);
         }
-        self.answer(commands::set_ptt(self.addr, on))
+        if on {
+            self.keys_written.fetch_add(1, Ordering::SeqCst);
+        }
+        let keys_before = self.keys_written.load(Ordering::SeqCst);
+        let answered = self.answer(commands::set_ptt(self.addr, on));
+        if !on
+            && self.retry_unkey
+            && answered == Err(SetFault::NoAnswer)
+            && self.keys_written.load(Ordering::SeqCst) == keys_before
+        {
+            super::diag::note("CivBackend: the unkey was not answered, sending it once more");
+            return self.answer(commands::set_ptt(self.addr, false));
+        }
+        answered
     }
 
     fn set_vfo(&self, vfo: &str) -> bool {
@@ -1904,7 +1986,8 @@ impl CivDaemon {
                 data_mode,
                 model,
             )
-            .with_keying(link.keying),
+            .with_keying(link.keying)
+            .with_unkey_retry(link.shared),
         );
         let backend: Arc<dyn RigBackend> = civ.clone();
         let tcp_stop = Arc::new(AtomicBool::new(false));
@@ -2006,11 +2089,15 @@ impl CivDaemon {
             tcp_port,
             data_mode,
             model,
-            Link {
-                shared: virtual_port,
-                ..Link::serial()
-            },
+            Link::port(virtual_port),
         )
+    }
+
+    /// Does this daemon send an unanswered unkey once more before it answers (a shared bus,
+    /// [`Link::shared`])? Its client must then wait for both tries on a release
+    /// ([`crate::rig::Rig::set_unkey_retried`]).
+    pub fn retries_unkey(&self) -> bool {
+        self.civ.retry_unkey
     }
 
     /// The CI-V address to drive `model_name` at, when it's a native-capable Icom.
@@ -6300,6 +6387,271 @@ mod tests {
                 shared: false,
             }
         );
+        assert_eq!(Link::port(false), Link::serial(), "a real COM port");
+    }
+
+    /// A virtual port waits 1 s a reply, a shared bus, keying as ever; and its unkey's two tries
+    /// end well inside the deadline Nexus's client gives that link's release, so their `RPRT -5`
+    /// is heard. Every other release's deadline is far shorter.
+    #[test]
+    fn a_virtual_port_waits_one_second_and_answers_an_unkey_inside_the_clients_release_wait() {
+        assert_eq!(
+            Link::port(true),
+            Link {
+                deadline: Duration::from_millis(1_000),
+                keying: KeyingPolicy::Allowed,
+                shared: true,
+            }
+        );
+        let release = Duration::from_millis(crate::rig::RETRIED_RELEASE_DEADLINE_MS);
+        let both_tries = VIRTUAL_PORT_DEADLINE * 2 + super::super::engine::READ_TIMEOUT * 2;
+        assert!(
+            both_tries + Duration::from_millis(400) <= release,
+            "{both_tries:?} vs {release:?}"
+        );
+        #[cfg(feature = "device")]
+        assert_eq!(VIRTUAL_PORT_DEADLINE, crate::icomlan::LAN_DEADLINE);
+    }
+
+    // ── WFVIEW'S VIRTUAL PORT over wfview Remote: the radio's answers come back late ─────────
+
+    use super::super::engine::tests_support::{Answer, LateBus};
+
+    /// What the late bus answers: `FB` (`Some(true)`), `FA` or nothing, after `ms`.
+    fn after(ms: u64, ack: Option<bool>) -> Answer {
+        Answer {
+            after: Duration::from_millis(ms),
+            ack,
+        }
+    }
+
+    /// Every frame on the bus, in order, with when it was written.
+    type Written = Arc<Mutex<Vec<(std::time::Instant, Frame)>>>;
+
+    /// Nexus's own CI-V daemon on the link a wfview virtual port opens with ([`Link::port`]), the
+    /// IC-7300 behind it across wfview Remote ([`LateBus`]), and Nexus's own CAT client on it.
+    fn wfview_port(
+        answer: impl FnMut(&Frame) -> Answer + Send + 'static,
+    ) -> (CivDaemon, crate::rig::Rig, Written) {
+        let model = IcomModel::Ic7300;
+        let addr = model.default_civ_addr();
+        let bus = LateBus::new(addr, answer);
+        let written = bus.written.clone();
+        let daemon =
+            CivDaemon::start_with_link(Box::new(bus), addr, 0, 1, Some(model), Link::port(true))
+                .unwrap();
+        let mut rig =
+            crate::rig::Rig::rigctld(&format!("127.0.0.1:{}", daemon.local_addr().port()));
+        // As the radio loop sets it up for this daemon.
+        rig.set_unkey_retried(daemon.retries_unkey());
+        (daemon, rig, written)
+    }
+
+    /// The unkeys (`1C 00 00`) on the bus.
+    fn unkeys(written: &Written) -> Vec<std::time::Instant> {
+        written
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, f)| f.cmd == 0x1C && f.data == [0x00, 0x00])
+            .map(|(at, _)| *at)
+            .collect()
+    }
+
+    /// One slot over's key and, a while later, its unkey: whether the unkey halts TX
+    /// ([`crate::slot::slot_unkey_failure`]), and why.
+    fn over(rig: &mut crate::rig::Rig) -> Option<String> {
+        let _ = rig.ptt(true);
+        // The over: long enough for every answer to the key to have come in.
+        std::thread::sleep(Duration::from_millis(1_500));
+        crate::slot::slot_unkey_failure(&rig.unkey_deciding_halt(), true)
+    }
+
+    /// ⛔ AN UNKEY THE RADIO ACKS LATE ENDS THE OVER NORMALLY (#559). Over wfview Remote the
+    /// radio's `FB` takes the network's round trip; the daemon waited 300 ms for it, a USB cable's
+    /// time, answered `RPRT -5`, and Nexus's client read that as Hamlib's own "the rig did not
+    /// answer", which halts a slot over: "PTT OFF FAILED — TX STOPPED" with the radio unkeyed.
+    /// WSJT-X through Hamlib on the same port waits 1 s a try.
+    #[test]
+    fn on_wfviews_port_an_unkey_acked_late_ends_the_over_normally() {
+        for ms in [450, 900] {
+            let (_daemon, mut rig, _) = wfview_port(move |_| after(ms, Some(true)));
+            assert_eq!(over(&mut rig), None, "an FB {ms} ms late");
+        }
+    }
+
+    /// ⛔ A LATE `FA` TO AN EARLIER FRAME DOES NOT REFUSE THE UNKEY. A dial write the radio answers
+    /// `FA` past the daemon's deadline, then the unkey: the `FA` lands while the unkey waits, and
+    /// CI-V's `FA` names no command. It used to be the unkey's `RPRT -1`, and a halt.
+    #[test]
+    fn on_wfviews_port_a_late_fa_to_an_earlier_frame_does_not_refuse_the_unkey() {
+        let (daemon, mut rig, written) = wfview_port(|f| match f.cmd {
+            0x1C => after(400, Some(true)),
+            _ => after(1_300, Some(false)),
+        });
+        let _ = rig.ptt(true);
+        std::thread::sleep(Duration::from_millis(1_000));
+        let (mut c, mut rd) = client(daemon.local_addr().port());
+        assert_eq!(roundtrip(&mut c, &mut rd, "F 14074000\n"), "RPRT -5\n");
+        let unkey = rig.unkey_deciding_halt();
+        assert_eq!(
+            crate::slot::slot_unkey_failure(&unkey, true),
+            None,
+            "{unkey:?}"
+        );
+        let cmds: Vec<u8> = written.lock().unwrap().iter().map(|(_, f)| f.cmd).collect();
+        assert_eq!(
+            cmds,
+            [0x1C, 0x05, 0x1C],
+            "key, dial, unkey: nothing else on the bus"
+        );
+    }
+
+    /// A REAL REFUSAL STILL HALTS, as in WSJT-X: the radio's `FA` to the unkey itself.
+    #[test]
+    fn on_wfviews_port_an_unkey_the_radio_refuses_still_halts() {
+        let (_daemon, mut rig, _) = wfview_port(|f| match f.data.as_slice() {
+            [0x00, 0x00] => after(400, Some(false)),
+            _ => after(400, Some(true)),
+        });
+        let why = over(&mut rig).expect("a refused unkey halts TX");
+        assert!(why.contains("RPRT -1"), "{why}");
+    }
+
+    /// ⛔ A RADIO THAT NEVER ANSWERS PTT OFF STILL HALTS TX, WITH THE REASON, as WSJT-X does after
+    /// Hamlib's tries. On this link the daemon sends the unanswered unkey once more, as Hamlib's
+    /// Icom backend retries, and answers `RPRT -5` only after both; Nexus's client waits for that
+    /// on the over's own release (`rig::Rig::unkey_deciding_halt`) instead of its 700 ms, so it
+    /// hears it, and the slot over halts. Before, with the 700 ms release, the `RPRT -5` came after
+    /// the client had stopped reading and was never judged.
+    #[test]
+    fn on_wfviews_port_an_unkey_the_radio_never_answers_halts_after_both_tries() {
+        let (_daemon, mut rig, written) = wfview_port(|f| match f.data.as_slice() {
+            [0x00, 0x00] => after(0, None),
+            _ => after(100, Some(true)),
+        });
+        let _ = rig.ptt(true);
+        std::thread::sleep(Duration::from_millis(1_500));
+        let t0 = std::time::Instant::now();
+        let unkey = rig.unkey_deciding_halt();
+        let took = t0.elapsed();
+        let why = crate::slot::slot_unkey_failure(&unkey, true).expect("a silent radio halts TX");
+        assert!(why.contains("RPRT -5"), "{why}");
+        assert!(
+            took >= Duration::from_millis(1_900),
+            "after both tries: {took:?}"
+        );
+        let sent = unkeys(&written);
+        assert_eq!(sent.len(), 2, "the unkey, then once more");
+        let gap = sent[1] - sent[0];
+        assert!(
+            gap >= Duration::from_millis(1_000),
+            "after the first deadline: {gap:?}"
+        );
+    }
+
+    /// ⛔ A LATE `FB` TO AN EARLIER FRAME NEVER STANDS FOR AN UNKEY THE RADIO DID NOT ANSWER. The
+    /// dial write's `FB` lands while the unkey waits, and the radio never answers the unkey (it may
+    /// never have had it). Taken as the unkey's, it said `RPRT 0` with one unkey on the wire, and
+    /// Nexus's idle self-heal stopped unkeying a radio that may still be keyed. Now the unkey is
+    /// unanswered, its retry goes out, and the silence after it halts the over.
+    #[test]
+    fn on_wfviews_port_a_late_fb_to_an_earlier_frame_never_confirms_the_unkey() {
+        let (daemon, mut rig, written) = wfview_port(|f| match (f.cmd, f.data.as_slice()) {
+            (0x05, _) => after(1_300, Some(true)),
+            (0x1C, [0x00, 0x01]) => after(100, Some(true)),
+            _ => after(0, None),
+        });
+        let _ = rig.ptt(true);
+        std::thread::sleep(Duration::from_millis(1_000));
+        let (mut c, mut rd) = client(daemon.local_addr().port());
+        assert_eq!(roundtrip(&mut c, &mut rd, "F 14074000\n"), "RPRT -5\n");
+        let unkey = rig.unkey_deciding_halt();
+        let why = crate::slot::slot_unkey_failure(&unkey, true).expect("not taken as unkeyed");
+        assert!(why.contains("RPRT -5"), "{why}");
+        assert_eq!(unkeys(&written).len(), 2, "the unkey, then once more");
+    }
+
+    /// ⛔ THE RETRY NEVER UNKEYS A LATER KEY. Connection A's unkey goes unanswered; while it waits,
+    /// connection B keys. A's retry, queued behind B's key, would have unkeyed it, with B told
+    /// `RPRT 0`. A key written since the first try skips the retry: the wire carries the unkey and
+    /// the key, and nothing after them.
+    #[test]
+    fn on_wfviews_port_the_unkey_retry_never_follows_another_connections_key() {
+        let (daemon, _rig, written) = wfview_port(|f| match f.data.as_slice() {
+            [0x00, 0x01] => after(100, Some(true)),
+            _ => after(0, None),
+        });
+        let port = daemon.local_addr().port();
+        let a = std::thread::spawn(move || {
+            let (mut c, mut rd) = client(port);
+            roundtrip(&mut c, &mut rd, "T 0\n")
+        });
+        std::thread::sleep(Duration::from_millis(200));
+        let (mut c, mut rd) = client(port);
+        // B's key is answered (its FB may as well be A's late one, so it may say `RPRT -5`).
+        assert!(
+            roundtrip(&mut c, &mut rd, "T 1\n").starts_with("RPRT "),
+            "B's key"
+        );
+        assert_eq!(
+            a.join().unwrap(),
+            "RPRT -5\n",
+            "A's unkey, unanswered, not retried"
+        );
+        std::thread::sleep(Duration::from_millis(1_500));
+        let ptt: Vec<Vec<u8>> = written
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, f)| f.cmd == 0x1C)
+            .map(|(_, f)| f.data.clone())
+            .collect();
+        assert_eq!(
+            ptt,
+            [vec![0x00, 0x00], vec![0x00, 0x01]],
+            "no unkey after B's key"
+        );
+    }
+
+    /// ⛔ A KEY IS NEVER SENT TWICE: a key the radio does not answer is `RPRT -5` after one try.
+    #[test]
+    fn on_wfviews_port_an_unanswered_key_is_sent_once() {
+        let (daemon, _rig, written) = wfview_port(|_| after(0, None));
+        let (mut c, mut rd) = client(daemon.local_addr().port());
+        assert_eq!(roundtrip(&mut c, &mut rd, "T 1\n"), "RPRT -5\n");
+        std::thread::sleep(Duration::from_millis(1_500));
+        let keys = written
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, f)| f.cmd == 0x1C && f.data == [0x00, 0x01])
+            .count();
+        assert_eq!(keys, 1);
+    }
+
+    /// A real COM port keeps its timing: an unkey the radio does not answer is `RPRT -5` after the
+    /// one 300 ms deadline, sent once, as it always was.
+    #[test]
+    fn on_a_real_port_an_unanswered_unkey_is_answered_after_one_deadline() {
+        let model = IcomModel::Ic7300;
+        let addr = model.default_civ_addr();
+        let bus = LateBus::new(addr, |_| after(0, None));
+        let written = bus.written.clone();
+        let daemon =
+            CivDaemon::start_with_link(Box::new(bus), addr, 0, 1, Some(model), Link::port(false))
+                .unwrap();
+        // The scope-off housekeeping a real port sends at start, answered by nobody, first.
+        std::thread::sleep(Duration::from_millis(1_200));
+        let (mut c, mut rd) = client(daemon.local_addr().port());
+        let t0 = std::time::Instant::now();
+        assert_eq!(roundtrip(&mut c, &mut rd, "T 0\n"), "RPRT -5\n");
+        let took = t0.elapsed();
+        assert!(
+            took >= Duration::from_millis(280) && took < Duration::from_millis(600),
+            "one deadline: {took:?}"
+        );
+        assert_eq!(unkeys(&written).len(), 1, "sent once");
     }
 
     // ── THE TEARDOWN KEY-UP from an engine held past the teardown's wait ──────────────────────

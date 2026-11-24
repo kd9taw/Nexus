@@ -33,7 +33,15 @@ enum Unkey {
     Fails { code: i32, n: usize },
     /// `RPRT 0` to the first unkey after [`LATE`], and at once after that: a slow radio.
     AnswersLate,
+    /// `RPRT -5` to every unkey after [`BOTH_TRIES`], the radio staying keyed: Nexus's CI-V daemon
+    /// on wfview's virtual port with a radio that never answers, on a client set up for it
+    /// ([`Rig::set_unkey_retried`]).
+    SilentAfterTwoTries,
 }
+
+/// How long Nexus's CI-V daemon on wfview's port takes to answer an unkey the radio never answers:
+/// its two 1 s tries.
+const BOTH_TRIES: Duration = Duration::from_millis(2_000);
 
 /// How many unkeys a failing radio refuses before it takes one: about two seconds of the loop's
 /// 20 ms ticks, so the unkey is seen going out again and again, not once more.
@@ -114,6 +122,10 @@ impl Station {
                             return Some(format!("RPRT {code}\n"));
                         }
                         Unkey::AnswersLate if i == 0 => std::thread::sleep(LATE),
+                        Unkey::SilentAfterTwoTries => {
+                            std::thread::sleep(BOTH_TRIES);
+                            return Some("RPRT -5\n".into());
+                        }
                         _ => {}
                     }
                     radio.keyed = false;
@@ -140,11 +152,13 @@ impl Station {
         let slot = ((now_unix_ms() + 10_000.0) / 30_000.0).ceil() * 30_000.0;
         let mut backend = MockBackend::new();
         backend.events = Some(Arc::clone(&order));
+        let mut rig = Rig::rigctld(&peer.address);
+        rig.set_unkey_retried(unkey == Unkey::SilentAfterTwoTries);
         Station {
             engine,
             state: loop_state(),
             backend,
-            rig: Rig::rigctld(&peer.address),
+            rig,
             peer,
             on_air,
             refuses_key,
@@ -413,6 +427,110 @@ fn hamlibs_own_no_answer_to_an_ft8_unkey_halts_tx() {
         );
         assert!(!s.on_air(), "{what}: the radio was left keyed");
     }
+}
+
+/// ⛔ ON WFVIEW'S VIRTUAL PORT A RADIO THAT NEVER ANSWERS PTT OFF HALTS TX, AT THE OVER'S END AND AT
+/// STOP TX, as WSJT-X halts after Hamlib's tries. Nexus's CI-V daemon there answers such an unkey
+/// `RPRT -5` only after its two tries, about 2 s; the release that decides the halt waits for it
+/// (`Rig::unkey_deciding_halt`) and hears it. After the halt the idle self-heal goes on, spaced to
+/// one try per 2.5 s there, not one a tick, as that daemon is still at work on each one.
+#[test]
+fn on_wfviews_port_a_radio_that_never_answers_the_unkey_halts_tx_at_the_end_and_at_stop_tx() {
+    for at_stop_tx in [false, true] {
+        let what = if at_stop_tx {
+            "Stop TX"
+        } else {
+            "the over's end"
+        };
+        let mut s = Station::new(Unkey::SilentAfterTwoTries);
+        let end = s.key_the_over();
+        let at = if at_stop_tx {
+            let cut = s.slot + 5_000.0;
+            s.run_to(cut - 20.0);
+            s.engine.lock().unwrap().halt_tx();
+            cut
+        } else {
+            end
+        };
+        let t0 = Instant::now();
+        s.run_to(at + 20.0);
+        assert!(s.unkeys() >= 1, "{what}: premise: the unkey went out");
+        assert!(!s.armed(), "{what}: TX is still on");
+        assert!(
+            s.unkey_failed().is_some_and(|f| f.why.contains("RPRT -5")),
+            "{what}: nothing says why: {:?}",
+            s.unkey_failed()
+        );
+        assert!(
+            t0.elapsed() >= Duration::from_millis(1_900),
+            "{what}: heard after both tries"
+        );
+        // The self-heal: still unkeying, but not every tick.
+        let sent = s.unkeys();
+        let t1 = Instant::now();
+        let mut t = at + 20.0;
+        while t1.elapsed() < Duration::from_secs(4) {
+            t += 20.0;
+            s.run_to(t);
+        }
+        let spent = t1.elapsed();
+        let more = s.unkeys() - sent;
+        assert!(s.rig.keyed, "{what}: the loop forgot the radio is keyed");
+        assert!(
+            more >= 1 && more as f64 <= 1.0 + spent.as_secs_f64() / 2.5,
+            // one per 2.5 s, where it was one per 20 ms tick
+            "{what}: {more} unkeys in {spent:?}"
+        );
+    }
+}
+
+/// The same at the two other ends that decide a slot over's halt: an FT2 over's own end, which has
+/// no WSJT-X window and ends on the loop's deadline unkey, and a logger's HaltTx mid-over. Each
+/// waits for the daemon's two tries, hears its `RPRT -5`, and halts.
+#[test]
+fn on_wfviews_port_a_silent_radio_halts_tx_at_an_ft2_overs_end_and_at_a_loggers_halt_tx() {
+    let mut ft2 = Station::with(Unkey::SilentAfterTwoTries, 14_084_000, "PKTUSB", |e| {
+        e.set_tier(Tier::Ft2);
+        e.set_frequency(14.084, "20m", "USB");
+        e.start_cq(None).expect("Call CQ");
+        let _ = e.take_immediate_tx();
+    });
+    assert_eq!(
+        crate::slot::wsjtx_tx_window_ms(Tier::Ft2),
+        None,
+        "premise: FT2 has no window"
+    );
+    let end = ft2.key_the_over();
+    ft2.run_to(end + 20.0);
+    assert!(
+        ft2.unkey_failed()
+            .is_some_and(|f| f.why.contains("RPRT -5")),
+        "the FT2 over's end: {:?}",
+        ft2.unkey_failed()
+    );
+    assert!(!ft2.armed(), "the FT2 over's end: TX is still on");
+
+    let logger = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    let server =
+        WsjtxServer::new("127.0.0.1:0".parse().unwrap(), logger.local_addr().unwrap()).unwrap();
+    let mut s = Station::new(Unkey::SilentAfterTwoTries);
+    s.key_the_over();
+    let cut = s.slot + 5_000.0;
+    s.run_with(Some(&server), cut - 20.0);
+    logger
+        .send_to(&halt_tx_datagram(), server.local_addr().unwrap())
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(20));
+    s.run_with(Some(&server), cut);
+    assert_eq!(
+        s.state.tx_until_ms, None,
+        "premise: the HaltTx cut the over"
+    );
+    assert!(
+        s.unkey_failed().is_some_and(|f| f.why.contains("RPRT -5")),
+        "the HaltTx: {:?}",
+        s.unkey_failed()
+    );
 }
 
 /// ⭐ A LATE ANSWER TO AN FT8 UNKEY HALTS NOTHING. Nexus's own PTT deadline has no counterpart in

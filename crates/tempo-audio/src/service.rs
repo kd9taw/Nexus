@@ -385,6 +385,15 @@ fn hamlib_launch_refused(t: &Transport) -> bool {
 /// see [`crate::rigctld_proc::ControlLines`]. They reach only the Hamlib path; the native CI-V
 /// daemon opens the port itself and gets the same guarantee from
 /// [`crate::control_line::idle_both_lines`] at its own open.
+/// Whether `proc` sends an unanswered unkey once more before it answers: Nexus's CI-V daemon on a
+/// virtual port (wfview's). Its client's release then waits for both tries
+/// ([`Rig::set_unkey_retried`]), so a radio that never answers PTT off is heard saying so. Set
+/// wherever a keying `Rig` is put on a daemon: the open (`open_cat`) and a radio switch's adoption
+/// of a monitor's connection (`install_handoff_connection`).
+fn unkey_retried_by(proc: Option<&CatDaemon>) -> bool {
+    matches!(proc, Some(CatDaemon::Native(d)) if d.retries_unkey())
+}
+
 fn spawn_cat_daemon(
     t: &Transport,
     target: &str,
@@ -7824,7 +7833,7 @@ impl RadioLoop {
             .filter(|&t| now >= t && self.window_unkeyed != Some(t))
         {
             backend.flush_output();
-            let unkey = rig.ptt(false);
+            let unkey = rig.unkey_deciding_halt();
             self.window_unkeyed = Some(t);
             if let Some(why) = crate::slot::slot_unkey_failure(&unkey, true) {
                 engine_lock(engine).halt_tx_for_failed_unkey(&why);
@@ -9769,6 +9778,8 @@ impl RadioLoop {
         // configured.
         old_transport.ptt_serial_port = String::new();
         self.rigctld_proc = conn.rigctld_proc;
+        // The monitor opened its daemon as the active open would; its release now keys.
+        rig.set_unkey_retried(unkey_retried_by(self.rigctld_proc.as_ref()));
         self.applied.broker_self_port = want_active.broker_self_port;
         self.applied.ptt_serial_port = want_active.ptt_serial_port.clone();
         self.reset_for_handoff();
@@ -16969,7 +16980,11 @@ impl RadioLoop {
                     // cut it. That is the same condition the unkey already respects.
                     backend.flush_output();
                     let slot_over = self.holds_slot_over();
-                    let unkey = rig.ptt(false);
+                    let unkey = if slot_over {
+                        rig.unkey_deciding_halt()
+                    } else {
+                        rig.ptt(false)
+                    };
                     // A slot over's unkey the radio does not take halts TX and says so, as in
                     // WSJT-X; the idle self-heal below goes on sending it.
                     if let Some(why) = crate::slot::slot_unkey_failure(&unkey, slot_over) {
@@ -18048,7 +18063,11 @@ impl RadioLoop {
             // (`widgets/mainwindow.cpp:8564-8582`, v3.0.2).
             backend.flush_output();
             let slot_over = self.holds_slot_over();
-            let unkey = rig.ptt(false);
+            let unkey = if slot_over {
+                rig.unkey_deciding_halt()
+            } else {
+                rig.ptt(false)
+            };
             self.tx_until_ms = None;
             // Cutting a slot over is WSJT-X's Halt Tx, and its PTT off fails as the over's end does.
             if let Some(why) = crate::slot::slot_unkey_failure(&unkey, slot_over) {
@@ -18063,7 +18082,19 @@ impl RadioLoop {
         // recovering blip. One idempotent CAT call per tick, only while desynced.
         // A slot over's failed unkey halting TX (`slot::slot_unkey_failure`) stops the
         // sequencer, never this: it goes on until the radio takes the unkey.
-        if rig.keyed && self.tx_until_ms.is_none() && !self.tuning_keyed && !self.manual_ptt_applied
+        //
+        // ⚠️ ON A LINK WHOSE DAEMON RETRIES AN UNANSWERED UNKEY (Nexus's CI-V daemon on wfview's
+        // virtual port) each try takes that daemon about 2 s to answer on a silent radio, and this
+        // runs under the engine lock: there it sends none within `RETRIED_RELEASE_DEADLINE_MS` of
+        // any other unkey (its own last try, or Stop TX's in this same tick), at the short PTT
+        // deadline (`Rig::ptt`), so the lock is held at most that deadline per try and the daemon
+        // is never handed unkeys faster than it can answer them.
+        let spaced = Duration::from_millis(crate::rig::RETRIED_RELEASE_DEADLINE_MS);
+        if rig.keyed
+            && self.tx_until_ms.is_none()
+            && !self.tuning_keyed
+            && !self.manual_ptt_applied
+            && !(rig.unkey_retried() && rig.released_within(spaced))
         {
             crate::civ::diag::note("idle self-heal: rig still keyed but loop thinks RX → unkey");
             let _ = rig.ptt(false);
@@ -18169,7 +18200,11 @@ impl RadioLoop {
                         // The queued over is cleared before the unkey, as at Stop TX.
                         backend.flush_output();
                         let slot_over = self.holds_slot_over();
-                        let unkey = rig.ptt(false);
+                        let unkey = if slot_over {
+                            rig.unkey_deciding_halt()
+                        } else {
+                            rig.ptt(false)
+                        };
                         self.tx_until_ms = None;
                         // …and so is a logger's HaltTx cutting one.
                         if let Some(why) = crate::slot::slot_unkey_failure(&unkey, slot_over) {
@@ -22522,6 +22557,7 @@ fn open_cat(
                     || t.is_slow_serial_link(),
             ); // network chains + the native daemon + the TCI client (a write waits for the SDR program's report) + slow serial links (Xiegu / vintage Kenwood / any rig ≤ 19200 baud) get the long deadline
             rig.set_network_chain(network); // a key-down waits the network window
+            rig.set_unkey_retried(unkey_retried_by(Some(&proc)));
             let mut probe = finish_cat_open(&mut rig, t);
             // Say WHICH backend this result came from — a native-CI-V radio silently
             // falling back to rigctld otherwise reads as "native was tested and failed".
@@ -30675,6 +30711,203 @@ mod tests {
         let p = pool.lock().unwrap();
         assert_eq!(p[0].ticks, 1);
         assert_eq!(p[1].ticks, 1, "the second monitor got its turn");
+    }
+
+    /// A rigctld standing in for Nexus's CI-V daemon on wfview's port with a silent radio: `T 0`
+    /// is answered `RPRT -5` after `unkey_ms` (both tries), anything else at once.
+    fn silent_unkey_rigctld(unkey_ms: u64) -> String {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                std::thread::spawn(move || {
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    let mut line = String::new();
+                    loop {
+                        line.clear();
+                        match reader.read_line(&mut line) {
+                            Ok(0) | Err(_) => break,
+                            Ok(_) => {}
+                        }
+                        let reply = match line.trim() {
+                            "T 0" => {
+                                std::thread::sleep(Duration::from_millis(unkey_ms));
+                                "RPRT -5\n"
+                            }
+                            "f" => "14074000\n",
+                            _ => "RPRT 0\n",
+                        };
+                        if stream.write_all(reply.as_bytes()).is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+        });
+        addr
+    }
+
+    /// ⛔ A SILENT RADIO ON WFVIEW'S PORT NEVER HOLDS THE ENGINE LOCK FOR SECONDS. The idle self-heal
+    /// and Stop TX's unkey run under the engine lock; when every release there waited for the
+    /// daemon's two tries (about 2 s each on a silent radio), a loop step took 4.6 s, a UI command
+    /// waited up to 4 s for the lock and Stop TX 2 s. Now only the release that decides a slot
+    /// over's halt waits that long (`Rig::unkey_deciding_halt`); every other release there ends at
+    /// the 700 ms PTT deadline, the self-heal sends none within 2.5 s of another unkey, and no poll
+    /// queues behind that daemon's work on an unanswered unkey. The real radio loop, a UI thread taking the lock every
+    /// 50 ms for 6 s, and Stop TX at 2 s. The over's own end still waits for and halts on the
+    /// `RPRT -5` (`civ::broker`'s `on_wfviews_port_an_unkey_the_radio_never_answers_halts_after_both_tries`
+    /// and `rig`'s `a_release_that_decides_a_halt_waits_for_both_tries_once`).
+    #[test]
+    fn a_silent_radio_on_wfviews_port_never_holds_the_engine_lock_for_seconds() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let mut rig = Rig::rigctld(&silent_unkey_rigctld(2_000));
+        rig.set_slow_transport(true);
+        rig.set_unkey_retried(true);
+        assert!(rig.ptt(true).is_ok());
+        let _ = rig.ptt(false); // not answered in time: keyed stays set, the self-heal is armed
+        assert!(rig.keyed);
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (eng2, stop2) = (Arc::clone(&engine), Arc::clone(&stop));
+        let looper = std::thread::spawn(move || {
+            let mut backend = MockBackend::new();
+            let mut state = loop_state();
+            state.applied = Transport::from_settings(engine_lock(&eng2).settings());
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            let t0 = std::time::Instant::now();
+            let mut longest = Duration::ZERO;
+            while !stop2.load(std::sync::atomic::Ordering::Relaxed) {
+                let s = std::time::Instant::now();
+                let _ = state.step(
+                    &eng2,
+                    &mut backend,
+                    &mut rig,
+                    &sinks,
+                    t0.elapsed().as_secs_f64() * 1000.0,
+                    &mut ra,
+                    &mut rr,
+                    &mut station,
+                );
+                longest = longest.max(s.elapsed());
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            longest
+        });
+        let mut longest_wait = Duration::ZERO;
+        let mut stop_tx_wait = None;
+        let start = std::time::Instant::now();
+        while start.elapsed() < Duration::from_secs(6) {
+            let s = std::time::Instant::now();
+            let mut e = engine_lock(&engine);
+            let w = s.elapsed();
+            if start.elapsed() > Duration::from_secs(2) && stop_tx_wait.is_none() {
+                e.halt_tx();
+                stop_tx_wait = Some(w);
+            }
+            drop(e);
+            longest_wait = longest_wait.max(w);
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let longest_step = looper.join().unwrap();
+        // The engine lock: a short release there ends at its 700 ms PTT deadline (`Rig::key`).
+        let lock_bound = Duration::from_millis(800);
+        assert!(
+            longest_wait < lock_bound,
+            "longest engine-lock wait {longest_wait:?}"
+        );
+        let stop_tx_wait = stop_tx_wait.unwrap();
+        assert!(
+            stop_tx_wait < lock_bound,
+            "Stop TX's lock wait {stop_tx_wait:?}"
+        );
+        // The loop step: Stop TX's CW stop (`\stop_morse`) waits for the daemon to finish the
+        // unanswered unkey ahead of it on the connection, then its unkey's 700 ms. Two seconds is
+        // what one unanswered unkey costs the daemon; it is never doubled.
+        let step_bound = Duration::from_millis(2_300);
+        assert!(
+            longest_step < step_bound,
+            "longest loop step {longest_step:?}"
+        );
+    }
+
+    /// A radio switch onto a radio on wfview's virtual port adopts the monitor's connection, whose
+    /// daemon tries an unanswered unkey twice: the adopted `Rig`'s release waits for both, as the
+    /// open's does, or a radio that never answers PTT off would never be heard saying so. The
+    /// control: a daemon on a real port leaves the release at its 700 ms.
+    #[test]
+    fn an_adopted_connection_waits_for_the_unkey_retry_where_its_daemon_retries() {
+        use crate::civ::broker::{CivDaemon, Link};
+        use crate::civ::commands::IcomModel;
+        use crate::civ::engine::tests_support::{Answer, LateBus};
+        for virtual_port in [true, false] {
+            let addr = IcomModel::Ic7300.default_civ_addr();
+            let bus = LateBus::new(addr, |_| Answer {
+                after: Duration::ZERO,
+                ack: Some(true),
+            });
+            let daemon = CivDaemon::start_with_link(
+                Box::new(bus),
+                addr,
+                0,
+                1,
+                Some(IcomModel::Ic7300),
+                Link::port(virtual_port),
+            )
+            .unwrap();
+            let monitor_rig = Rig::with_control(
+                Some(format!("127.0.0.1:{}", daemon.local_addr().port())),
+                PttMode::Vox,
+            );
+            let mut rig = Rig::vox();
+            let mut state = loop_state();
+            state.applied = cat_transport(4532, None);
+            let want = cat_transport(4533, None);
+            let connection = MonitorConn {
+                id: 1,
+                transport: want.clone(),
+                rig: monitor_rig,
+                rigctld_proc: Some(CatDaemon::Native(daemon)),
+                last_poll: 1.0,
+                ticks: 1,
+                smeter_supported: Some(true),
+                freq_misses: 0,
+                open_failures: 0,
+                retry_after_ms: 0.0,
+            };
+            let _demoted = state.install_handoff_connection(&mut rig, connection, &want, 0);
+            assert_eq!(
+                rig.unkey_retried(),
+                virtual_port,
+                "virtual_port={virtual_port}"
+            );
+        }
+    }
+
+    /// The open's wiring: Native Icom CI-V on a pseudo-terminal (wfview's kind of port) starts the
+    /// daemon on the virtual-port link, and the `Rig` the open hands the radio loop waits for the
+    /// unkey's retry on a release.
+    #[cfg(all(target_os = "linux", feature = "serial"))]
+    #[test]
+    fn the_open_on_a_virtual_port_waits_for_the_unkey_retry() {
+        let (_master, pty) = crate::ports::tests::open_pty();
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let mut t = cat_transport(port, None);
+        t.rig_model = 3073; // IC-7300
+        t.icom_native_cat = true;
+        t.serial_port = pty;
+        let (rig, proc, _) = open_cat(&t, PttMode::Cat, false, None);
+        assert!(
+            matches!(&proc, Some(CatDaemon::Native(d)) if d.retries_unkey()),
+            "Nexus's CI-V daemon on the virtual-port link"
+        );
+        assert!(rig.unkey_retried());
     }
 
     #[test]

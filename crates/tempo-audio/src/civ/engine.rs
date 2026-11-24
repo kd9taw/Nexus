@@ -3,7 +3,9 @@
 //!
 //! 1. **Command/reply** — requests arrive on a channel ([`CivHandle::transact`]), are written
 //!    to the port strictly one at a time, and the matching reply (or `FB`/`FA` ack) resolves
-//!    the caller. A per-request serial deadline keeps a dead radio from wedging the queue.
+//!    the caller. A per-request serial deadline keeps a dead radio from wedging the queue. On a
+//!    shared bus (a virtual port), an `FB`/`FA` that may be a timed-out request's late answer is
+//!    not taken as the next request's ([`Unanswered`]).
 //! 2. **Unsolicited transceive** — the radio pushes frequency (`00`) / mode (`01`) reports
 //!    when the operator touches the front panel; they fold into the shared [`CivState`]
 //!    (instant dial tracking, no polling).
@@ -344,6 +346,50 @@ fn write_frame(io: &mut Box<dyn CivIo>, frame: &Frame) -> WriteOutcome {
     WriteOutcome::Transient
 }
 
+/// How many timed-out requests the engine remembers while their answers may still come in
+/// ([`Unanswered`]). A radio that stops answering altogether times out every request; past this
+/// the oldest are forgotten, and with them only the hold on an answer that will never come.
+const UNANSWERED_MAX: usize = 8;
+
+/// A request that timed out, whose answer may still come in, until `until`.
+///
+/// ⛔ CI-V'S `FB` AND `FA` NAME NO COMMAND, so a late one from a request that already timed out
+/// answers whatever is pending when it lands. Over a slow link (wfview Remote behind its virtual
+/// port) that was a dial write's late `FA` taken as the unkey's refusal, and a slot over halted
+/// with the radio unkeyed. Hamlib's Icom backend mostly avoids it by sending a timed-out command
+/// again, up to three times (`icom_transaction`, Hamlib 4.6.5 `rigs/icom/frame.c`), so a late
+/// answer lands on a copy of its own command. So, on a SHARED bus only (a virtual port, whose
+/// radio may be across a network; a serial cable and the radio's own network connection keep
+/// their timing exactly), an `FB` or `FA` that may be the late answer of a DIFFERENT earlier
+/// frame does not answer the pending request: the next `FB`/`FA` is the pending request's own.
+/// If none comes by the deadline, the request counts as UNANSWERED, because the one that came
+/// proves nothing about it: for an unkey that means the retry goes out
+/// ([`super::broker`]) and its own answer decides. Such a request is not remembered in turn, so
+/// one lost reply costs one more request at most, never every request after it. A late answer
+/// to the SAME frame (an earlier try of this very command) answers it at once, as in Hamlib: it
+/// is this command's answer either way. A refusal still refuses.
+///
+/// ⚠️ It rests on the radio answering in the order it was asked, as a CI-V radio does: one
+/// command at a time, so an earlier request's answer comes before a later one's.
+struct Unanswered {
+    frame: Frame,
+    expect: Expect,
+    until: Instant,
+}
+
+/// The frame of the oldest remembered request `f` may be the late answer of, taken off the list.
+fn late_answer_of(
+    unanswered: &mut std::collections::VecDeque<Unanswered>,
+    f: &Frame,
+) -> Option<Frame> {
+    let now = Instant::now();
+    unanswered.retain(|u| u.until > now);
+    let i = unanswered
+        .iter()
+        .position(|u| resolves(u.expect, f).is_some())?;
+    unanswered.remove(i).map(|u| u.frame)
+}
+
 /// True when `f` resolves a request expecting `expect`. `FA` rejects both kinds.
 fn resolves(expect: Expect, f: &Frame) -> Option<Result<Frame, CivError>> {
     if f.is_nak() {
@@ -383,7 +429,11 @@ fn engine_loop(
 ) {
     let mut splitter = FrameSplitter::new();
     let mut assembler = ScopeAssembler::new(model);
-    let mut pending: Option<(CivRequest, Instant)> = None;
+    // The request on the bus, its deadline, and whether an answer that may be another frame's
+    // came while it waited ([`Unanswered`]).
+    let mut pending: Option<(CivRequest, Instant, bool)> = None;
+    // Requests that timed out on a shared bus whose answers may still come ([`Unanswered`]).
+    let mut unanswered: std::collections::VecDeque<Unanswered> = std::collections::VecDeque::new();
     // The engine's own housekeeping commands, queued ahead of caller traffic. They flow
     // through the SAME pending slot as user requests — every write must, or their acks
     // would resolve a later caller's command on the half-duplex bus.
@@ -437,7 +487,7 @@ fn engine_loop(
                     // native CAT including the ability to unkey a keyed radio.
                     match write_frame(&mut io, &req.frame) {
                         WriteOutcome::Ok => {
-                            pending = Some((req, Instant::now() + deadline));
+                            pending = Some((req, Instant::now() + deadline, false));
                         }
                         WriteOutcome::Transient => {
                             req.resolve(Err(CivError::Timeout));
@@ -505,18 +555,50 @@ fn engine_loop(
             if let Ok(mut s) = state.lock() {
                 s.apply(&f, model);
             }
-            // Resolve the in-flight request if this frame answers it.
-            if let Some((req, _)) = &pending {
+            // Resolve the in-flight request if this frame answers it, unless it is an `FB`/`FA`
+            // that may be another frame's late answer, which proves nothing ([`Unanswered`]).
+            //
+            // ⛔ An `FB`/`FA` is an answer of the radio's only when it comes FROM the radio and is
+            // addressed TO this controller. Another controller on the bus (a second program on an
+            // IC-7300's remote jack with "CI-V USB Port: Link to [REMOTE]") gets its own acks on
+            // the same wire; taken as ours they answered whatever was pending. Hamlib drops a
+            // frame from an address it does not know (Hamlib 4.6.5 `rigs/icom/frame.c`).
+            let ack = f.is_ack() || f.is_nak();
+            if ack && (f.from != radio_addr || f.to != super::frame::CONTROLLER) {
+                continue;
+            }
+            let late = late_answer_of(&mut unanswered, &f);
+            if let Some((req, _, doubtful)) = &mut pending {
                 if let Some(result) = resolves(req.expect, &f) {
-                    let (req, _) = pending.take().unwrap();
-                    req.resolve(result);
+                    let another_frames = late.is_some_and(|earlier| earlier != req.frame);
+                    if another_frames && ack {
+                        *doubtful = true;
+                    } else {
+                        let (req, ..) = pending.take().unwrap();
+                        req.resolve(result);
+                    }
                 }
             }
         }
         // Fail a request the radio never answered.
-        if let Some((_, deadline)) = &pending {
+        if let Some((_, deadline, _)) = &pending {
             if Instant::now() > *deadline {
-                let (req, _) = pending.take().unwrap();
+                // An answer that may have been another frame's was no answer ([`Unanswered`]).
+                let (req, _, doubtful) = pending.take().unwrap();
+                // On a shared bus its answer may still come, for as long as a radio that is
+                // there answers; elsewhere nothing is remembered, as it always was. Not when a
+                // doubtful one came: that one may have been its own, and waiting for another
+                // would make each next request's answer this one's in turn, for good.
+                if shared && !doubtful {
+                    if unanswered.len() >= UNANSWERED_MAX {
+                        unanswered.pop_front();
+                    }
+                    unanswered.push_back(Unanswered {
+                        frame: req.frame.clone(),
+                        expect: req.expect,
+                        until: Instant::now() + gone_after,
+                    });
+                }
                 req.resolve(Err(CivError::Timeout));
                 if last_heard.elapsed() >= gone_after {
                     radio_gone = true;
@@ -525,7 +607,7 @@ fn engine_loop(
         }
     }
     // Fail everything still queued so callers unblock immediately.
-    if let Some((req, _)) = pending.take() {
+    if let Some((req, ..)) = pending.take() {
         req.resolve(Err(CivError::Gone));
     }
     // ⛔ TX SAFETY: STOPPED WITH A KEY-UP STILL QUEUED, WRITE IT ONCE ON THE WAY OUT. A daemon's
@@ -1555,6 +1637,76 @@ pub(crate) mod tests_support {
             self.inner.read(buf)
         }
     }
+
+    /// How a [`LateBus`] answers one frame: after `after`, with `FB` (`Some(true)`), `FA`
+    /// (`Some(false)`) or nothing at all (`None`).
+    #[derive(Debug, Clone, Copy)]
+    pub struct Answer {
+        pub after: Duration,
+        pub ack: Option<bool>,
+    }
+
+    /// A radio across a slow link (wfview Remote behind its virtual port): every frame written is
+    /// answered by `answer(frame)`, each answer on its OWN clock from its own write, so an answer
+    /// can arrive after the next frame has gone out, as a real round trip lets it. It knows only
+    /// `FB` and `FA`, which is all a set or a key ever expects. `written` records each frame.
+    pub struct LateBus {
+        addr: u8,
+        answer: Box<dyn FnMut(&Frame) -> Answer + Send>,
+        due: Vec<(std::time::Instant, Vec<u8>)>,
+        pub written: Arc<Mutex<Vec<(std::time::Instant, Frame)>>>,
+    }
+
+    impl LateBus {
+        pub fn new(addr: u8, answer: impl FnMut(&Frame) -> Answer + Send + 'static) -> Self {
+            LateBus {
+                addr,
+                answer: Box::new(answer),
+                due: Vec::new(),
+                written: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+    }
+
+    impl Write for LateBus {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let now = std::time::Instant::now();
+            for bytes in buf.split_inclusive(|&b| b == 0xFD) {
+                let Some(f) = Frame::parse(bytes) else {
+                    continue;
+                };
+                self.written.lock().unwrap().push((now, f.clone()));
+                let a = (self.answer)(&f);
+                if let Some(ok) = a.ack {
+                    let reply = Frame {
+                        to: CONTROLLER,
+                        from: self.addr,
+                        cmd: if ok { 0xFB } else { 0xFA },
+                        data: Vec::new(),
+                    };
+                    self.due.push((now + a.after, reply.to_bytes()));
+                }
+            }
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Read for LateBus {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let now = std::time::Instant::now();
+            self.due.sort_by_key(|(at, _)| *at);
+            if self.due.first().is_none_or(|(at, _)| *at > now) {
+                std::thread::sleep(Duration::from_millis(2));
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "no data"));
+            }
+            let (_, bytes) = self.due.remove(0);
+            buf[..bytes.len()].copy_from_slice(&bytes);
+            Ok(bytes.len())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1625,6 +1777,217 @@ mod tests {
             super::super::commands::parse_freq(&f, None),
             Some(145_000_000)
         );
+    }
+
+    /// An engine on a [`tests_support::LateBus`] with `deadline`, on a `shared` bus or not: the
+    /// dial write's answer is `dial`, the unkey's `unkey`, anything else (the scope-off a bus that
+    /// is not shared sends at start) an `FB` at once.
+    fn late_bus(
+        deadline: Duration,
+        shared: bool,
+        dial: tests_support::Answer,
+        unkey: tests_support::Answer,
+    ) -> CivEngine {
+        let bus = tests_support::LateBus::new(0x94, move |f| match f.cmd {
+            0x05 => dial,
+            0x1C => unkey,
+            _ => answer(0, Some(true)),
+        });
+        let eng = CivEngine::start_on_bus(Box::new(bus), 0x94, None, deadline, shared);
+        // Past the start's own housekeeping.
+        std::thread::sleep(Duration::from_millis(100));
+        eng
+    }
+
+    fn answer(ms: u64, ack: Option<bool>) -> tests_support::Answer {
+        tests_support::Answer {
+            after: Duration::from_millis(ms),
+            ack,
+        }
+    }
+
+    /// A dial write the radio did not answer in time, then the unkey: what the two answer, and how
+    /// long the unkey took.
+    fn dial_then_unkey(
+        eng: &CivEngine,
+    ) -> (Result<Frame, CivError>, Result<Frame, CivError>, Duration) {
+        let h = eng.handle();
+        let dial = h.transact(set_freq(0x94, 14_074_000, None), Expect::Ack);
+        let t0 = Instant::now();
+        let unkey = h.transact(set_ptt(0x94, false), Expect::Ack);
+        (dial, unkey, t0.elapsed())
+    }
+
+    const SECOND: Duration = Duration::from_millis(1_000);
+
+    /// ⛔ A LATE `FA` FROM AN EARLIER FRAME DOES NOT REFUSE THE UNKEY. CI-V's `FB`/`FA` name no
+    /// command, so on wfview's port the radio's late `FA` to a dial write that already timed out,
+    /// arriving while the unkey waits, used to be taken as the unkey's own refusal: `RPRT -1`, and
+    /// a slot over's TX halted with the radio unkeyed. Now the next `FB`/`FA` is the unkey's.
+    #[test]
+    fn a_late_fa_from_a_timed_out_frame_does_not_refuse_the_next_request() {
+        let eng = late_bus(
+            SECOND,
+            true,
+            answer(1_200, Some(false)),
+            answer(500, Some(true)),
+        );
+        let (dial, unkey, _) = dial_then_unkey(&eng);
+        assert_eq!(
+            dial,
+            Err(CivError::Timeout),
+            "the dial write ran out of time"
+        );
+        assert!(
+            unkey.is_ok(),
+            "the unkey's own FB answers it, not the dial's late FA: {unkey:?}"
+        );
+    }
+
+    /// A real refusal still refuses: behind the dial's late `FA`, the unkey's own `FA`.
+    #[test]
+    fn behind_a_late_fa_the_requests_own_fa_still_refuses_it() {
+        let eng = late_bus(
+            SECOND,
+            true,
+            answer(1_200, Some(false)),
+            answer(500, Some(false)),
+        );
+        let (_, unkey, _) = dial_then_unkey(&eng);
+        assert_eq!(unkey, Err(CivError::Nak));
+    }
+
+    /// ⛔ AN `FB` THAT MAY BE ANOTHER FRAME'S NEVER CONFIRMS THE UNKEY. The dial write's `FB` lands
+    /// late, and the radio never answers the unkey (it may never have had it). That `FB` proves
+    /// nothing about the unkey, so the unkey is unanswered at its deadline, and the daemon's retry
+    /// goes out ([`super::super::broker`]). Taken as the unkey's, it told Nexus the radio had let
+    /// go, and the idle self-heal stopped unkeying.
+    #[test]
+    fn a_late_fb_from_another_frame_never_confirms_an_unanswered_unkey() {
+        let eng = late_bus(SECOND, true, answer(1_200, Some(true)), answer(0, None));
+        let (dial, unkey, _) = dial_then_unkey(&eng);
+        assert_eq!(dial, Err(CivError::Timeout));
+        assert_eq!(unkey, Err(CivError::Timeout), "no answer of its own");
+    }
+
+    /// ⛔ ONE LOST REPLY COSTS ONE MORE REQUEST AT MOST. The dial write's answer is lost; the next
+    /// `FB` may be its, so the first unkey after it goes unanswered, and then the doubt is over:
+    /// the keys and unkeys after it are answered at once. Waiting for that first unkey's own answer as well
+    /// would make every next request's answer the previous one's, for good.
+    #[test]
+    fn one_lost_reply_never_leaves_every_next_request_one_answer_behind() {
+        let eng = late_bus(
+            REQUEST_DEADLINE,
+            true,
+            answer(0, None),
+            answer(20, Some(true)),
+        );
+        let h = eng.handle();
+        assert_eq!(
+            h.transact(set_freq(0x94, 14_074_000, None), Expect::Ack),
+            Err(CivError::Timeout)
+        );
+        assert_eq!(
+            h.transact(set_ptt(0x94, false), Expect::Ack),
+            Err(CivError::Timeout),
+            "its FB may be the dial's"
+        );
+        // Each a different frame from the one before it, so none can be taken for a copy.
+        for (n, on) in [true, false, true].into_iter().enumerate() {
+            let t0 = Instant::now();
+            assert!(
+                h.transact(set_ptt(0x94, on), Expect::Ack).is_ok(),
+                "PTT {n}"
+            );
+            assert!(
+                t0.elapsed() < Duration::from_millis(150),
+                "PTT {n}: {:?}",
+                t0.elapsed()
+            );
+        }
+    }
+
+    /// A late answer to the SAME frame, an earlier try of this very command, answers it at once, as
+    /// in Hamlib: whichever try it belongs to, it is this command's answer. A radio across a network
+    /// slower than one deadline is then answered by its first `FB` while the retry is out.
+    #[test]
+    fn a_late_answer_to_an_earlier_try_of_the_same_frame_answers_it_at_once() {
+        let eng = late_bus(SECOND, true, answer(0, None), answer(1_200, Some(true)));
+        let h = eng.handle();
+        let first = h.transact(set_ptt(0x94, false), Expect::Ack);
+        assert_eq!(first, Err(CivError::Timeout));
+        let t0 = Instant::now();
+        let again = h.transact(set_ptt(0x94, false), Expect::Ack);
+        assert!(again.is_ok(), "{again:?}");
+        assert!(
+            t0.elapsed() < Duration::from_millis(600),
+            "the first try's FB: {:?}",
+            t0.elapsed()
+        );
+    }
+
+    /// What is remembered lasts only as long as a late answer can still come: once the radio has had
+    /// the engine's gone-after time ([`RADIO_GONE_AFTER`] here) to answer, an `FB` answers at once.
+    #[test]
+    fn once_a_late_answer_can_no_longer_come_an_ack_answers_at_once() {
+        let eng = late_bus(
+            REQUEST_DEADLINE,
+            true,
+            answer(0, None),
+            answer(20, Some(true)),
+        );
+        let h = eng.handle();
+        let dial = h.transact(set_freq(0x94, 14_074_000, None), Expect::Ack);
+        assert_eq!(dial, Err(CivError::Timeout));
+        std::thread::sleep(RADIO_GONE_AFTER + Duration::from_millis(200));
+        let t0 = Instant::now();
+        assert!(h.transact(set_ptt(0x94, false), Expect::Ack).is_ok());
+        assert!(
+            t0.elapsed() < Duration::from_millis(200),
+            "answered at once: {:?}",
+            t0.elapsed()
+        );
+    }
+
+    /// ⛔ AN `FB` FROM ANOTHER ADDRESS IS NOT THE RADIO'S ANSWER. A second controller on the bus
+    /// (another program on an IC-7300's remote jack) gets acks of its own on the same wire; an
+    /// `FB` from any address but the radio's, or to any controller but this one, answers nothing
+    /// here, on every link, as Hamlib drops a frame from an address it does not know. The control:
+    /// the radio's own `FB` answers.
+    #[test]
+    fn an_ack_not_from_the_radio_to_this_controller_answers_nothing() {
+        for (bus_addr, shared) in [(0x98, false), (0x98, true), (0x94, false)] {
+            let bus = tests_support::LateBus::new(bus_addr, |_| answer(20, Some(true)));
+            let eng = CivEngine::start_on_bus(Box::new(bus), 0x94, None, REQUEST_DEADLINE, shared);
+            std::thread::sleep(Duration::from_millis(400)); // past the start's housekeeping
+            let unkey = eng.handle().transact(set_ptt(0x94, false), Expect::Ack);
+            if bus_addr == 0x94 {
+                assert!(unkey.is_ok(), "the radio's own FB: {unkey:?}");
+            } else {
+                assert_eq!(
+                    unkey,
+                    Err(CivError::Timeout),
+                    "from {bus_addr:#04x}, shared={shared}"
+                );
+            }
+        }
+    }
+
+    /// The controls: a serial cable (300 ms) and the radio's own network connection (1 s, not a
+    /// shared bus) keep their timing exactly. After a dial write the radio did not answer, an unkey
+    /// acked in 20 ms is answered in 20 ms, as it always was.
+    #[test]
+    fn a_serial_cable_and_the_network_connection_answer_at_once_after_a_timeout() {
+        for (link, deadline) in [("serial", REQUEST_DEADLINE), ("network", SECOND)] {
+            let eng = late_bus(deadline, false, answer(0, None), answer(20, Some(true)));
+            let (dial, unkey, took) = dial_then_unkey(&eng);
+            assert_eq!(dial, Err(CivError::Timeout), "{link}");
+            assert!(unkey.is_ok(), "{link}: {unkey:?}");
+            assert!(
+                took < Duration::from_millis(150),
+                "{link}: answered at once: {took:?}"
+            );
+        }
     }
 
     #[test]
