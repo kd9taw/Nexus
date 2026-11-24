@@ -41,6 +41,7 @@ import { azimuthLabel, azimuthTitle, azimuthTo, type LatLon } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
 import { callCardTrigger, qrzPageOf } from './CallCard'
 import { CallRowMenu, isMenuKey, useMenuFocusReturn } from './CallRowMenu'
+import { firstClickRow, useFirstClick } from '../useFirstClick'
 import { useWatchMatch, watchColorStyle, type WatchColor } from '../watchlist'
 
 /**
@@ -705,9 +706,17 @@ export function OperateDecodes({
 
   const selectedUp = selectedCall?.trim().toUpperCase() || null
 
+  // A double-click acts on the row its FIRST click landed on (useFirstClick), by entry id since one
+  // call can have many rows: a period's decodes landing between the two clicks moves the rows (the
+  // feed follows its newest line), and the second click would otherwise act on what slid under it.
+  // Only which row acts is decided here; the scrolling is usePinnedScroll's, untouched.
+  const firstClick = useFirstClick((id) => drawn.find((x) => x.id === id))
+
   // WSJT-X double-click dispatch: Alt = toggle session ignore; Ctrl = populate
   // DX fields + move RX onto the signal (no QSO start, no TX arm); plain = work.
-  const handleDouble = (e: React.MouseEvent, d: DecodeEntry) => {
+  const handleDouble = (e: React.MouseEvent, under: DecodeEntry) => {
+    const d = firstClick.double(under.id)
+    if (!d) return
     // A row heard before a band or mode change is display only: answering it here would start a
     // QSO on the band or mode it was not heard on.
     if (!d.from || d.heard) return
@@ -744,11 +753,12 @@ export function OperateDecodes({
 
   // The row handlers read the LATEST render's values through `live`, so `rowActions` can be one
   // object for the pane's lifetime and leave the memoised rows' props alone.
-  const live = useRef({ roving, handleDouble, onSelectDecode, closeMenu, menuFocus })
-  live.current = { roving, handleDouble, onSelectDecode, closeMenu, menuFocus }
+  const live = useRef({ roving, handleDouble, onSelectDecode, closeMenu, menuFocus, firstClick })
+  live.current = { roving, handleDouble, onSelectDecode, closeMenu, menuFocus, firstClick }
   const rowActions = useMemo<RowActions>(
     () => ({
-      click: (index, d) => {
+      click: (index, d, detail) => {
+        if (!live.current.firstClick.click(d.id, detail)) return
         live.current.roving.setActive(index)
         if (d.from && !d.heard)
           live.current.onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
@@ -969,6 +979,7 @@ export function OperateDecodes({
         ref={scrollRef}
         onScroll={shown.length > 0 ? onScroll : undefined}
         onKeyDown={roving.containerProps.onKeyDown}
+        {...firstClick.containerProps}
       >
         {shown.length === 0 &&
           // TWO different empty states, and conflating them cost a field report its
@@ -1100,7 +1111,8 @@ export function OperateDecodes({
 /** The parent's row handlers, through one stable object (see `rowActions`), so a memoised row
  *  never re-renders just because a handler closure was rebuilt. */
 interface RowActions {
-  click: (index: number, d: DecodeEntry) => void
+  /** `detail` is the click's count: a later click of a double-click begun on another row is ignored. */
+  click: (index: number, d: DecodeEntry, detail: number) => void
   double: (e: React.MouseEvent, d: DecodeEntry) => void
   menu: (e: React.MouseEvent | React.KeyboardEvent, d: DecodeEntry) => void
   closeMenu: () => void
@@ -1184,6 +1196,7 @@ const DecodeRowView = memo(function DecodeRowView({
         className={`decode-row ${rowClass(d, needs.rowNeed)}${selected ? ' selected' : ''}${ignored ? ' ignored' : ''}${d.refilled ? ' refilled' : ''}`}
         role="option"
         data-pin-key={d.id}
+        {...firstClickRow(d.id)}
         aria-selected={selected}
         aria-label={
           d.from
@@ -1210,7 +1223,7 @@ const DecodeRowView = memo(function DecodeRowView({
         onFocus={() => actions.focus(index)}
         style={rowStyle}
         aria-haspopup={d.from ? 'menu' : undefined}
-        onClick={() => actions.click(index, d)}
+        onClick={(e) => actions.click(index, d, e.detail)}
         onDoubleClick={(e) => actions.double(e, d)}
         onContextMenu={(e) => actions.menu(e, d)}
         onKeyDown={(e) => actions.menu(e, d)}

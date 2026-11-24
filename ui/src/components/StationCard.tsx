@@ -19,6 +19,7 @@ import type { WatchFilter } from '../watchlist'
 import { PATH_OUTLOOK, useKeyedFeed } from '../features/connectFeeds'
 import { PathRoute } from './prop/PathRoute'
 import { pathWhyDetail, pathWhyFacts, pathWhyLine } from '../features/pathWhy'
+import { firstClickRow, type FirstClick } from '../useFirstClick'
 
 interface Props {
   station: Station
@@ -57,6 +58,16 @@ interface Props {
     freqHz?: number,
     tier?: Tier | null,
   ) => void
+  /** The list's double-click rule (useFirstClick): a later click of a double-click begun on another
+   *  card does not re-select, and the double-click works the card its first click landed on. Absent,
+   *  the card selects and works itself, as a lone card has nothing to slide under the pointer. */
+  gesture?: FirstClick<Station>
+}
+
+/** "Work this station": ONE definition for the Work button and the double-click, so their argument
+ *  lists cannot drift apart (#183 was exactly that). */
+function workStation(onCall: Props['onCall'], station: Station) {
+  onCall(station.call, station.grid ?? undefined, undefined, undefined, station.freqHz ?? undefined, station.tier)
 }
 
 
@@ -84,6 +95,7 @@ export function StationCard({
   watch = null,
   onSelect,
   onCall,
+  gesture,
 }: Props) {
   const units = useUnits()
   const centroids = useEntityCentroids()
@@ -105,22 +117,17 @@ export function StationCard({
   // and the double-click. They were two separate argument lists before, which is how they
   // could have drifted apart; a caller that gets one right and the other wrong is exactly the
   // bug #183 was, one level down.
-  const workThisStation = () => {
-    onCall(
-      station.call,
-      station.grid ?? undefined,
-      undefined,
-      undefined,
-      station.freqHz ?? undefined,
-      station.tier,
-    )
-  }
+  const workThisStation = () => workStation(onCall, station)
   return (
     <div
       className={`station-card${selected ? ' selected' : ''}${station.worked ? ' worked' : ''}${
         chip ? ` needed need-${chip.cls}` : ''
       }`}
-      onDoubleClick={() => workThisStation()}
+      {...firstClickRow(station.call)}
+      onDoubleClick={() => {
+        const st = gesture ? gesture.double(station.call) : station
+        if (st) workStation(onCall, st)
+      }}
       title={t('roster.card.doubleClick', { call: station.call })}
       {...callMenu.on('card', station.call, { country: station.country ?? null })}
     >
@@ -128,7 +135,10 @@ export function StationCard({
       <button
         type="button"
         className="station-open"
-        onClick={() => onSelect(station.call)}
+        {...firstClickRow(station.call)}
+        onClick={(e) => {
+          if (!gesture || gesture.click(station.call, e.detail)) onSelect(station.call)
+        }}
         title={t('roster.card.open', { call: station.call })}
       >
         <span className={`presence-dot ${station.presence}`} aria-hidden />
@@ -185,7 +195,13 @@ export function StationCard({
       <button
         type="button"
         className="station-work"
-        onClick={() => workThisStation()}
+        // Work works on ONE click; a double-click on it is the same intent, once. Its later clicks (which,
+        // with the cards re-sorting between them, can land on another card's Work) work nothing, and it is
+        // not the card for the card's double-click (useFirstClick: a control inside a row is not the row),
+        // since its own first click already worked the station.
+        onClick={(e) => {
+          if (e.detail <= 1) workThisStation()
+        }}
         title={t('roster.card.work.title', { call: station.call })}
       >
         {t('roster.card.work.label')}

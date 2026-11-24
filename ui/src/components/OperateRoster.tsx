@@ -13,6 +13,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEve
 import { t } from '../i18n'
 import { callCardTrigger, qrzPageOf } from './CallCard'
 import { useRovingList } from '../useRovingList'
+import { firstClickRow, useFirstClick } from '../useFirstClick'
 import type { NeedAlert, NeedTag, Station } from '../types'
 import {
   gridToLatLon,
@@ -464,7 +465,7 @@ export function OperateRoster({
   // a newly needed station still rises to the top). A newly heard station joins at the bottom while
   // held, and one that drops off the list (aged out, filtered) leaves it. A column the operator
   // sorts by takes effect at once and becomes the order held. Touch: a tap's pointerdown holds it
-  // the same way. Display only: the double-click still works the station of the row it lands on.
+  // the same way. Display only: a double-click works the row its first click landed on (useFirstClick, below).
   const [holding, setHolding] = useState(false)
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const hold = () => {
@@ -492,6 +493,10 @@ export function OperateRoster({
     held.current = holding ? { sort, calls: out.map((r) => r.s.call) } : null
     return out
   }, [sorted, holding, sort])
+
+  // A double-click works the row its FIRST click landed on (useFirstClick): the hold above keeps the
+  // ORDER still, but the grid itself can still move between the two clicks.
+  const firstClick = useFirstClick((call) => rows.find((r) => r.s.call === call)?.s)
 
   // #357 — the Park column takes room only while it has something to say: a station on the roster
   // is at a park, or the operator has sorted by it (so the sort they picked stays on screen). With
@@ -650,6 +655,7 @@ export function OperateRoster({
         aria-rowcount={rows.length + 1}
         onKeyDown={roving.containerProps.onKeyDown}
         onPointerDown={hold}
+        {...firstClick.containerProps}
       >
         <div className="or-row or-header" role="row">
           {th('call', t('operate.roster.col.call'))}
@@ -683,6 +689,7 @@ export function OperateRoster({
             return (
               <div
                 key={s.call}
+                {...firstClickRow(s.call)}
                 role="row"
                 aria-selected={s.call === selectedCall}
                 // Five optional clauses, each interpolated WHOLE with its own separator —
@@ -712,15 +719,18 @@ export function OperateRoster({
                 style={{
                   opacity: s.call === selectedCall || s.call === workingCall ? 1 : freshness(age),
                 }}
-                onClick={() => {
+                onClick={(e) => {
+                  if (!firstClick.click(s.call, e.detail)) return
                   roving.setActive(i)
                   onSelect(s.call)
                 }}
                 onDoubleClick={(e) => {
+                  const st = firstClick.double(s.call)
+                  if (!st) return
                   if (e.altKey) {
-                    if (onToggleIgnore) { onToggleIgnore(s.call); return }
+                    if (onToggleIgnore) { onToggleIgnore(st.call); return }
                   }
-                  onCall(s.call, s.grid ?? undefined, undefined, undefined, s.freqHz ?? undefined)
+                  onCall(st.call, st.grid ?? undefined, undefined, undefined, st.freqHz ?? undefined)
                 }}
                 title={
                   ignoredRow

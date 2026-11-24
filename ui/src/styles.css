@@ -23863,6 +23863,9 @@ button.cq-skiptx1.on {
   border-radius: 999px;
   padding: 1px var(--space-2);
   font-weight: 800;
+  /* Three digits' room whatever the count, so 9 → 10 stations never re-wraps the bar (below). */
+  min-width: 3ch;
+  text-align: center;
 }
 .or-filter {
   display: inline-flex;
@@ -23875,12 +23878,22 @@ button.cq-skiptx1.on {
 /* Spot is a button among the checkbox labels, taking `.or-filter`'s ink, and nothing gave it a
    face: the browser's grey showed through, 2.21:1 under that ink in the dark theme even on a dark
    computer. The theme draws it now, in the box the browser's took; a disabled Spot (nothing
-   selected) dims as it did not before. */
+   selected) dims as it did not before.
+   ONE WIDTH WHATEVER IT SAYS. Its label names the selected station ("Spot" ↔ "Spot KM7CAB"), and the bar
+   wraps: a label that grew on a row's click pushed the bar onto another line, the grid below moved down a
+   row, and the second click of the double-click landed on the row that moved under the pointer and worked
+   that station (operator report, 1.25.0). So the box is the same width selected or not; a call too long for
+   it ends in an ellipsis, and the button's tooltip names it whole. */
 .or-spot {
   padding: 2px 7px;
   background: transparent;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+  flex: none;
+  width: 10em;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .or-spot:hover:not(:disabled) {
   border-color: var(--accent);

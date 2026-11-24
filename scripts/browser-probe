@@ -48,7 +48,7 @@ set -u
 usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
-       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|besttimes|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|txmeterspane|radioswitch|radiosetup|contestsetup|toastcorner|logwaiting|topbar|topbarnow|header|rttyfit|digishell|alarmcell|firstrun|journeys|clublog|aprsmap|logbook|profiles|sstvlayout|menustop|stopabove|stopvisible|opchip|ftline|laptopfit|recallcard|overflow|seamdrag
+       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|besttimes|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|txmeterspane|radioswitch|radiosetup|contestsetup|toastcorner|logwaiting|topbar|topbarnow|header|rttyfit|digishell|alarmcell|firstrun|journeys|clublog|aprsmap|logbook|profiles|sstvlayout|menustop|stopabove|stopvisible|opchip|ftline|laptopfit|recallcard|overflow|seamdrag|rosterdbl
        scripts/browser-probe --desktop-shard <n> <of>
 
   Window sizes: every --desktop probe takes its screens from ui/probe/sizes.mjs (the 2026-11-11
@@ -279,6 +279,12 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         height under a held press released without a move leaves Stop TX where no press
                         does. A frozen divider and a moved Stop TX planted must be caught (controls)
                         (ui/probe/seamdrag-probe.mjs; it builds nothing)
+  --desktop rosterdbl   FT's Call Roster in the real app (Roster layout), 1366×768 and 1920×1080 at the
+                        app's fit and at 175 %: selecting a station leaves the grid where it was, at the
+                        roster's own width and held at every width 240-900 px; and a real double-click
+                        whose second click lands a row lower (the grid moved between them) works the row
+                        the first click landed on. Spot let back to its label's width must be caught
+                        (control) (ui/probe/rosterdbl-probe.mjs; it builds nothing)
   --desktop overflow    the cockpit header's ⋯ group (memories, the rotator, split, REC) on Phone and
                         CW in the real app, rail off and on, at 1920×1080, 1536×864, 1440×900, 1920×1200
                         and 2560×1440 at 125 %: opened, it lies inside the cockpit and the window and is
@@ -383,11 +389,11 @@ USAGE
 # new probe, or when the shards drift apart again, re-cut the columns from the CI log's
 # "browser-probe: <name> passed in <n> s" lines rather than slotting it in by guess: one probe
 # added mid-list moves every probe after it to another shard.
-# overflow and seamdrag came after that cut and are appended last, so no other probe changed shard.
+# overflow, seamdrag and rosterdbl came after that cut and are appended last, so no other probe changed shard.
 DESKTOP_ALL=(stopvisible toastcorner digishell topbar sstvlayout txmeterspane header alarmcell menustop journeys
   opchip waterfalls topbarnow laptopfit stopabove logbook ftline recallcard txmeters firstrun
   atu radiosetup rttyfit profiles clublog besttimes logwaiting radioswitch spots contestlog
-  activation aprsmap contestsetup jtty contactcard callcard rotor voicenote overflow seamdrag)
+  activation aprsmap contestsetup jtty contactcard callcard rotor voicenote overflow seamdrag rosterdbl)
 
 SCENARIO='stream'
 SHARD=''
@@ -503,6 +509,7 @@ if [ -n "$DESKTOP" ]; then
   [ "$DESKTOP" = alarmcell ] && exec node "$ROOT/ui/probe/alarmcell-probe.mjs"
   [ "$DESKTOP" = ftline ] && exec node "$ROOT/ui/probe/ftline-probe.mjs"
   [ "$DESKTOP" = seamdrag ] && exec node "$ROOT/ui/probe/seamdrag-probe.mjs"
+  [ "$DESKTOP" = rosterdbl ] && exec node "$ROOT/ui/probe/rosterdbl-probe.mjs"
   [ "$DESKTOP" = clublog ] && exec node "$ROOT/ui/probe/clublog-probe.mjs"
   [ "$DESKTOP" = aprsmap ] && exec node "$ROOT/ui/probe/aprsmap-probe.mjs"
   [ "$DESKTOP" = logbook ] && exec node "$ROOT/ui/probe/logbook-probe.mjs"
