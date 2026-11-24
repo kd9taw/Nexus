@@ -3169,6 +3169,8 @@ fn radio_config_for(
         // Each window its own WSJT-X client: "Nexus", or "Nexus - <radio name>" for a radio
         // window, kept for the whole run (`wsjtx_sender_id`).
         wsjtx_id: wsjtx_sender_id(),
+        // A second window of a radio another window drives sends none (`wsjtx_udp_refusal`).
+        wsjtx_udp_refused: wsjtx_udp_refusal(*PROFILE_LOCK.get().unwrap_or(&ProfileLock::Held)),
         on_wsjtx_udp: Some(std::sync::Arc::new(note_wsjtx_udp)),
         pskreporter: settings.pskreporter,
         // The package's version, known once the app is built: `finish_launch` sets it.
@@ -3196,8 +3198,17 @@ fn radio_config_for(
 /// radio (one refused at launch because another window has it, then switched).
 fn wsjtx_sender_id() -> String {
     static ID: OnceLock<String> = OnceLock::new();
-    ID.get_or_init(|| claim_wsjtx_id(&config_dir_for(None), active_profile(), bound_radio_id()))
-        .clone()
+    ID.get_or_init(|| {
+        // A second window of one radio sends nothing (`wsjtx_udp_refusal`), and must not record
+        // an id over the one its radio's open window recorded.
+        match (PROFILE_LOCK.get(), bound_radio_id()) {
+            (Some(ProfileLock::HeldElsewhere), Some(id)) => {
+                tempo_net::sender_id(Some(&radio_profile_key(id)))
+            }
+            _ => claim_wsjtx_id(&config_dir_for(None), active_profile(), bound_radio_id()),
+        }
+    })
+    .clone()
 }
 
 /// This window's WSJT-X id, claimed: [`wsjtx_id_for`] from base's roster, unless a radio window
@@ -3206,7 +3217,7 @@ fn wsjtx_sender_id() -> String {
 /// name meanwhile must not open under the same id.
 ///
 /// Each radio window records the id it claimed in `wsjtx-ids/r<id>` beside base's settings. A
-/// record counts while its window is open, which its held profile lock says ([`profile_in_use`]),
+/// record counts while its window is open, which its held profile lock says ([`profile_open`]),
 /// so no record outlives a window that crashed, and none needs removing on quit; a record whose
 /// window is gone is removed here. The read of base, the check and the record happen under base's
 /// cross-process rewrite lock (`SettingsWriter::rewrite`, the one every rename's mirror takes), so
@@ -3223,7 +3234,7 @@ fn claim_wsjtx_id(base_dir: &Path, profile: Option<&str>, bound: Option<u32>) ->
         let names: Vec<(u32, String)> =
             base.radios.iter().map(|r| (r.id, r.name.clone())).collect();
         let wanted = wsjtx_id_for(profile, bound, &names);
-        let open_elsewhere = wsjtx_ids_of_open_windows(&records, id);
+        let open_elsewhere = wsjtx_ids_of_open_windows(&records, id, profile_open);
         let mine = if open_elsewhere
             .iter()
             .any(|other| other.eq_ignore_ascii_case(&wanted))
@@ -3244,9 +3255,14 @@ fn claim_wsjtx_id(base_dir: &Path, profile: Option<&str>, bound: Option<u32>) ->
     }
 }
 
-/// The ids recorded in `records` by radio windows other than radio `own`'s that are open now. A
-/// record whose window is not open is removed.
-fn wsjtx_ids_of_open_windows(records: &Path, own: u32) -> Vec<String> {
+/// The ids recorded in `records` by radio windows other than radio `own`'s that are open now, or
+/// that `is_open` cannot tell open or closed ([`profile_open`]): an unknown window may be sending,
+/// so its id is taken and its record kept. A record whose window is closed is removed.
+fn wsjtx_ids_of_open_windows(
+    records: &Path,
+    own: u32,
+    is_open: impl Fn(&str) -> Option<bool>,
+) -> Vec<String> {
     let own = radio_profile_key(own);
     let Ok(entries) = std::fs::read_dir(records) else {
         return Vec::new();
@@ -3260,12 +3276,16 @@ fn wsjtx_ids_of_open_windows(records: &Path, own: u32) -> Vec<String> {
         if !is_a_radio_key || name == own {
             continue;
         }
-        if profile_in_use(&name) {
-            if let Ok(id) = std::fs::read_to_string(entry.path()) {
-                open.push(id);
+        match is_open(&name) {
+            // Open, or this computer cannot tell: taken, and kept.
+            Some(true) | None => {
+                if let Ok(id) = std::fs::read_to_string(entry.path()) {
+                    open.push(id);
+                }
             }
-        } else {
-            let _ = std::fs::remove_file(entry.path());
+            Some(false) => {
+                let _ = std::fs::remove_file(entry.path());
+            }
         }
     }
     open
@@ -3336,43 +3356,86 @@ fn bound_radio_id() -> Option<u32> {
 /// already open. A missing dir / lock-unsupported filesystem reads as "free" (fail-open — the
 /// picker just won't grey it out; the real guard is the holder's exclusive lock).
 fn profile_in_use(profile: &str) -> bool {
+    profile_open(profile).unwrap_or(false) // unknown → fail-open, for the picker
+}
+
+/// Whether `profile`'s window is open: `Some(true)` when its lock is held, `Some(false)` when it is
+/// free or was never made, `None` when this computer cannot tell (the lock file cannot be opened,
+/// or its filesystem cannot lock). [`profile_in_use`] reads unknown as free; the WSJT-X id claim
+/// ([`wsjtx_ids_of_open_windows`]) reads it as open, the side that cannot share an id.
+fn profile_open(profile: &str) -> Option<bool> {
     use std::fs::File;
     let lock = config_dir_for(Some(profile)).join(".lock");
-    let Ok(f) = File::open(&lock) else {
-        return false; // no lock file yet → never launched → free
+    let f = match File::open(&lock) {
+        Ok(f) => f,
+        // No lock file yet → never launched → free.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(false),
+        Err(_) => return None,
     };
     match f.try_lock() {
         Ok(()) => {
             let _ = f.unlock(); // we only peeked — release immediately
-            false
+            Some(false)
         }
-        Err(std::fs::TryLockError::WouldBlock) => true, // someone holds it → in use
-        Err(_) => false,                                // unsupported → fail-open
+        Err(std::fs::TryLockError::WouldBlock) => Some(true), // someone holds it → in use
+        Err(_) => None,                                       // unsupported → unknown
     }
 }
 
+/// What came of this window's profile lock ([`hold_profile_lock`]), kept for the run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProfileLock {
+    /// This window holds it, or needs none (the default profile).
+    Held,
+    /// Another window holds it: the SAME profile is already open.
+    HeldElsewhere,
+    /// This computer could not lock it (the file cannot be made, or its filesystem cannot lock):
+    /// the launch goes on, fail-open.
+    Unknown,
+}
+
+/// The outcome of this window's [`hold_profile_lock`], set once at launch. Unset (tests, or before
+/// the launch takes the lock) reads as held.
+static PROFILE_LOCK: OnceLock<ProfileLock> = OnceLock::new();
+
 /// Take THIS instance's advisory lock on its active profile's config dir and hold it for the
-/// whole process lifetime (the `File` is leaked so it never drops/unlocks early). Returns false
+/// whole process lifetime (the `File` is leaked so it never drops/unlocks early). `HeldElsewhere`
 /// if the SAME profile is already open in another window — the footgun guard: two instances of
 /// one profile would clobber each other's per-instance journals. The default profile is never
 /// locked (a lone single-radio instance needs no guard and must stay zero-overhead).
-fn hold_profile_lock() -> bool {
+fn hold_profile_lock() -> ProfileLock {
     use std::fs::File;
     let Some(_p) = active_profile() else {
-        return true; // default profile: no guard needed
+        return ProfileLock::Held; // default profile: no guard needed
     };
     let dir = config_dir();
     let _ = std::fs::create_dir_all(&dir);
     let Ok(f) = File::create(dir.join(".lock")) else {
-        return true; // can't make a lock → fail-open rather than refuse to launch
+        return ProfileLock::Unknown; // can't make a lock → fail-open rather than refuse to launch
     };
     match f.try_lock() {
         Ok(()) => {
             Box::leak(Box::new(f)); // hold for process lifetime
-            true
+            ProfileLock::Held
         }
-        Err(_) => false, // same profile already running
+        Err(std::fs::TryLockError::WouldBlock) => ProfileLock::HeldElsewhere,
+        Err(_) => ProfileLock::Unknown,
     }
+}
+
+/// Why a window with this profile lock must send no WSJT-X UDP, or `None`. A second window of one
+/// radio (the same radio opened twice, or two picks raced) would send under the id the first one
+/// sends under, and GridTracker, taking both for one station, would send its Reply to whichever
+/// spoke last: a transmission from a window the operator did not click in. It sends nothing
+/// instead, and says so in the Connections log. Refusing to open at all was the alternative; it
+/// was not taken, because a relaunch whose old window is still on its way out would then close on
+/// the operator with nothing on screen, where this window stays usable and says why.
+fn wsjtx_udp_refusal(lock: ProfileLock) -> Option<String> {
+    (lock == ProfileLock::HeldElsewhere).then(|| {
+        "not sending to GridTracker or JTAlert: this radio is already open in another Nexus \
+         window, which sends for it. Close this window and use the other one."
+            .to_string()
+    })
 }
 
 /// One selectable radio in the launch picker.
@@ -3914,6 +3977,10 @@ mod roster_mirror_tests {
                 (3, "Radio 4".to_string(), false),
             ]
         );
+        // …which the launch does for a radio window, with base as it loaded it.
+        let src = include_str!("lib.rs");
+        let run = &src[src.find("\npub fn run() {").expect("run")..];
+        assert!(run.contains("adopt_base_identities(&mut settings, &base, bound);"));
     }
 
     /// ⛔ TX: a window that is still open keeps the name it opened under, so a name it gave up by
@@ -3959,6 +4026,50 @@ mod roster_mirror_tests {
             "Nexus - X",
             "r1's own, for the next window to see"
         );
+    }
+
+    /// ⛔ TX: a recorded id whose window this computer cannot tell open or closed (its filesystem
+    /// cannot lock) is taken, and kept: sharing an id is the side that cannot be undone, falling
+    /// back to `r<id>` the side that can.
+    #[test]
+    fn a_record_whose_window_cannot_be_told_open_is_taken() {
+        let records = scratch("wsjtx-ids");
+        std::fs::write(records.join("r0"), "Nexus - X").unwrap();
+        std::fs::write(records.join("r2"), "Nexus - Z").unwrap();
+        let open = |p: &str| match p {
+            "r0" => None,
+            _ => Some(false),
+        };
+        assert_eq!(wsjtx_ids_of_open_windows(&records, 1, open), ["Nexus - X"]);
+        assert!(records.join("r0").exists(), "kept");
+        assert!(
+            !records.join("r2").exists(),
+            "a closed window's record goes"
+        );
+    }
+
+    /// ⛔ TX: a second window of a radio another window drives sends no WSJT-X UDP, and says why;
+    /// a window that holds its lock, or cannot tell, sends.
+    #[test]
+    fn a_second_window_of_one_radio_sends_no_wsjtx_udp() {
+        assert!(wsjtx_udp_refusal(ProfileLock::HeldElsewhere).is_some());
+        assert_eq!(wsjtx_udp_refusal(ProfileLock::Held), None);
+        assert_eq!(wsjtx_udp_refusal(ProfileLock::Unknown), None);
+        // The launch keeps what its lock said, before the radio loop's config reads it.
+        let src = include_str!("lib.rs");
+        let run = &src[src.find("\npub fn run() {").expect("run")..];
+        let kept = run
+            .find("let _ = PROFILE_LOCK.set(profile_lock);")
+            .expect("run keeps the lock's outcome");
+        let config = run
+            .find("radio_config_for(&settings,")
+            .expect("run builds the radio loop's config");
+        assert!(kept < config);
+        // …and every radio loop config carries the refusal.
+        let body = &src[src
+            .find("\nfn radio_config_for(")
+            .expect("radio_config_for")..];
+        assert!(body.contains("wsjtx_udp_refused: wsjtx_udp_refusal("));
     }
 
     /// ⛔ TX: two windows never send under one WSJT-X id, though each one's roster holds an old
@@ -53808,9 +53919,12 @@ pub fn run() {
     // Take this profile's advisory lock (named profiles only — the default single-instance is a
     // no-op). Lets the launch picker grey out a radio already open in another window, and marks
     // the same-profile double-launch. Non-fatal: a failure just means the picker can't grey it.
-    if !hold_profile_lock() {
+    let profile_lock = hold_profile_lock();
+    let _ = PROFILE_LOCK.set(profile_lock);
+    if profile_lock == ProfileLock::HeldElsewhere {
         eprintln!(
-            "tempo: profile {:?} is already open in another window — its journals may collide",
+            "tempo: profile {:?} is already open in another window — its journals may collide, \
+             and this window sends no WSJT-X UDP",
             active_profile()
         );
     }
