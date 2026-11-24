@@ -2197,13 +2197,25 @@ mod bound_radio_wiring_tests {
 
     const CHILD: &str = "NEXUS_BOUND_WIRING_CHILD";
 
-    /// What this process carries: `(radio loop's bound radio, own-spots id, near-region id, the
-    /// radio loop's WSJT-X sender id)`.
-    fn carried() -> (Option<u32>, String, String, String) {
+    /// A two-radio roster: radio 1 named "IC-705 - portable".
+    fn roster(second: &str) -> tempo_app::settings::Settings {
+        let mut s = tempo_app::settings::Settings::default();
+        s.ensure_radio_profiles();
+        s.add_radio_profile();
+        s.radios[0].name = "FTDX10".into();
+        s.radios[1].name = second.into();
+        s
+    }
+
+    /// What this process carries under `settings`: `(radio loop's bound radio, own-spots id,
+    /// near-region id, the radio loop's WSJT-X sender id)`.
+    fn carried_under(
+        settings: &tempo_app::settings::Settings,
+    ) -> (Option<u32>, String, String, String) {
         #[cfg(feature = "radio")]
         let (bound, wsjtx_id) = {
             let cfg = super::radio_config_for(
-                &tempo_app::settings::Settings::default(),
+                settings,
                 &tempo_app::engine::SpectrumFeed::default(),
                 &std::sync::Arc::new(tempo_audio::rxtap::RxTap::new()),
                 &tempo_app::engine::MeterFeed::default(),
@@ -2211,10 +2223,7 @@ mod bound_radio_wiring_tests {
             (cfg.bound_radio, cfg.wsjtx_id)
         };
         #[cfg(not(feature = "radio"))]
-        let (bound, wsjtx_id) = (
-            bound_radio_id(),
-            tempo_net::sender_id(super::active_profile()),
-        );
+        let (bound, wsjtx_id) = (bound_radio_id(), super::wsjtx_sender_id(&settings.radios));
         (
             bound,
             pskr_feed_client_id("", "W9XYZ"),
@@ -2231,14 +2240,22 @@ mod bound_radio_wiring_tests {
                 Some(1),
                 "control: the child is bound to r1"
             );
+            // GridTracker and JTAlert see the radio's name, as a WSJT-X started with
+            // `--rig-name` (#558); the feeds keep the stable key.
             assert_eq!(
-                carried(),
+                carried_under(&roster("IC-705 - portable")),
                 (
                     Some(1),
                     "nx-W9XYZ-r1".to_string(),
                     "nx-rgn-W9XYZ-r1".to_string(),
-                    "Nexus - r1".to_string(),
+                    "Nexus - IC-705-portable".to_string(),
                 )
+            );
+            // ⛔ The id never changes mid-session: a rename applies when the window next opens,
+            // or a logger's Reply to the old id is dropped and its list splits.
+            assert_eq!(
+                carried_under(&roster("IC-9700")).3,
+                "Nexus - IC-705-portable"
             );
             return;
         }
@@ -2267,7 +2284,7 @@ mod bound_radio_wiring_tests {
         // The unbound half, in this process (no profile): the single window keeps every id it had.
         if bound_radio_id().is_none() {
             assert_eq!(
-                carried(),
+                carried_under(&roster("IC-705 - portable")),
                 (
                     None,
                     "nexus-W9XYZ".to_string(),
@@ -2276,6 +2293,44 @@ mod bound_radio_wiring_tests {
                 )
             );
         }
+    }
+
+    /// A radio window's id is its radio's name, cleaned; r<id> when that name is empty or would
+    /// make two windows one station. The station's one window and a hand-named profile keep theirs.
+    #[test]
+    fn a_radio_window_s_wsjtx_id_is_its_radio_s_name() {
+        let id = |profile: Option<&str>, bound: Option<u32>, second: &str| {
+            super::wsjtx_id_for(profile, bound, &roster(second).radios)
+        };
+        assert_eq!(id(Some("r1"), Some(1), "IC-7300"), "Nexus - IC-7300");
+        assert_eq!(id(Some("r0"), Some(0), "IC-7300"), "Nexus - FTDX10");
+        assert_eq!(
+            id(Some("r1"), Some(1), "IC-705 - portable"),
+            "Nexus - IC-705-portable"
+        );
+        assert_eq!(id(Some("r1"), Some(1), " / "), "Nexus - r1", "nothing left");
+        assert_eq!(
+            id(Some("r1"), Some(1), "ftdx10"),
+            "Nexus - r1",
+            "radio 0's name"
+        );
+        assert_eq!(
+            id(Some("r0"), Some(0), "ftdx10"),
+            "Nexus - r0",
+            "both fall back"
+        );
+        assert_eq!(
+            id(Some("r1"), Some(1), "R0"),
+            "Nexus - r1",
+            "radio 0's fallback"
+        );
+        assert_eq!(
+            id(Some("r5"), Some(5), "IC-7300"),
+            "Nexus - r5",
+            "not in the roster"
+        );
+        assert_eq!(id(None, None, "IC-7300"), "Nexus");
+        assert_eq!(id(Some("hf"), None, "IC-7300"), "Nexus - hf");
     }
 
     /// The call sites the test above cannot reach: each feed's client id is taken inside its own
@@ -3100,8 +3155,9 @@ fn radio_config_for(
         mode: settings.rig_mode(), // DATA submode (PKTUSB/…) for FT8, not voice USB
         wsjtx_udp: settings.wsjtx_udp,
         wsjtx_addr: settings.wsjtx_udp_addr.clone(),
-        // Each window its own WSJT-X client, under its profile: "Nexus", "Nexus - r1", …
-        wsjtx_id: tempo_net::sender_id(active_profile()),
+        // Each window its own WSJT-X client: "Nexus", or "Nexus - <radio name>" for a radio
+        // window, kept for the whole run (`wsjtx_sender_id`).
+        wsjtx_id: wsjtx_sender_id(&settings.radios),
         on_wsjtx_udp: Some(std::sync::Arc::new(note_wsjtx_udp)),
         pskreporter: settings.pskreporter,
         // The package's version, known once the app is built: `finish_launch` sets it.
@@ -3110,6 +3166,48 @@ fn radio_config_for(
         audio_out: settings.audio_out.clone(),
         tx_level: settings.tx_level,
         rx_gain: settings.rx_gain,
+    }
+}
+
+/// This window's WSJT-X sender id ([`wsjtx_id_for`]), worked out from its roster the first time
+/// it is asked and the same for the rest of the run. A logger keys its instance on the whole id
+/// and addresses its Reply to it ([`tempo_net::server::addressed_to`] matches it exactly), so an id
+/// that changed mid-session would split the logger's list and drop the Reply meant for this
+/// window. A rename takes effect the next time the window opens, as a WSJT-X `--rig-name` does.
+fn wsjtx_sender_id(radios: &[tempo_app::settings::RadioProfile]) -> String {
+    static ID: OnceLock<String> = OnceLock::new();
+    ID.get_or_init(|| wsjtx_id_for(active_profile(), bound_radio_id(), radios))
+        .clone()
+}
+
+/// The WSJT-X sender id of the window running `profile`, bound to radio `bound` of `radios`: what
+/// a WSJT-X started with `--rig-name <radio name>` would send, "Nexus - IC-7300", the name cleaned
+/// by [`tempo_net::rig_name`]. A radio window whose radio has no name left after cleaning, or one
+/// another radio of the roster shares (or would fall back to, ignoring case), is
+/// "Nexus - r<id>": two windows under one id are one station to GridTracker. The station's one
+/// window is "Nexus"; a hand-named profile (`--profile hf`) keeps "Nexus - hf".
+fn wsjtx_id_for(
+    profile: Option<&str>,
+    bound: Option<u32>,
+    radios: &[tempo_app::settings::RadioProfile],
+) -> String {
+    let Some(id) = bound else {
+        return tempo_net::sender_id(profile);
+    };
+    let fallback = radio_profile_key(id);
+    let name = radios
+        .iter()
+        .find(|r| r.id == id)
+        .map(|r| tempo_net::rig_name(&r.name))
+        .unwrap_or_default();
+    let taken = radios.iter().filter(|r| r.id != id).any(|r| {
+        tempo_net::rig_name(&r.name).eq_ignore_ascii_case(&name)
+            || radio_profile_key(r.id).eq_ignore_ascii_case(&name)
+    });
+    if name.is_empty() || taken {
+        tempo_net::sender_id(Some(&fallback))
+    } else {
+        tempo_net::sender_id(Some(&name))
     }
 }
 
