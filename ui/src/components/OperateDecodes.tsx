@@ -41,7 +41,7 @@ import { azimuthLabel, azimuthTitle, azimuthTo, type LatLon } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
 import { callCardTrigger, qrzPageOf } from './CallCard'
 import { CallRowMenu, isMenuKey, useMenuFocusReturn } from './CallRowMenu'
-import { useFirstClick } from '../useFirstClick'
+import { firstClickRow, useFirstClick } from '../useFirstClick'
 import { useWatchMatch, watchColorStyle, type WatchColor } from '../watchlist'
 
 /**
@@ -979,6 +979,7 @@ export function OperateDecodes({
         ref={scrollRef}
         onScroll={shown.length > 0 ? onScroll : undefined}
         onKeyDown={roving.containerProps.onKeyDown}
+        {...firstClick.containerProps}
       >
         {shown.length === 0 &&
           // TWO different empty states, and conflating them cost a field report its
@@ -1195,6 +1196,7 @@ const DecodeRowView = memo(function DecodeRowView({
         className={`decode-row ${rowClass(d, needs.rowNeed)}${selected ? ' selected' : ''}${ignored ? ' ignored' : ''}${d.refilled ? ' refilled' : ''}`}
         role="option"
         data-pin-key={d.id}
+        {...firstClickRow(d.id)}
         aria-selected={selected}
         aria-label={
           d.from

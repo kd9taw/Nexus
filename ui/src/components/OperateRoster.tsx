@@ -13,7 +13,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEve
 import { t } from '../i18n'
 import { callCardTrigger, qrzPageOf } from './CallCard'
 import { useRovingList } from '../useRovingList'
-import { useFirstClick } from '../useFirstClick'
+import { firstClickRow, useFirstClick } from '../useFirstClick'
 import type { NeedAlert, NeedTag, Station } from '../types'
 import {
   gridToLatLon,
@@ -655,6 +655,7 @@ export function OperateRoster({
         aria-rowcount={rows.length + 1}
         onKeyDown={roving.containerProps.onKeyDown}
         onPointerDown={hold}
+        {...firstClick.containerProps}
       >
         <div className="or-row or-header" role="row">
           {th('call', t('operate.roster.col.call'))}
@@ -688,6 +689,7 @@ export function OperateRoster({
             return (
               <div
                 key={s.call}
+                {...firstClickRow(s.call)}
                 role="row"
                 aria-selected={s.call === selectedCall}
                 // Five optional clauses, each interpolated WHOLE with its own separator —

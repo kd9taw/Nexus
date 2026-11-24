@@ -324,7 +324,7 @@ export function StationList({
           )}
         </span>
       </div>
-      <div className="station-scroll">
+      <div className="station-scroll" {...firstClick.containerProps}>
         {filtered.length === 0 && <p className="empty">{t('roster.empty')}</p>}
         {filtered.map((s) => (
           <StationCard

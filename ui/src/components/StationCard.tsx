@@ -19,7 +19,7 @@ import type { WatchFilter } from '../watchlist'
 import { PATH_OUTLOOK, useKeyedFeed } from '../features/connectFeeds'
 import { PathRoute } from './prop/PathRoute'
 import { pathWhyDetail, pathWhyFacts, pathWhyLine } from '../features/pathWhy'
-import type { FirstClick } from '../useFirstClick'
+import { firstClickRow, type FirstClick } from '../useFirstClick'
 
 interface Props {
   station: Station
@@ -123,6 +123,7 @@ export function StationCard({
       className={`station-card${selected ? ' selected' : ''}${station.worked ? ' worked' : ''}${
         chip ? ` needed need-${chip.cls}` : ''
       }`}
+      {...firstClickRow(station.call)}
       onDoubleClick={() => {
         const st = gesture ? gesture.double(station.call) : station
         if (st) workStation(onCall, st)
@@ -134,6 +135,7 @@ export function StationCard({
       <button
         type="button"
         className="station-open"
+        {...firstClickRow(station.call)}
         onClick={(e) => {
           if (!gesture || gesture.click(station.call, e.detail)) onSelect(station.call)
         }}
@@ -193,6 +195,7 @@ export function StationCard({
       <button
         type="button"
         className="station-work"
+        {...firstClickRow(station.call)}
         onClick={() => workThisStation()}
         title={t('roster.card.work.title', { call: station.call })}
       >
