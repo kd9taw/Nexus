@@ -149,7 +149,15 @@ describe('(B) the decode list, the roster and the station card: their QRZ/↗ li
     expect(api.openQrzPage).not.toHaveBeenCalled()
     fireEvent.dblClick(link)
     expect(onCall, 'a double-click on the link is not a work').not.toHaveBeenCalled()
-    fireEvent.dblClick(screen.getByText('CQ W1AW FN31'))
+    // A later double-click on the row, as a browser sends it: its own press and click (count 1), then the
+    // second (count 2), then the double-click. The press is what begins the gesture on the row; a bare
+    // dblclick would still be the gesture the link began, which belongs to no row and works nothing.
+    const text = screen.getByText('CQ W1AW FN31')
+    for (const detail of [1, 2]) {
+      fireEvent.mouseDown(text, { detail })
+      fireEvent.click(text, { detail })
+    }
+    fireEvent.dblClick(text, { detail: 2 })
     expect(onCall).toHaveBeenCalledTimes(1)
   })
 
