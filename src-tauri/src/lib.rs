@@ -4237,7 +4237,9 @@ fn radio_window_name(id: u32) -> Option<String> {
 
 /// [`heal_radio_names`] from each radio window's file, once per install: a marker beside base's
 /// settings says it has run. After it, renames reach base as they are made. `save` writes the
-/// healed base; a failed save leaves the marker unwritten, so the next launch tries again.
+/// heal to base's file (at launch, through the writer's read-modify-write, so a radio window's
+/// concurrent mirror is kept); a failed save leaves the marker unwritten, so the next launch tries
+/// again.
 fn heal_radio_names_once(
     s: &mut Settings,
     base_dir: &Path,
@@ -53982,10 +53984,12 @@ pub fn run() {
         eprintln!("tempo: couldn't save the move to P.533, trying again next launch: {e}");
     }
     // The base window, whose file the launch picker lists: radio names set in their own windows
-    // before renames were mirrored, taken in once. The same bare save, for the same reason.
+    // before renames were mirrored, taken in once. Not a bare save: a radio window may be
+    // mirroring its roster into this same file right now, so the heal is applied to the file as
+    // read under the writer's cross-process lock (`SettingsWriter::rewrite`), as the mirrors do.
     if active_profile().is_none() {
-        heal_radio_names_once(&mut settings, &config_dir_for(None), |settings| {
-            settings.save(&settings_path())
+        heal_radio_names_once(&mut settings, &config_dir_for(None), |_| {
+            SettingsWriter::of(&settings_path()).rewrite(|s| heal_radio_names(s, radio_window_name))
         });
     }
     // The DEBUG tier, as early as the settings are known — a diagnostic session must capture
