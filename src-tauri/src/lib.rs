@@ -3485,16 +3485,25 @@ fn mirror_simultaneous(base: &Path, enabled: bool) {
 /// picker's own overlay blocks the operator from editing) never learned about it, making the new
 /// radio permanently unselectable with no repair path.
 ///
-/// Deliberately mirrors only radios base does not already have, and only their identity + config as
-/// created — a radio's per-window CAT/audio edits are NOT pushed back, because each window owns its
-/// own radio's live config and base's copy may legitimately differ. `radio_pegged`/`active_radio` are
+/// Mirrors radios base does not already have, with their identity + config as created, and for
+/// radios it has, their identity only: the name and whether the radio is enabled, which a rename or
+/// a disable in a radio window changes (the picker lists base's roster, so without them it showed
+/// "Radio 3" for a radio named in its own window, #558). A radio's per-window CAT/audio edits are
+/// NOT pushed back, because each window owns its own radio's live config and base's copy may
+/// legitimately differ. `radio_pegged`/`active_radio` are
 /// per-window and never touched. Best-effort; a failure just leaves base as it was.
 fn persist_roster_to_base(radios: &[tempo_app::settings::RadioProfile]) {
     if bound_radio_id().is_none() {
         return; // the base config itself, or an independent named profile — nothing to mirror
     }
-    let base = config_dir_for(None).join("settings.json");
-    let mirrored = SettingsWriter::of(&base).rewrite(|s| {
+    if let Err(e) = mirror_roster(&config_dir_for(None).join("settings.json"), radios) {
+        eprintln!("tempo: couldn't mirror the radio roster to the base config: {e}");
+    }
+}
+
+/// [`persist_roster_to_base`] for the base config at `base`.
+fn mirror_roster(base: &Path, radios: &[tempo_app::settings::RadioProfile]) -> std::io::Result<()> {
+    SettingsWriter::of(base).rewrite(|s| {
         let added: Vec<_> = radios
             .iter()
             .filter(|r| !s.radios.iter().any(|b| b.id == r.id))
@@ -3504,7 +3513,22 @@ fn persist_roster_to_base(radios: &[tempo_app::settings::RadioProfile]) {
             .radios
             .iter()
             .any(|b| !radios.iter().any(|r| r.id == b.id));
-        if added.is_empty() && !removed {
+        // A radio base already has takes this window's name for it and whether it is enabled:
+        // the picker lists base's roster, by name, enabled radios only. Base's operating radio
+        // stays enabled, the rule `Engine::set_radio_enabled` keeps in every window.
+        let active = s.active_radio;
+        let mut renamed = false;
+        for b in s.radios.iter_mut() {
+            if let Some(r) = radios.iter().find(|r| r.id == b.id) {
+                let enabled = r.enabled || b.id == active;
+                if b.name != r.name || b.enabled != enabled {
+                    b.name = r.name.clone();
+                    b.enabled = enabled;
+                    renamed = true;
+                }
+            }
+        }
+        if added.is_empty() && !removed && !renamed {
             return false;
         }
         s.radios.retain(|b| radios.iter().any(|r| r.id == b.id));
@@ -3513,9 +3537,248 @@ fn persist_roster_to_base(radios: &[tempo_app::settings::RadioProfile]) {
         s.ensure_distinct_radio_ports();
         s.ensure_routing_targets();
         true
-    });
-    if let Err(e) = mirrored {
-        eprintln!("tempo: couldn't mirror the radio roster to the base config: {e}");
+    })
+}
+
+#[cfg(test)]
+mod roster_mirror_tests {
+    use super::*;
+
+    /// A four-radio station as the reporter's base config holds it: the first two named before
+    /// their windows existed, the last two added from a radio window and still carrying the
+    /// names `add_radio_profile` gave them.
+    fn four_radios() -> Settings {
+        let mut s = Settings {
+            simultaneous_radios: true,
+            ..Settings::default()
+        };
+        s.ensure_radio_profiles();
+        for _ in 0..3 {
+            s.add_radio_profile();
+        }
+        for (r, name) in s
+            .radios
+            .iter_mut()
+            .zip(["FTDX10", "IC-7300", "Radio 3", "Radio 4"])
+        {
+            r.name = name.to_string();
+        }
+        s
+    }
+
+    /// A folder of this test's own, removed with its thread (`test_dirs`).
+    fn scratch(name: &str) -> PathBuf {
+        let dir = test_dirs::root().join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn names(s: &Settings) -> Vec<(u32, String, bool)> {
+        s.radios
+            .iter()
+            .map(|r| (r.id, r.name.clone(), r.enabled))
+            .collect()
+    }
+
+    /// ⛔ #558: a radio renamed, disabled or enabled in a radio window reaches the base config the
+    /// launch picker lists, for a radio base already has. Its CAT config does not: each window
+    /// owns its own radio's.
+    #[test]
+    fn a_rename_or_enable_in_a_radio_window_reaches_the_picker() {
+        let dir = scratch("roster-mirror");
+        let base = dir.join("settings.json");
+        four_radios().save(&base).unwrap();
+
+        let mut window = four_radios();
+        window.radios[2].name = "IC-705".into();
+        window.radios[2].serial_port = "COM9".into();
+        window.radios[3].name = "IC-9700".into();
+        window.radios[1].enabled = false;
+        mirror_roster(&base, &window.radios).unwrap();
+
+        let after = Settings::load(&base);
+        assert_eq!(
+            names(&after),
+            vec![
+                (0, "FTDX10".to_string(), true),
+                (1, "IC-7300".to_string(), false),
+                (2, "IC-705".to_string(), true),
+                (3, "IC-9700".to_string(), true),
+            ]
+        );
+        assert_ne!(
+            after.radios[2].serial_port, "COM9",
+            "a window's CAT config stays in its window"
+        );
+
+        // Re-enabled in a window: the picker offers it again.
+        window.radios[1].enabled = true;
+        mirror_roster(&base, &window.radios).unwrap();
+        assert!(Settings::load(&base).radios[1].enabled);
+    }
+
+    /// Base's own operating radio is never switched off by a mirror, the rule
+    /// `Engine::set_radio_enabled` keeps in every window.
+    #[test]
+    fn a_mirror_never_disables_base_s_operating_radio() {
+        let dir = scratch("roster-mirror-active");
+        let base = dir.join("settings.json");
+        four_radios().save(&base).unwrap();
+        let mut window = four_radios();
+        window.active_radio = 2;
+        window.radios[0].enabled = false;
+        mirror_roster(&base, &window.radios).unwrap();
+        let after = Settings::load(&base);
+        assert_eq!(after.active_radio, 0, "premise");
+        assert!(after.radios[0].enabled);
+    }
+
+    /// The two commands that change a radio's identity mirror it, as add and remove do. Source
+    /// scanned: they take Tauri state, and what is pinned is the call.
+    #[test]
+    fn rename_and_enable_mirror_to_base() {
+        let src = include_str!("lib.rs");
+        for sig in ["fn rename_radio(", "fn set_radio_enabled("] {
+            let rest = &src[src.find(&format!("\n{sig}")).expect(sig) + 1..];
+            let body = &rest[..rest.find("\n}\n").expect("the end of the function")];
+            assert!(
+                body.contains("persist_roster_to_base(&eng.settings().radios);"),
+                "{sig} must mirror the roster to base"
+            );
+        }
+    }
+
+    /// ⛔ #558, the stations already hit: a name set in a radio's own window, before renames were
+    /// mirrored, is taken into base once, so the operator does not rename again. Only over a name
+    /// base still holds as `add_radio_profile` gave it, so a name chosen in base is never undone.
+    #[test]
+    fn names_already_set_in_each_radio_s_window_heal_base_once() {
+        let mut base = four_radios();
+        base.radios[0].name = "Old name".into();
+        let own = |id: u32| match id {
+            0 => Some("Not this one".to_string()),
+            1 => Some("IC-7300".to_string()),
+            2 => Some(" IC-705 ".to_string()),
+            3 => Some("IC-9700".to_string()),
+            _ => None,
+        };
+        assert!(heal_radio_names(&mut base, own));
+        assert_eq!(
+            names(&base)
+                .into_iter()
+                .map(|(_, n, _)| n)
+                .collect::<Vec<_>>(),
+            ["Old name", "IC-7300", "IC-705", "IC-9700"]
+        );
+        assert!(!heal_radio_names(&mut base, own), "nothing left to heal");
+        // No window folder, or an empty name there: base keeps its own.
+        let mut base = four_radios();
+        assert!(!heal_radio_names(&mut base, |id| (id == 2).then(String::new)));
+        assert_eq!(base.radios[2].name, "Radio 3");
+    }
+
+    /// The heal reads each radio's own `tempo-r<id>/settings.json`, runs once (a marker in base's
+    /// folder), and saves base only when it changed something.
+    #[test]
+    fn the_heal_reads_each_radio_window_s_file_and_runs_once() {
+        let r2 = config_dir_for(Some("r2"));
+        std::fs::create_dir_all(&r2).unwrap();
+        let mut window = four_radios();
+        window.radios[2].name = "IC-705".into();
+        window.save(&r2.join("settings.json")).unwrap();
+
+        let base_dir = scratch("roster-heal");
+        let mut base = four_radios();
+        let mut saves = 0;
+        heal_radio_names_once(&mut base, &base_dir, |_| {
+            saves += 1;
+            Ok(())
+        });
+        assert_eq!(base.radios[2].name, "IC-705");
+        assert_eq!(base.radios[3].name, "Radio 4", "no r3 folder: unchanged");
+        assert_eq!(saves, 1);
+
+        // Once: a later launch leaves base alone, even with a default name left.
+        let mut again = four_radios();
+        heal_radio_names_once(&mut again, &base_dir, |_| {
+            saves += 1;
+            Ok(())
+        });
+        assert_eq!(again.radios[2].name, "Radio 3");
+        assert_eq!(saves, 1);
+    }
+}
+
+/// Take into base `s` the names already set in each radio's own window (`own(id)`), for a radio
+/// whose base name is still the one `add_radio_profile` gave it ("Radio 3"), so a name chosen in
+/// base is never undone. Before renames were mirrored ([`persist_roster_to_base`]), a radio named
+/// in its window kept that default in base, which the launch picker lists (#558). True when a name
+/// changed.
+fn heal_radio_names(s: &mut Settings, own: impl Fn(u32) -> Option<String>) -> bool {
+    let mut healed = false;
+    for r in s.radios.iter_mut() {
+        let default_name = r
+            .name
+            .strip_prefix("Radio ")
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+        if !default_name {
+            continue;
+        }
+        if let Some(name) = own(r.id).map(|n| n.trim().to_string()) {
+            if !name.is_empty() && name != r.name {
+                r.name = name;
+                healed = true;
+            }
+        }
+    }
+    healed
+}
+
+/// The name radio `id`'s own window (`tempo-r<id>/settings.json`) gives it, read without loading
+/// that window's settings: a load would set aside a file it could not read, in another window's
+/// folder. `None` when the window has no file or does not name the radio.
+fn radio_window_name(id: u32) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct Roster {
+        #[serde(default)]
+        radios: Vec<Named>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Named {
+        id: u32,
+        #[serde(default)]
+        name: String,
+    }
+    let file = config_dir_for(Some(&radio_profile_key(id))).join("settings.json");
+    let roster: Roster = serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()?;
+    roster
+        .radios
+        .into_iter()
+        .find(|r| r.id == id)
+        .map(|r| r.name)
+}
+
+/// [`heal_radio_names`] from each radio window's file, once per install: a marker beside base's
+/// settings says it has run. After it, renames reach base as they are made. `save` writes the
+/// healed base; a failed save leaves the marker unwritten, so the next launch tries again.
+fn heal_radio_names_once(
+    s: &mut Settings,
+    base_dir: &Path,
+    save: impl FnOnce(&Settings) -> std::io::Result<()>,
+) {
+    let marker = base_dir.join("radio-names-healed");
+    if marker.exists() {
+        return;
+    }
+    if heal_radio_names(s, radio_window_name) {
+        if let Err(e) = save(s) {
+            eprintln!("tempo: couldn't save the radio names from their windows: {e}");
+            return;
+        }
+    }
+    let _ = std::fs::create_dir_all(base_dir);
+    if let Err(e) = std::fs::write(&marker, "") {
+        eprintln!("tempo: couldn't note the radio names as taken: {e}");
     }
 }
 
@@ -30972,6 +31235,8 @@ fn rename_radio(
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: rename_radio save failed: {e}")
     });
+    // …and into the base config, or the launch picker keeps the old name.
+    persist_roster_to_base(&eng.settings().radios);
     Ok(eng.snapshot())
 }
 
@@ -30994,6 +31259,8 @@ fn set_radio_enabled(
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: set_radio_enabled save failed: {e}")
     });
+    // …and into the base config, or the launch picker offers a disabled radio, or hides one.
+    persist_roster_to_base(&eng.settings().radios);
     Ok(eng.snapshot())
 }
 
@@ -53204,6 +53471,13 @@ pub fn run() {
     // precondition (`tempo_app::settings::writer`). A refused save leaves this run as it was.
     if let Err(e) = settings.move_prop_engine_once(|settings| settings.save(&settings_path())) {
         eprintln!("tempo: couldn't save the move to P.533, trying again next launch: {e}");
+    }
+    // The base window, whose file the launch picker lists: radio names set in their own windows
+    // before renames were mirrored, taken in once. The same bare save, for the same reason.
+    if active_profile().is_none() {
+        heal_radio_names_once(&mut settings, &config_dir_for(None), |settings| {
+            settings.save(&settings_path())
+        });
     }
     // The DEBUG tier, as early as the settings are known — a diagnostic session must capture
     // the startup it was turned on for, not just what came after.
