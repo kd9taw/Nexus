@@ -15,6 +15,8 @@
 //     pane can be any width its seam gives it; a bar that re-wraps at ONE width is the bug).
 //   THE GESTURE (the action): a real double-click whose two clicks land on different rows, because the grid is moved
 //     down one row between them (a box planted above it), works the station the FIRST click landed on.
+//   AFTER THE LINK: a click on a row's ↗ (it opens the station's card, and a gesture begun on it is begun on no row),
+//     the card closed, and 600 ms later a real double-click on another row works that row, once.
 // THE CONTROL, run every time: the Spot button let back to its label's own width must be caught by the bar check at
 // some width, or the check cannot fail and the probe says so instead of passing.
 //
@@ -56,6 +58,8 @@ export async function getDeclination(): Promise<any> { return 0 }
 // The recall card the selection opens asks these; answered as a station with no callbook does.
 export async function resolveEntity(): Promise<any> { return 'United States' }
 export async function qrzLookup(): Promise<any> { return null }
+// Esc is the stop key too (useEscStop): the halt answers with the snapshot, as the station does.
+export async function haltTx(): Promise<any> { return { ...snapshot, radio: { ...snapshot.radio } } }
 `
 const names = [...realSrc.matchAll(/^export (?:async )?function (\w+)/gm)].map((m) => m[1])
 const own = new Set([...stub.matchAll(/^export (?:async )?function (\w+)/gm)].map((m) => m[1]))
@@ -127,7 +131,11 @@ async function openPage(s, scale) {
   for (let i = 0; i < 120; i++) { await sleep(250); if (await evaluate(`!!(${ROSTER})`).catch(() => false)) break }
   await evaluate(`globalThis.__push({ stations: ${JSON.stringify(STATIONS)}, radio: { slot: 100 } })`)
   await sleep(400)
-  return { evaluate, press, close: () => browser.call('Target.closeTarget', { targetId }) }
+  const key = async (k) => {
+    await call('Input.dispatchKeyEvent', { type: 'keyDown', key: k, code: k, windowsVirtualKeyCode: k === 'Escape' ? 27 : 0 })
+    await call('Input.dispatchKeyEvent', { type: 'keyUp', key: k, code: k, windowsVirtualKeyCode: k === 'Escape' ? 27 : 0 })
+  }
+  return { evaluate, press, key, close: () => browser.call('Target.closeTarget', { targetId }) }
 }
 const frames = (p) => p.evaluate('new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => r(1), 30))))')
 /** Every width, measured; `null` is the roster's own width. */
@@ -213,6 +221,33 @@ for (const s of SIZES) for (const scale of SCALES) {
       console.log(`gesture: first click on ${target}, the second on ${under}; worked ${JSON.stringify(worked)}`)
       if (under === target || under == null) red(`gesture: the planted shift did not move another row under the pointer (${under}) — the check cannot fail`)
       if (worked.length !== 1 || worked[0] !== target) red(`gesture: a double-click begun on ${target} worked ${JSON.stringify(worked)}`)
+    }
+  } finally {
+    await p.close()
+  }
+}
+
+// AFTER THE LINK: a later, separate double-click on a row works it, though the last press was on a row's ↗.
+{
+  const p = await openPage(FHD, 'auto')
+  try {
+    const link = await p.evaluate(`(() => { const r = ${ROSTER}; const row = [...r.querySelectorAll('.or-row[role=row]')].find((x) => x.querySelector('.or-call')?.textContent.includes('KB2DJJ'))
+      const a = row?.querySelector('.qrz-link'); if (!a) return null; const q = a.getBoundingClientRect(); return { x: q.left + q.width / 2, y: q.top + q.height / 2 } })()`)
+    const at = await p.evaluate(rowCentre('KM7CAB'))
+    if (!link || !at) red(`after the link: no ↗ on KB2DJJ or no KM7CAB row`)
+    else {
+      await p.press(link, 1)
+      await sleep(300)
+      const opened = await p.evaluate(`!!document.querySelector('.call-card, [class*="callcard"], [class*="call-card"]')`)
+      await p.key('Escape')
+      await sleep(600)
+      await p.press(at, 1)
+      await sleep(60)
+      await p.press(at, 2)
+      await sleep(200)
+      const worked = await p.evaluate('globalThis.__worked()')
+      console.log(`after the link: ↗ clicked (card ${opened ? 'opened' : 'not seen'}), then a double-click on KM7CAB worked ${JSON.stringify(worked)}`)
+      if (worked.length !== 1 || worked[0] !== 'KM7CAB') red(`after the link: a double-click on KM7CAB worked ${JSON.stringify(worked)}`)
     }
   } finally {
     await p.close()
