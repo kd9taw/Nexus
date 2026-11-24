@@ -21,7 +21,8 @@
 //! NO row, and the double-click that follows it does nothing: otherwise a record from an earlier,
 //! finished gesture would be acted on (a review finding against the first version of this rule). A
 //! row says it is one with `firstClickRow(key)`; a control inside a row that IS the row for this purpose
-//! (a card's own open and Work buttons) carries the same props.
+//! (a card's own open button) carries the same props. A card's Work button does not: it works on its
+//! own first click, so a double-click begun on it has nothing left to do.
 //!
 //! Used by every list that works a station on a double-click: the Call Roster, Band Activity and
 //! Rx Frequency (keyed by decode entry, since one call can have many rows), and the Stations cards.

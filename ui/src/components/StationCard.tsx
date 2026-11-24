@@ -195,8 +195,13 @@ export function StationCard({
       <button
         type="button"
         className="station-work"
-        {...firstClickRow(station.call)}
-        onClick={() => workThisStation()}
+        // Work works on ONE click; a double-click on it is the same intent, once. Its later clicks (which,
+        // with the cards re-sorting between them, can land on another card's Work) work nothing, and it is
+        // not the card for the card's double-click (useFirstClick: a control inside a row is not the row),
+        // since its own first click already worked the station.
+        onClick={(e) => {
+          if (e.detail <= 1) workThisStation()
+        }}
         title={t('roster.card.work.title', { call: station.call })}
       >
         {t('roster.card.work.label')}
