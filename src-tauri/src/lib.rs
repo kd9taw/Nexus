@@ -3181,7 +3181,7 @@ fn radio_config_for(
 }
 
 /// This window's WSJT-X sender id ([`wsjtx_id_for`]), worked out from the BASE roster the first
-/// time it is asked and the same for the rest of the run.
+/// time it is asked ([`claim_wsjtx_id`]) and the same for the rest of the run.
 ///
 /// From base, not this window's roster: every window reads the one roster the picker lists, where
 /// each rename lands ([`persist_radio_identity_to_base`]), so two windows cannot both take a name
@@ -3196,14 +3196,79 @@ fn radio_config_for(
 /// radio (one refused at launch because another window has it, then switched).
 fn wsjtx_sender_id() -> String {
     static ID: OnceLock<String> = OnceLock::new();
-    ID.get_or_init(|| {
-        wsjtx_id_for(
-            active_profile(),
-            bound_radio_id(),
-            &roster_names(&config_dir_for(None).join("settings.json")),
-        )
-    })
-    .clone()
+    ID.get_or_init(|| claim_wsjtx_id(&config_dir_for(None), active_profile(), bound_radio_id()))
+        .clone()
+}
+
+/// This window's WSJT-X id, claimed: [`wsjtx_id_for`] from base's roster, unless a radio window
+/// that is OPEN still sends under it, and then `r<id>`. A window keeps the id it opened under while
+/// it runs, so after a rename its old name is not free until it closes: another radio given that
+/// name meanwhile must not open under the same id.
+///
+/// Each radio window records the id it claimed in `wsjtx-ids/r<id>` beside base's settings. A
+/// record counts while its window is open, which its held profile lock says ([`profile_in_use`]),
+/// so no record outlives a window that crashed, and none needs removing on quit; a record whose
+/// window is gone is removed here. The read of base, the check and the record happen under base's
+/// cross-process rewrite lock (`SettingsWriter::rewrite`, the one every rename's mirror takes), so
+/// two windows opening at once cannot both take one name. When the lock or the record fails, the
+/// id is `r<id>`, which no other window can send under (a name shaped like a radio key is refused).
+fn claim_wsjtx_id(base_dir: &Path, profile: Option<&str>, bound: Option<u32>) -> String {
+    let Some(id) = bound else {
+        return tempo_net::sender_id(profile);
+    };
+    let fallback = tempo_net::sender_id(Some(&radio_profile_key(id)));
+    let records = base_dir.join("wsjtx-ids");
+    let mut claimed = None;
+    let locked = SettingsWriter::of(&base_dir.join("settings.json")).rewrite(|base| {
+        let names: Vec<(u32, String)> =
+            base.radios.iter().map(|r| (r.id, r.name.clone())).collect();
+        let wanted = wsjtx_id_for(profile, bound, &names);
+        let open_elsewhere = wsjtx_ids_of_open_windows(&records, id);
+        let mine = if open_elsewhere
+            .iter()
+            .any(|other| other.eq_ignore_ascii_case(&wanted))
+        {
+            fallback.clone()
+        } else {
+            wanted
+        };
+        let _ = std::fs::create_dir_all(&records);
+        if std::fs::write(records.join(radio_profile_key(id)), &mine).is_ok() {
+            claimed = Some(mine);
+        }
+        false // base itself is only read
+    });
+    match (locked, claimed) {
+        (Ok(()), Some(mine)) => mine,
+        _ => fallback,
+    }
+}
+
+/// The ids recorded in `records` by radio windows other than radio `own`'s that are open now. A
+/// record whose window is not open is removed.
+fn wsjtx_ids_of_open_windows(records: &Path, own: u32) -> Vec<String> {
+    let own = radio_profile_key(own);
+    let Ok(entries) = std::fs::read_dir(records) else {
+        return Vec::new();
+    };
+    let mut open = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let is_a_radio_key = name
+            .strip_prefix('r')
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+        if !is_a_radio_key || name == own {
+            continue;
+        }
+        if profile_in_use(&name) {
+            if let Ok(id) = std::fs::read_to_string(entry.path()) {
+                open.push(id);
+            }
+        } else {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+    open
 }
 
 /// The `(id, name)` of each radio in the settings file at `file`, read without loading it: a load
@@ -3848,6 +3913,51 @@ mod roster_mirror_tests {
                 (2, "IC-705".to_string(), true),
                 (3, "Radio 4".to_string(), false),
             ]
+        );
+    }
+
+    /// ⛔ TX: a window that is still open keeps the name it opened under, so a name it gave up by
+    /// a rename stays taken until it closes. Otherwise a second window could open under the same
+    /// WSJT-X id, and GridTracker's Reply would go to whichever spoke last.
+    #[test]
+    fn a_name_an_open_window_still_sends_under_is_not_taken_again() {
+        let base_dir = config_dir_for(None);
+        let base = base_dir.join("settings.json");
+        let mut station = four_radios();
+        station.radios[0].name = "X".into();
+        station.save(&base).unwrap();
+
+        // Window r0 opens as "Nexus - X" and stays open (it holds its profile's lock).
+        assert_eq!(claim_wsjtx_id(&base_dir, Some("r0"), Some(0)), "Nexus - X");
+        let r0_dir = config_dir_for(Some("r0"));
+        std::fs::create_dir_all(&r0_dir).unwrap();
+        let r0_open = std::fs::File::create(r0_dir.join(".lock")).unwrap();
+        r0_open.try_lock().unwrap();
+        assert!(profile_in_use("r0"), "premise: r0's window is open");
+
+        // Radio 0 renamed while its window still sends "Nexus - X"; radio 1 then takes "X".
+        let mut renamed = four_radios();
+        renamed.radios[0].name = "Y".into();
+        renamed.radios[1].name = "X".into();
+        mirror_radio_identity(&base, &renamed.radios[0]).unwrap();
+        mirror_radio_identity(&base, &renamed.radios[1]).unwrap();
+        assert_eq!(
+            claim_wsjtx_id(&base_dir, Some("r1"), Some(1)),
+            "Nexus - r1",
+            "r0's window still sends as X"
+        );
+
+        // Once r0's window has closed, the name is free.
+        drop(r0_open);
+        assert_eq!(claim_wsjtx_id(&base_dir, Some("r1"), Some(1)), "Nexus - X");
+        assert!(
+            !base_dir.join("wsjtx-ids").join("r0").exists(),
+            "the closed window's record is removed"
+        );
+        assert_eq!(
+            std::fs::read_to_string(base_dir.join("wsjtx-ids").join("r1")).unwrap(),
+            "Nexus - X",
+            "r1's own, for the next window to see"
         );
     }
 
