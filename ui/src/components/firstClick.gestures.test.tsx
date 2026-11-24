@@ -73,7 +73,7 @@ it('decodes: a gesture begun on blank feed space works nothing, though a row sli
 })
 
 it('roster: a gesture begun on blank grid space works nothing, though a row slides under its second click', () => {
-  const s = (c: string) => ({ call: c, grid: 'EN52', snr: -10, lastHeardSlot: 100, heardCount: 1, presence: 'heard', worked: false }) as Station
+  const s = (c: string) => ({ call: c, grid: 'EN52', snr: -10, lastHeardSlot: 100, heardCount: 1, presence: 'active', worked: false }) as Station
   const onCall = vi.fn(), onSelect = vi.fn()
   const { container } = render(<OperateRoster stations={['K0PT', 'KB2DJJ'].map(s)} myGrid="EN52" currentSlot={100}
     needByCall={new Map()} selectedCall={null} onSelect={onSelect} onCall={onCall} onToggleIgnore={vi.fn()} />)
@@ -87,7 +87,7 @@ it('roster: a gesture begun on blank grid space works nothing, though a row slid
 })
 
 it("roster: a gesture begun on a row's QRZ link is not begun on the row", () => {
-  const s = (c: string) => ({ call: c, grid: 'EN52', snr: -10, lastHeardSlot: 100, heardCount: 1, presence: 'heard', worked: false }) as Station
+  const s = (c: string) => ({ call: c, grid: 'EN52', snr: -10, lastHeardSlot: 100, heardCount: 1, presence: 'active', worked: false }) as Station
   const onCall = vi.fn()
   const { container } = render(<OperateRoster stations={['K0PT', 'KB2DJJ'].map(s)} myGrid="EN52" currentSlot={100}
     needByCall={new Map()} selectedCall={null} onSelect={vi.fn()} onCall={onCall} onToggleIgnore={vi.fn()} />)
