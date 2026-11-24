@@ -11,8 +11,11 @@
 //! left the list in between. Acting on it rather than dropping the gesture: it is the station the
 //! operator aimed at, the one the first click already selected, so the selection and the work agree.
 //!
-//! EVERY GESTURE STARTS AFRESH, ROW OR NOT. The record is taken by the LIST, in the capture phase, on
-//! the press and the click of every gesture's first click (detail 1) anywhere inside it, before any
+//! EVERY GESTURE STARTS AFRESH, ROW OR NOT, WHEREVER IT BEGINS. Every first press (detail 1) anywhere in
+//! the document clears the record, in the capture phase, before anything else sees it: a gesture begun
+//! outside the list (the roster's filter bar, the Stations header) whose second click lands on a row
+//! that moved under it then acts on nothing. The record is then taken by the LIST, in the capture
+//! phase, on the press and the click of every gesture's first click anywhere inside it, before any
 //! row handler runs and whatever a child does with the event afterwards. A first click that landed on
 //! no row (blank space, a gap between rows) or on a control inside a row (the QRZ link, a menu) records
 //! NO row, and the double-click that follows it does nothing: otherwise a record from an earlier,
@@ -22,7 +25,7 @@
 //!
 //! Used by every list that works a station on a double-click: the Call Roster, Band Activity and
 //! Rx Frequency (keyed by decode entry, since one call can have many rows), and the Stations cards.
-import { useRef, type MouseEvent } from 'react'
+import { useEffect, useRef, type MouseEvent } from 'react'
 
 /** The attribute a row (or a control that stands for its row) carries its key in. */
 const ATTR = 'data-first-click'
@@ -53,6 +56,13 @@ export function firstClickRow(key: string): { [ATTR]: string } {
 export function useFirstClick<T>(lookup: (key: string) => T | undefined): FirstClick<T> {
   // undefined: no press seen yet (only a test's bare double-click); null: the gesture began on no row.
   const first = useRef<string | null | undefined>(undefined)
+  useEffect(() => {
+    const clear = (e: globalThis.MouseEvent) => {
+      if (e.detail <= 1) first.current = null
+    }
+    document.addEventListener('mousedown', clear, true)
+    return () => document.removeEventListener('mousedown', clear, true)
+  }, [])
   const begin = (e: MouseEvent) => {
     if (e.detail > 1) return
     const hit = (e.target as Element | null)?.closest?.(HIT)
