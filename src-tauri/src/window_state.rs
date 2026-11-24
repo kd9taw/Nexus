@@ -393,11 +393,16 @@ impl crate::remote_service::stream::ShapeWindow for MainShape {
 /// contest screen. The dashboard is the one a station leaves up all day, on a second monitor or
 /// full screen behind Nexus, and "it comes back where I put it" is half of what makes it a
 /// dashboard; the logger lives on the second monitor its logger sits at, and opens there again;
-/// the contest screen is popped out to put it on another monitor, and goes back there. The band
-/// map remembers through its own dock-aware path (`load_bandmap_window` in `lib.rs`); every other
+/// the contest screen is popped out to put it on another monitor, and goes back there. The Needed
+/// board opens with Nexus every launch, so a box it forgot was re-dragged every day; it opens where
+/// it was left, the launch open included (that open is `open_panel_window` too). The band map
+/// remembers through its own dock-aware path (`load_bandmap_window` in `lib.rs`); every other
 /// pop-out opens at its fixed default, as it always has.
 pub(crate) fn remembers(slug: &str) -> bool {
-    slug == "connect" || slug == crate::CONTEST_LOGGER_SLUG || slug == crate::CONTEST_SCREEN_SLUG
+    slug == "connect"
+        || slug == "needed"
+        || slug == crate::CONTEST_LOGGER_SLUG
+        || slug == crate::CONTEST_SCREEN_SLUG
 }
 
 /// A remembered pop-out's record: its box — the main window's own shape, restored and
@@ -805,17 +810,18 @@ mod tests {
     }
 
     #[test]
-    fn the_connect_dashboard_and_the_contest_logger_remember_their_windows() {
+    fn the_connect_dashboard_the_contest_logger_and_the_needed_board_remember_their_windows() {
         assert!(remembers("connect"));
         assert!(remembers("contestlog"));
         // …and the contest screen window, which goes to a monitor of its own as the logger does.
         assert!(remembers("contestscreen"));
+        // …and the Needed board, which opens with Nexus and goes back where it was left.
+        assert!(remembers("needed"));
         // The band map remembers through its own dock-aware file; the rest keep their defaults,
         // the contest scoreboard beside the logger among them.
         for other in [
             "bandmapCw",
             "bandmapPhone",
-            "needed",
             "operate",
             "waterfall",
             "fieldday",
@@ -1001,6 +1007,100 @@ mod tests {
         std::fs::write(&path, "{\"w\": 1200,").unwrap();
         assert_eq!(load_panel(&path), None, "a torn file is nothing saved");
         let _ = std::fs::remove_file(&path);
+    }
+
+    // ---- the Needed board ----------------------------------------------------------------------
+
+    /// The Needed board's floor, `panel_min_inner("needed")` (the generic pop-out minimum).
+    const NEEDED_MIN: (f64, f64) = (420.0, 360.0);
+
+    #[test]
+    fn the_needed_board_reopens_where_it_was_left_and_never_off_screen() {
+        // It opens with Nexus every launch, so a box it forgot was a box re-dragged every day.
+        assert!(remembers("needed"), "the Needed board remembers its window");
+        assert_eq!(crate::panel_min_inner("needed"), NEEDED_MIN);
+        let second = area(1920.0, 0.0, 2560.0, 1400.0, 1.0);
+        // Left on the second monitor: it comes back there, at its own size.
+        let saved = rec(900.0, 1200.0, 3400.0, 100.0, false);
+        let rect = restore_from(
+            Some(saved),
+            &[primary(), second],
+            Some(primary()),
+            NEEDED_MIN,
+        )
+        .rect
+        .unwrap();
+        assert_eq!(rect.position, Some((3400.0, 100.0)));
+        assert_eq!((rect.w, rect.h), (900.0, 1200.0));
+        // That monitor unplugged since: centred on the primary and fitted to it.
+        let rect = restore_from(Some(saved), &[primary()], Some(primary()), NEEDED_MIN)
+            .rect
+            .unwrap();
+        assert_eq!(rect.position, None, "centred, never replayed off-screen");
+        assert_eq!(
+            (rect.w, rect.h),
+            (900.0, 1040.0),
+            "capped to the screen it opens on"
+        );
+        // Dragged far off the primary's edge, with no monitor there: the same.
+        let lost = rec(700.0, 600.0, 5000.0, 3000.0, false);
+        let rect = restore_from(Some(lost), &[primary()], Some(primary()), NEEDED_MIN)
+            .rect
+            .unwrap();
+        assert_eq!(rect.position, None);
+        // A hand-shrunk record opens at the board's own floor, not smaller.
+        let tiny = restore_from(
+            Some(rec(300.0, 250.0, 40.0, 40.0, false)),
+            &[primary()],
+            Some(primary()),
+            NEEDED_MIN,
+        )
+        .rect
+        .unwrap();
+        assert_eq!((tiny.w, tiny.h), NEEDED_MIN);
+    }
+
+    #[test]
+    fn the_needed_board_close_is_captured_but_a_minimised_one_is_not() {
+        let cur = WindowGeometry {
+            w: 880.0,
+            h: 990.0,
+            x: 2100.0,
+            y: 30.0,
+            maximized: false,
+        };
+        let first = capture_from(None, cur, false).expect("a close records the box");
+        assert_eq!(first.geom, cur);
+        // Minimised at quit: the record is left as it was, never the parked -32000 box.
+        let parked = WindowGeometry {
+            x: -32000.0,
+            y: -32000.0,
+            ..cur
+        };
+        assert_eq!(capture_from(Some(first), parked, true), None);
+        // The stay-behind and pin flags ride through a close, and through the file.
+        for (behind, on_top) in [(true, false), (false, true)] {
+            let prev = PanelRecord {
+                behind,
+                on_top,
+                ..first
+            };
+            let out = capture_from(Some(prev), cur, false).unwrap();
+            assert_eq!((out.behind, out.on_top), (behind, on_top));
+            let path = std::env::temp_dir().join(format!(
+                "nexus_needed_{}_{}_{behind}.json",
+                std::process::id(),
+                line!()
+            ));
+            save_panel(&path, &out).unwrap();
+            assert_eq!(load_panel(&path), Some(out));
+            let r = restore_from(load_panel(&path), &[primary()], Some(primary()), NEEDED_MIN);
+            assert_eq!((r.behind, r.on_top), (behind, on_top));
+            let _ = std::fs::remove_file(&path);
+        }
+        // Its file is its own, beside settings.json.
+        let p = panel_path("needed", Instance::Main).unwrap();
+        assert_eq!(p.file_name().unwrap(), "window-needed.json");
     }
 
     // ---- the contest logger's pin -------------------------------------------------------------
