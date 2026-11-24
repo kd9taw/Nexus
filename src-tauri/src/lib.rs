@@ -2197,7 +2197,7 @@ mod bound_radio_wiring_tests {
 
     const CHILD: &str = "NEXUS_BOUND_WIRING_CHILD";
 
-    /// A two-radio roster: radio 1 named "IC-705 - portable".
+    /// A two-radio roster: radio 0 "FTDX10", radio 1 named `second`.
     fn roster(second: &str) -> tempo_app::settings::Settings {
         let mut s = tempo_app::settings::Settings::default();
         s.ensure_radio_profiles();
@@ -2207,15 +2207,20 @@ mod bound_radio_wiring_tests {
         s
     }
 
-    /// What this process carries under `settings`: `(radio loop's bound radio, own-spots id,
-    /// near-region id, the radio loop's WSJT-X sender id)`.
-    fn carried_under(
-        settings: &tempo_app::settings::Settings,
-    ) -> (Option<u32>, String, String, String) {
+    /// [`roster`] as the base config the picker lists, which a radio window names itself from.
+    fn base_roster(second: &str) {
+        let file = super::config_dir_for(None).join("settings.json");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        roster(second).save(&file).unwrap();
+    }
+
+    /// What this process carries: `(radio loop's bound radio, own-spots id, near-region id, the
+    /// radio loop's WSJT-X sender id)`.
+    fn carried() -> (Option<u32>, String, String, String) {
         #[cfg(feature = "radio")]
         let (bound, wsjtx_id) = {
             let cfg = super::radio_config_for(
-                settings,
+                &tempo_app::settings::Settings::default(),
                 &tempo_app::engine::SpectrumFeed::default(),
                 &std::sync::Arc::new(tempo_audio::rxtap::RxTap::new()),
                 &tempo_app::engine::MeterFeed::default(),
@@ -2223,7 +2228,7 @@ mod bound_radio_wiring_tests {
             (cfg.bound_radio, cfg.wsjtx_id)
         };
         #[cfg(not(feature = "radio"))]
-        let (bound, wsjtx_id) = (bound_radio_id(), super::wsjtx_sender_id(&settings.radios));
+        let (bound, wsjtx_id) = (bound_radio_id(), super::wsjtx_sender_id());
         (
             bound,
             pskr_feed_client_id("", "W9XYZ"),
@@ -2242,8 +2247,9 @@ mod bound_radio_wiring_tests {
             );
             // GridTracker and JTAlert see the radio's name, as a WSJT-X started with
             // `--rig-name` (#558); the feeds keep the stable key.
+            base_roster("IC-705 - portable");
             assert_eq!(
-                carried_under(&roster("IC-705 - portable")),
+                carried(),
                 (
                     Some(1),
                     "nx-W9XYZ-r1".to_string(),
@@ -2253,10 +2259,8 @@ mod bound_radio_wiring_tests {
             );
             // ⛔ The id never changes mid-session: a rename applies when the window next opens,
             // or a logger's Reply to the old id is dropped and its list splits.
-            assert_eq!(
-                carried_under(&roster("IC-9700")).3,
-                "Nexus - IC-705-portable"
-            );
+            base_roster("IC-9700");
+            assert_eq!(carried().3, "Nexus - IC-705-portable");
             return;
         }
         let out = std::process::Command::new(std::env::current_exe().expect("test binary"))
@@ -2283,8 +2287,9 @@ mod bound_radio_wiring_tests {
 
         // The unbound half, in this process (no profile): the single window keeps every id it had.
         if bound_radio_id().is_none() {
+            base_roster("IC-705 - portable");
             assert_eq!(
-                carried_under(&roster("IC-705 - portable")),
+                carried(),
                 (
                     None,
                     "nexus-W9XYZ".to_string(),
@@ -2300,7 +2305,12 @@ mod bound_radio_wiring_tests {
     #[test]
     fn a_radio_window_s_wsjtx_id_is_its_radio_s_name() {
         let id = |profile: Option<&str>, bound: Option<u32>, second: &str| {
-            super::wsjtx_id_for(profile, bound, &roster(second).radios)
+            let names: Vec<(u32, String)> = roster(second)
+                .radios
+                .into_iter()
+                .map(|r| (r.id, r.name))
+                .collect();
+            super::wsjtx_id_for(profile, bound, &names)
         };
         assert_eq!(id(Some("r1"), Some(1), "IC-7300"), "Nexus - IC-7300");
         assert_eq!(id(Some("r0"), Some(0), "IC-7300"), "Nexus - FTDX10");
@@ -2329,6 +2339,7 @@ mod bound_radio_wiring_tests {
             "Nexus - r5",
             "not in the roster"
         );
+        assert_eq!(id(Some("r1"), Some(1), "r5"), "Nexus - r1", "a radio key");
         assert_eq!(id(None, None, "IC-7300"), "Nexus");
         assert_eq!(id(Some("hf"), None, "IC-7300"), "Nexus - hf");
     }
@@ -3157,7 +3168,7 @@ fn radio_config_for(
         wsjtx_addr: settings.wsjtx_udp_addr.clone(),
         // Each window its own WSJT-X client: "Nexus", or "Nexus - <radio name>" for a radio
         // window, kept for the whole run (`wsjtx_sender_id`).
-        wsjtx_id: wsjtx_sender_id(&settings.radios),
+        wsjtx_id: wsjtx_sender_id(),
         on_wsjtx_udp: Some(std::sync::Arc::new(note_wsjtx_udp)),
         pskreporter: settings.pskreporter,
         // The package's version, known once the app is built: `finish_launch` sets it.
@@ -3169,43 +3180,76 @@ fn radio_config_for(
     }
 }
 
-/// This window's WSJT-X sender id ([`wsjtx_id_for`]), worked out from its roster the first time
-/// it is asked and the same for the rest of the run. A logger keys its instance on the whole id
-/// and addresses its Reply to it ([`tempo_net::server::addressed_to`] matches it exactly), so an id
-/// that changed mid-session would split the logger's list and drop the Reply meant for this
-/// window. A rename takes effect the next time the window opens, as a WSJT-X `--rig-name` does.
-fn wsjtx_sender_id(radios: &[tempo_app::settings::RadioProfile]) -> String {
+/// This window's WSJT-X sender id ([`wsjtx_id_for`]), worked out from the BASE roster the first
+/// time it is asked and the same for the rest of the run.
+///
+/// From base, not this window's roster: every window reads the one roster the picker lists, where
+/// each rename lands ([`persist_radio_identity_to_base`]), so two windows cannot both take a name
+/// that one of them only holds in an older copy. Two windows under one id are one station to
+/// GridTracker, and its Reply then goes to whichever spoke last: a transmission on the wrong rig.
+///
+/// Frozen, because a logger keys its instance on the whole id and addresses its Reply to it
+/// ([`tempo_net::server::addressed_to`] matches it exactly): an id that changed mid-session would
+/// split the logger's list and drop the Reply meant for this window. A rename takes effect the next
+/// time the window opens, as a WSJT-X `--rig-name` does. It names the radio the window was LAUNCHED
+/// for (`--profile r<id>`), as `r<id>` did before it, also when the window later operates another
+/// radio (one refused at launch because another window has it, then switched).
+fn wsjtx_sender_id() -> String {
     static ID: OnceLock<String> = OnceLock::new();
-    ID.get_or_init(|| wsjtx_id_for(active_profile(), bound_radio_id(), radios))
-        .clone()
+    ID.get_or_init(|| {
+        wsjtx_id_for(
+            active_profile(),
+            bound_radio_id(),
+            &roster_names(&config_dir_for(None).join("settings.json")),
+        )
+    })
+    .clone()
 }
 
-/// The WSJT-X sender id of the window running `profile`, bound to radio `bound` of `radios`: what
-/// a WSJT-X started with `--rig-name <radio name>` would send, "Nexus - IC-7300", the name cleaned
-/// by [`tempo_net::rig_name`]. A radio window whose radio has no name left after cleaning, or one
-/// another radio of the roster shares (or would fall back to, ignoring case), is
-/// "Nexus - r<id>": two windows under one id are one station to GridTracker. The station's one
-/// window is "Nexus"; a hand-named profile (`--profile hf`) keeps "Nexus - hf".
-fn wsjtx_id_for(
-    profile: Option<&str>,
-    bound: Option<u32>,
-    radios: &[tempo_app::settings::RadioProfile],
-) -> String {
+/// The `(id, name)` of each radio in the settings file at `file`, read without loading it: a load
+/// would set aside a file it could not read. Empty when there is no such file.
+fn roster_names(file: &Path) -> Vec<(u32, String)> {
+    #[derive(serde::Deserialize)]
+    struct Roster {
+        #[serde(default)]
+        radios: Vec<Named>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Named {
+        id: u32,
+        #[serde(default)]
+        name: String,
+    }
+    std::fs::read_to_string(file)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Roster>(&text).ok())
+        .map(|r| r.radios.into_iter().map(|n| (n.id, n.name)).collect())
+        .unwrap_or_default()
+}
+
+/// The WSJT-X sender id of the window running `profile`, bound to radio `bound` of `radios`
+/// (`(id, name)`): what a WSJT-X started with `--rig-name <radio name>` would send,
+/// "Nexus - IC-7300", the name cleaned by [`tempo_net::rig_name`]. It is "Nexus - r<id>" when
+/// nothing is left of the name, when another radio has the same name, ignoring case, and when the
+/// name looks like a radio key itself ("r5", any case), which another radio's window may fall back
+/// to. The station's one window is "Nexus"; a hand-named profile (`--profile hf`) keeps "Nexus - hf".
+fn wsjtx_id_for(profile: Option<&str>, bound: Option<u32>, radios: &[(u32, String)]) -> String {
     let Some(id) = bound else {
         return tempo_net::sender_id(profile);
     };
-    let fallback = radio_profile_key(id);
     let name = radios
         .iter()
-        .find(|r| r.id == id)
-        .map(|r| tempo_net::rig_name(&r.name))
+        .find(|(r, _)| *r == id)
+        .map(|(_, n)| tempo_net::rig_name(n))
         .unwrap_or_default();
-    let taken = radios.iter().filter(|r| r.id != id).any(|r| {
-        tempo_net::rig_name(&r.name).eq_ignore_ascii_case(&name)
-            || radio_profile_key(r.id).eq_ignore_ascii_case(&name)
-    });
-    if name.is_empty() || taken {
-        tempo_net::sender_id(Some(&fallback))
+    let looks_like_a_key = name
+        .strip_prefix(['r', 'R'])
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()));
+    let taken = radios
+        .iter()
+        .any(|(r, n)| *r != id && tempo_net::rig_name(n).eq_ignore_ascii_case(&name));
+    if name.is_empty() || looks_like_a_key || taken {
+        tempo_net::sender_id(Some(&radio_profile_key(id)))
     } else {
         tempo_net::sender_id(Some(&name))
     }
@@ -3583,12 +3627,10 @@ fn mirror_simultaneous(base: &Path, enabled: bool) {
 /// picker's own overlay blocks the operator from editing) never learned about it, making the new
 /// radio permanently unselectable with no repair path.
 ///
-/// Mirrors radios base does not already have, with their identity + config as created, and for
-/// radios it has, their identity only: the name and whether the radio is enabled, which a rename or
-/// a disable in a radio window changes (the picker lists base's roster, so without them it showed
-/// "Radio 3" for a radio named in its own window, #558). A radio's per-window CAT/audio edits are
-/// NOT pushed back, because each window owns its own radio's live config and base's copy may
-/// legitimately differ. `radio_pegged`/`active_radio` are
+/// Deliberately mirrors only radios base does not already have, and only their identity + config as
+/// created — a radio's per-window CAT/audio edits are NOT pushed back, because each window owns its
+/// own radio's live config and base's copy may legitimately differ. A rename or an enable/disable
+/// mirrors that one radio's identity ([`persist_radio_identity_to_base`]). `radio_pegged`/`active_radio` are
 /// per-window and never touched. Best-effort; a failure just leaves base as it was.
 fn persist_roster_to_base(radios: &[tempo_app::settings::RadioProfile]) {
     if bound_radio_id().is_none() {
@@ -3611,22 +3653,7 @@ fn mirror_roster(base: &Path, radios: &[tempo_app::settings::RadioProfile]) -> s
             .radios
             .iter()
             .any(|b| !radios.iter().any(|r| r.id == b.id));
-        // A radio base already has takes this window's name for it and whether it is enabled:
-        // the picker lists base's roster, by name, enabled radios only. Base's operating radio
-        // stays enabled, the rule `Engine::set_radio_enabled` keeps in every window.
-        let active = s.active_radio;
-        let mut renamed = false;
-        for b in s.radios.iter_mut() {
-            if let Some(r) = radios.iter().find(|r| r.id == b.id) {
-                let enabled = r.enabled || b.id == active;
-                if b.name != r.name || b.enabled != enabled {
-                    b.name = r.name.clone();
-                    b.enabled = enabled;
-                    renamed = true;
-                }
-            }
-        }
-        if added.is_empty() && !removed && !renamed {
+        if added.is_empty() && !removed {
             return false;
         }
         s.radios.retain(|b| radios.iter().any(|r| r.id == b.id));
@@ -3636,6 +3663,60 @@ fn mirror_roster(base: &Path, radios: &[tempo_app::settings::RadioProfile]) -> s
         s.ensure_routing_targets();
         true
     })
+}
+
+/// Mirror ONE radio's identity, its name and whether it is enabled, into the BASE profile's
+/// settings.json, after a rename or an enable/disable of that radio in a radio window. The launch
+/// picker lists base's roster, by name, enabled radios only: without this a radio named in its own
+/// window stayed "Radio 3" in the picker (#558).
+///
+/// Only the radio that changed: a window's names for the OTHER radios can be older than base's
+/// (another window renamed one since this window opened), and mirroring them would put an old name
+/// back over a newer one. Best-effort; a failure just leaves base as it was.
+fn persist_radio_identity_to_base(radio: &tempo_app::settings::RadioProfile) {
+    if bound_radio_id().is_none() {
+        return; // the base config itself, or an independent named profile — nothing to mirror
+    }
+    if let Err(e) = mirror_radio_identity(&config_dir_for(None).join("settings.json"), radio) {
+        eprintln!("tempo: couldn't mirror the radio's name to the base config: {e}");
+    }
+}
+
+/// [`persist_radio_identity_to_base`] for the base config at `base`. Base's operating radio stays
+/// enabled, the rule `Engine::set_radio_enabled` keeps in every window. A radio base does not have
+/// is left to [`mirror_roster`].
+fn mirror_radio_identity(
+    base: &Path,
+    radio: &tempo_app::settings::RadioProfile,
+) -> std::io::Result<()> {
+    SettingsWriter::of(base).rewrite(|s| {
+        let active = s.active_radio;
+        let Some(b) = s.radios.iter_mut().find(|b| b.id == radio.id) else {
+            return false;
+        };
+        let enabled = radio.enabled || b.id == active;
+        if b.name == radio.name && b.enabled == enabled {
+            return false;
+        }
+        b.name = radio.name.clone();
+        b.enabled = enabled;
+        true
+    })
+}
+
+/// Take base's name and enabled flag for every radio this window knows OTHER than `bound`, the one
+/// it drives: base holds the latest of each (every rename and enable mirrors there,
+/// [`persist_radio_identity_to_base`]), where this window's copy is as old as the last time it
+/// opened. Its own radio keeps this window's name, which this window owns. A radio this window
+/// operates stays enabled.
+fn adopt_base_identities(settings: &mut Settings, base: &Settings, bound: u32) {
+    let active = settings.active_radio;
+    for r in settings.radios.iter_mut().filter(|r| r.id != bound) {
+        if let Some(b) = base.radios.iter().find(|b| b.id == r.id) {
+            r.name = b.name.clone();
+            r.enabled = b.enabled || r.id == active;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -3692,7 +3773,9 @@ mod roster_mirror_tests {
         window.radios[2].serial_port = "COM9".into();
         window.radios[3].name = "IC-9700".into();
         window.radios[1].enabled = false;
-        mirror_roster(&base, &window.radios).unwrap();
+        for changed in [1, 2, 3] {
+            mirror_radio_identity(&base, &window.radios[changed]).unwrap();
+        }
 
         let after = Settings::load(&base);
         assert_eq!(
@@ -3711,8 +3794,96 @@ mod roster_mirror_tests {
 
         // Re-enabled in a window: the picker offers it again.
         window.radios[1].enabled = true;
-        mirror_roster(&base, &window.radios).unwrap();
+        mirror_radio_identity(&base, &window.radios[1]).unwrap();
         assert!(Settings::load(&base).radios[1].enabled);
+    }
+
+    /// ⛔ A rename made in one window survives a later change in another, whose roster still holds
+    /// the old name for that radio: a rename mirrors the one radio it changed, and an add or a
+    /// remove mirrors which radios exist, never their names.
+    #[test]
+    fn a_later_mirror_from_another_window_keeps_an_earlier_rename() {
+        let dir = scratch("roster-clobber");
+        let base = dir.join("settings.json");
+        four_radios().save(&base).unwrap();
+        let mut w3 = four_radios();
+        w3.radios[3].name = "IC-9700".into();
+        mirror_radio_identity(&base, &w3.radios[3]).unwrap();
+        assert_eq!(Settings::load(&base).radios[3].name, "IC-9700");
+
+        let mut w2 = four_radios(); // window r2: radio 3 is still "Radio 4" here
+        w2.radios[2].name = "IC-705".into();
+        mirror_radio_identity(&base, &w2.radios[2]).unwrap();
+        w2.radios[3].enabled = false;
+        w2.add_radio_profile();
+        mirror_roster(&base, &w2.radios).unwrap();
+        let after = Settings::load(&base);
+        assert_eq!(after.radios.len(), 5, "premise: the add reached base");
+        assert_eq!(after.radios[2].name, "IC-705");
+        assert_eq!(
+            after.radios[3].name, "IC-9700",
+            "window r3's rename survives"
+        );
+        assert!(after.radios[3].enabled, "and nobody disabled radio 3");
+    }
+
+    /// A radio window opening takes base's name and enabled flag for the radios other windows
+    /// drive, and keeps its own radio's, and a radio it operates stays enabled.
+    #[test]
+    fn a_radio_window_takes_the_other_radios_names_from_base() {
+        let mut base = four_radios();
+        base.radios[1].name = "IC-9700".into();
+        base.radios[2].name = "Base name for 2".into();
+        base.radios[3].enabled = false;
+        base.radios[0].enabled = false;
+        let mut window = four_radios();
+        window.radios[2].name = "IC-705".into();
+        window.active_radio = 0;
+        adopt_base_identities(&mut window, &base, 2);
+        assert_eq!(
+            names(&window),
+            vec![
+                (0, "FTDX10".to_string(), true),
+                (1, "IC-9700".to_string(), true),
+                (2, "IC-705".to_string(), true),
+                (3, "Radio 4".to_string(), false),
+            ]
+        );
+    }
+
+    /// ⛔ TX: two windows never send under one WSJT-X id, though each one's roster holds an old
+    /// name for the other's radio. GridTracker takes two windows under one id for one station and
+    /// sends its Reply to whichever spoke last, arming the wrong rig. Each window names itself
+    /// from base, read when it opens, after every rename so far has landed there.
+    #[test]
+    fn two_windows_never_share_a_wsjtx_id() {
+        let dir = scratch("roster-ids");
+        let base = dir.join("settings.json");
+        four_radios().save(&base).unwrap();
+        let id_of = |radio: u32| {
+            wsjtx_id_for(
+                Some(&radio_profile_key(radio)),
+                Some(radio),
+                &roster_names(&base),
+            )
+        };
+        // Both renamed in their own windows (each roster still holds the other's old name).
+        let mut w0 = four_radios();
+        w0.radios[0].name = "IC-905".into();
+        mirror_radio_identity(&base, &w0.radios[0]).unwrap();
+        let first = id_of(0); // window r0 opens now
+        assert_eq!(first, "Nexus - IC-905");
+        let mut w1 = four_radios();
+        w1.radios[1].name = "IC-905".into();
+        mirror_radio_identity(&base, &w1.radios[1]).unwrap();
+        let second = id_of(1); // window r1 opens after its rename
+        assert_ne!(first, second);
+        assert_eq!(second, "Nexus - r1");
+        // Both windows reopened: neither takes the shared name.
+        assert_eq!(
+            (id_of(0), id_of(1)),
+            ("Nexus - r0".into(), "Nexus - r1".into())
+        );
     }
 
     /// Base's own operating radio is never switched off by a mirror, the rule
@@ -3725,7 +3896,7 @@ mod roster_mirror_tests {
         let mut window = four_radios();
         window.active_radio = 2;
         window.radios[0].enabled = false;
-        mirror_roster(&base, &window.radios).unwrap();
+        mirror_radio_identity(&base, &window.radios[0]).unwrap();
         let after = Settings::load(&base);
         assert_eq!(after.active_radio, 0, "premise");
         assert!(after.radios[0].enabled);
@@ -3740,8 +3911,9 @@ mod roster_mirror_tests {
             let rest = &src[src.find(&format!("\n{sig}")).expect(sig) + 1..];
             let body = &rest[..rest.find("\n}\n").expect("the end of the function")];
             assert!(
-                body.contains("persist_roster_to_base(&eng.settings().radios);"),
-                "{sig} must mirror the roster to base"
+                body.contains("persist_radio_identity_to_base(radio);")
+                    && !body.contains("persist_roster_to_base("),
+                "{sig} must mirror the radio it changed, and only that one"
             );
         }
     }
@@ -3836,24 +4008,10 @@ fn heal_radio_names(s: &mut Settings, own: impl Fn(u32) -> Option<String>) -> bo
 /// that window's settings: a load would set aside a file it could not read, in another window's
 /// folder. `None` when the window has no file or does not name the radio.
 fn radio_window_name(id: u32) -> Option<String> {
-    #[derive(serde::Deserialize)]
-    struct Roster {
-        #[serde(default)]
-        radios: Vec<Named>,
-    }
-    #[derive(serde::Deserialize)]
-    struct Named {
-        id: u32,
-        #[serde(default)]
-        name: String,
-    }
-    let file = config_dir_for(Some(&radio_profile_key(id))).join("settings.json");
-    let roster: Roster = serde_json::from_str(&std::fs::read_to_string(file).ok()?).ok()?;
-    roster
-        .radios
+    roster_names(&config_dir_for(Some(&radio_profile_key(id))).join("settings.json"))
         .into_iter()
-        .find(|r| r.id == id)
-        .map(|r| r.name)
+        .find(|(r, _)| *r == id)
+        .map(|(_, name)| name)
 }
 
 /// [`heal_radio_names`] from each radio window's file, once per install: a marker beside base's
@@ -31334,7 +31492,9 @@ fn rename_radio(
         eprintln!("tempo: rename_radio save failed: {e}")
     });
     // …and into the base config, or the launch picker keeps the old name.
-    persist_roster_to_base(&eng.settings().radios);
+    if let Some(radio) = eng.settings().radios.iter().find(|r| r.id == id) {
+        persist_radio_identity_to_base(radio);
+    }
     Ok(eng.snapshot())
 }
 
@@ -31358,7 +31518,9 @@ fn set_radio_enabled(
         eprintln!("tempo: set_radio_enabled save failed: {e}")
     });
     // …and into the base config, or the launch picker offers a disabled radio, or hides one.
-    persist_roster_to_base(&eng.settings().radios);
+    if let Some(radio) = eng.settings().radios.iter().find(|r| r.id == id) {
+        persist_radio_identity_to_base(radio);
+    }
     Ok(eng.snapshot())
 }
 
@@ -53652,6 +53814,10 @@ pub fn run() {
             );
             settings.radios.extend(missing);
             settings.ensure_distinct_radio_ports();
+        }
+        // …and base's name and enabled flag for the radios other windows drive.
+        if let Some(bound) = bound_radio {
+            adopt_base_identities(&mut settings, &base, bound);
         }
         // Routing is station-wide, so base is authoritative for it (a per-window table would make
         // "which rig does 2 m FM" depend on which window you asked).
