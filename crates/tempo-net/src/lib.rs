@@ -88,7 +88,7 @@ pub fn on_a_transmit_driver() -> bool {
         .is_some_and(|n| n == flex::session::DRIVER_THREAD || n == tci::session::DRIVER_THREAD)
 }
 pub use pskreporter::{PskReporter, Spot};
-pub use server::{is_nexus_id, sender_id, WsjtxServer, APP_ID};
+pub use server::{is_nexus_id, rig_name, sender_id, WsjtxServer, APP_ID};
 pub use wsjtx::{Decode, Inbound, QsoLogged, Status};
 
 /// Band label → the meter-string the club-log protocols expect ("20m" → "20").

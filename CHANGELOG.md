@@ -5,6 +5,16 @@ All notable changes to Nexus (formerly Tempo) are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **GridTracker and JTAlert show each radio window under your radio's name (#558).** A radio window used to send its WSJT-X UDP messages as "Nexus - r0", "Nexus - r1" and so on, Nexus's internal radio numbers. It now sends as "Nexus - " followed by the name you gave the radio, such as "Nexus - IC-7300", the way WSJT-X names a copy started with a rig name. The characters WSJT-X refuses in a rig name (`\`, `/` and `,`) are left out, and a " - " inside the name becomes "-", so GridTracker shows the whole name. A radio with no name, with the same name as another of your radios, or with a name like "r5", or with a name another open window still sends under (renamed since it opened), keeps "Nexus - r" and its number, so the windows of two different radios never share a name. A second window opened for a radio that already has one sends nothing to GridTracker or JTAlert, and its Connections log says why. The name is the one the radio picker shows. A window keeps the name of the radio it opened for, even if you switch it to another radio. Like WSJT-X, a window keeps its name while it is open: a rename shows in GridTracker and JTAlert the next time that window opens. If JTAlert remembers settings for the old name, choose the new name once. The single window is still "Nexus". A correction to the 1.25.0 notes: the first radio window was "Nexus - r0", not "Nexus - r1".
+- **Nexus tells GridTracker and JTAlert when a window closes.** Each window now sends the WSJT-X "closing" message when it quits, as WSJT-X does, so GridTracker drops the window from its list instead of keeping it until GridTracker restarts. Nexus also sends it when the WSJT-X UDP output is turned off or pointed at a new address, which WSJT-X does not; GridTracker then lists the window again as soon as it hears from it. An old "tempo" entry left from before 1.25.0 goes away when GridTracker restarts. Tested in software only; not yet tried with GridTracker or JTAlert.
+
+### Fixed
+- **The radio picker shows the names you gave your radios (#558).** With three or more radios, each in its own window, the picker at launch listed a radio named in its own window as "Radio 3" or "Radio 4", and a radio disabled or enabled there still showed, or stayed missing, in the picker. A rename and an enable or disable made in any radio window now reach the picker, and every radio window shows the latest names of the other radios when it opens. Names you already set in a radio's own window are picked up the first time Nexus starts after the update, so you don't need to rename them again.
+- **Settings and the radio picker no longer talk about just two radios.** With three or more radios, the picker said "You have two radios running at once… open a second window for the other", and Settings ▸ Radios offered "Run both radios at the same time". Both now speak of any number of radios, in every language.
+
 ## [1.25.1] — 2026-11-24
 
 ### Fixed

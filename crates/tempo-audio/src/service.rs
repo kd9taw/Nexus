@@ -2286,6 +2286,11 @@ pub struct RadioConfig {
     /// The sender id this window's WSJT-X messages carry (`tempo_net::sender_id` of its
     /// profile), so each window of a station is its own client to GridTracker and JTAlert.
     pub wsjtx_id: String,
+    /// Why this window must send no WSJT-X UDP at all, said in the Connections log in place of
+    /// sending while the switch is on (`None`: it sends). Set for a second window of a radio
+    /// another window already drives: both would send under one id, and a logger's Reply would go
+    /// to whichever spoke last.
+    pub wsjtx_udp_refused: Option<String>,
     /// Where the WSJT-X sink says, in the operator's Connections log, that it cannot send
     /// (`Err`, a line that stands until it can) and that it has stopped failing (`Ok`). `None`
     /// (tests, tools): the diagnostic log alone.
@@ -2347,6 +2352,7 @@ impl Default for RadioConfig {
             wsjtx_udp: false,
             wsjtx_addr: "127.0.0.1:2237".to_string(),
             wsjtx_id: tempo_net::APP_ID.to_string(),
+            wsjtx_udp_refused: None,
             on_wsjtx_udp: None,
             pskreporter: false,
             app_version: String::new(),
@@ -2662,6 +2668,21 @@ fn build_wsjtx_server(
     }
 }
 
+/// [`build_wsjtx_server`], unless this window may send nothing ([`RadioConfig::wsjtx_udp_refused`]):
+/// then, with the switch on, the refusal is the sink's failure, said where every failure is.
+fn build_wsjtx_sink(
+    enabled: bool,
+    addr: &str,
+    app_version: &str,
+    id: &str,
+    refused: Option<&str>,
+) -> Result<Option<WsjtxServer>, String> {
+    match refused {
+        Some(why) if enabled => Err(why.to_string()),
+        _ => build_wsjtx_server(enabled, addr, app_version, id),
+    }
+}
+
 /// Whether the WSJT-X sink is failing, told where the operator looks: the diagnostic log and the
 /// Connections log ([`RadioConfig::on_wsjtx_udp`]), as the other connectors report. A failure
 /// is said once and stands until a build succeeds or the switch is turned off, which ends it
@@ -2754,15 +2775,25 @@ impl WsjtxPulse {
     }
 }
 
+/// Retire the WSJT-X sink, saying Close under its id first, as WSJT-X's `MessageClient` does as it
+/// ends: a listener then drops the window instead of keeping it in its list (GridTracker keeps a
+/// client that never said Close until GridTracker restarts).
+fn close_wsjtx(wsjtx: &mut Option<WsjtxServer>) {
+    if let Some(server) = wsjtx.take() {
+        let _ = server.send_close();
+    }
+}
+
 /// The WSJT-X sink the radio loop holds, brought in line with `s` once per loop pass: rebuilt
-/// when the switch or the address changed (the build sends the opening Heartbeat and restarts the
-/// pulse), and otherwise sent its Heartbeat when one is due at `now`, every [`WSJTX_PULSE`] as
-/// WSJT-X's MessageClient does.
+/// when the switch or the address changed (the old sink says Close first, [`close_wsjtx`]; the
+/// build sends the opening Heartbeat and restarts the pulse), and otherwise sent its Heartbeat
+/// when one is due at `now`, every [`WSJTX_PULSE`] as WSJT-X's MessageClient does.
 #[allow(clippy::too_many_arguments)]
 fn hot_apply_wsjtx(
     s: &tempo_app::settings::Settings,
     app_version: &str,
     id: &str,
+    refused: Option<&str>,
     now: Instant,
     wsjtx: &mut Option<WsjtxServer>,
     applied: &mut (bool, String),
@@ -2770,11 +2801,15 @@ fn hot_apply_wsjtx(
     health: &mut WsjtxUdpHealth,
 ) {
     if (s.wsjtx_udp, s.wsjtx_udp_addr.as_str()) != (applied.0, applied.1.as_str()) {
-        *wsjtx = health.settle(build_wsjtx_server(
+        // Before the build: the new sink's Heartbeat must come after the Close, or a listener
+        // drops the window it has just heard from.
+        close_wsjtx(wsjtx);
+        *wsjtx = health.settle(build_wsjtx_sink(
             s.wsjtx_udp,
             &s.wsjtx_udp_addr,
             app_version,
             id,
+            refused,
         ));
         *pulse = WsjtxPulse::sent_at(now);
         *applied = (s.wsjtx_udp, s.wsjtx_udp_addr.clone());
@@ -2990,11 +3025,12 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     // never connects (the reported "needs a Nexus restart" bug). `*_applied` tracks what
     // the current emitters were built for so the loop rebuilds only on a real change.
     let mut wsjtx_health = WsjtxUdpHealth::new(cfg.on_wsjtx_udp.clone());
-    let mut wsjtx = wsjtx_health.settle(build_wsjtx_server(
+    let mut wsjtx = wsjtx_health.settle(build_wsjtx_sink(
         cfg.wsjtx_udp,
         &cfg.wsjtx_addr,
         &cfg.app_version,
         &cfg.wsjtx_id,
+        cfg.wsjtx_udp_refused.as_deref(),
     ));
     let mut wsjtx_pulse = WsjtxPulse::sent_at(Instant::now());
     let mut wsjtx_applied = (cfg.wsjtx_udp, cfg.wsjtx_addr.clone());
@@ -3117,6 +3153,8 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
             // exit, so they are in the log the quit flushes: dropping the worker waits for every
             // record already handed to it (milliseconds). After the unkey above, never before it.
             state.companion_import = None;
+            // GridTracker and JTAlert told this window is gone, as WSJT-X tells them on quit.
+            close_wsjtx(&mut wsjtx);
             SHUTDOWN_DONE.store(true, std::sync::atomic::Ordering::Relaxed);
             return Ok(());
         }
@@ -3131,6 +3169,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
                 e.settings(),
                 &cfg.app_version,
                 &cfg.wsjtx_id,
+                cfg.wsjtx_udp_refused.as_deref(),
                 Instant::now(),
                 &mut wsjtx,
                 &mut wsjtx_applied,
@@ -24837,6 +24876,7 @@ mod tests {
                 s,
                 "1.21.0",
                 tempo_net::APP_ID,
+                None,
                 t0 + Duration::from_millis(ms),
                 &mut wsjtx,
                 &mut applied,
@@ -24852,12 +24892,152 @@ mod tests {
         assert_eq!(count(&first), 1, "the pulse, from the loop's own pass");
         s.wsjtx_udp_addr = second.local_addr().unwrap().to_string();
         pass(&s, 20_000);
+        assert_eq!(count(&first), 1, "the old sink's Close");
         assert_eq!(count(&second), 1, "rebuilt for the new address");
         pass(&s, 30_000);
         assert_eq!(count(&second), 0, "the pulse starts again at the rebuild");
         pass(&s, 35_000);
         assert_eq!(count(&second), 1);
         assert_eq!(count(&first), 0, "the old address hears nothing more");
+    }
+
+    /// ⛔ #558: a sink retired by a rebuild, or by the switch turned off, says Close under its id,
+    /// before the new sink's Heartbeat: GridTracker drops a window only on Close, so a window that
+    /// never said it stayed in its list until GridTracker restarted.
+    #[test]
+    fn a_retired_wsjtx_sink_says_close_under_its_id() {
+        let bind = || {
+            let l = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+            l.set_read_timeout(Some(std::time::Duration::from_millis(300)))
+                .unwrap();
+            l
+        };
+        // Each datagram's (type, id), in the order it arrived.
+        let heard = |l: &std::net::UdpSocket| {
+            let mut buf = [0u8; 512];
+            let mut got = Vec::new();
+            while let Ok((n, _)) = l.recv_from(&mut buf) {
+                let mut r = tempo_net::qds::QdsReader::new(&buf[..n]);
+                r.read_u32().expect("magic");
+                r.read_u32().expect("schema");
+                let kind = r.read_u32().expect("type");
+                got.push((kind, r.read_utf8().flatten().expect("id")));
+            }
+            got
+        };
+        const HEARTBEAT: u32 = 0;
+        const CLOSE: u32 = 6;
+        let id = "Nexus - IC-7300";
+        let (first, second) = (bind(), bind());
+        let mut s = tempo_app::settings::Settings {
+            wsjtx_udp: true,
+            wsjtx_udp_addr: first.local_addr().unwrap().to_string(),
+            ..Default::default()
+        };
+        let t0 = Instant::now();
+        let mut wsjtx = None;
+        let mut applied = (false, String::new());
+        let mut pulse = WsjtxPulse::sent_at(t0);
+        let mut health = WsjtxUdpHealth::new(None);
+        let mut pass = |s: &tempo_app::settings::Settings| {
+            hot_apply_wsjtx(
+                s,
+                "1.25.1",
+                id,
+                None,
+                t0,
+                &mut wsjtx,
+                &mut applied,
+                &mut pulse,
+                &mut health,
+            )
+        };
+        pass(&s);
+        assert_eq!(heard(&first), [(HEARTBEAT, id.to_string())]);
+        s.wsjtx_udp_addr = second.local_addr().unwrap().to_string();
+        pass(&s);
+        assert_eq!(
+            heard(&first),
+            [(CLOSE, id.to_string())],
+            "the old sink's Close"
+        );
+        assert_eq!(heard(&second), [(HEARTBEAT, id.to_string())]);
+        s.wsjtx_udp = false;
+        pass(&s);
+        assert_eq!(heard(&second), [(CLOSE, id.to_string())], "turned off");
+
+        // Same address, rebuilt: the Close comes before the new Heartbeat.
+        s.wsjtx_udp = true;
+        pass(&s);
+        assert_eq!(heard(&second), [(HEARTBEAT, id.to_string())]);
+        s.wsjtx_udp_addr = format!("{},{}", s.wsjtx_udp_addr, s.wsjtx_udp_addr);
+        pass(&s);
+        let order: Vec<u32> = heard(&second).into_iter().map(|(k, _)| k).collect();
+        assert_eq!(order.first(), Some(&CLOSE), "{order:?}");
+        assert!(order[1..].iter().all(|&k| k == HEARTBEAT), "{order:?}");
+    }
+
+    /// ⛔ TX: a window refused WSJT-X UDP (a second window of a radio another window drives, which
+    /// would send under that window's id) sends nothing, and says why in the Connections log while
+    /// the switch is on.
+    #[test]
+    fn a_window_refused_wsjtx_udp_sends_nothing_and_says_why() {
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_millis(300)))
+            .unwrap();
+        let said = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Result<String, String>>::new()));
+        let note: WsjtxUdpNote = {
+            let said = said.clone();
+            std::sync::Arc::new(move |line| said.lock().unwrap().push(line))
+        };
+        let s = tempo_app::settings::Settings {
+            wsjtx_udp: true,
+            wsjtx_udp_addr: listener.local_addr().unwrap().to_string(),
+            ..Default::default()
+        };
+        let t0 = Instant::now();
+        let mut wsjtx = None;
+        let mut applied = (false, String::new());
+        let mut pulse = WsjtxPulse::sent_at(t0);
+        let mut health = WsjtxUdpHealth::new(Some(note));
+        let why = "already open in another window";
+        hot_apply_wsjtx(
+            &s,
+            "1.25.1",
+            "Nexus - r1",
+            Some(why),
+            t0,
+            &mut wsjtx,
+            &mut applied,
+            &mut pulse,
+            &mut health,
+        );
+        let mut buf = [0u8; 512];
+        assert!(wsjtx.is_none(), "no sink");
+        assert!(listener.recv_from(&mut buf).is_err(), "nothing sent");
+        assert_eq!(*said.lock().unwrap(), vec![Err(why.to_string())]);
+    }
+
+    /// `run_radio` says Close on the quit, after the unkey and before it tells the app it may
+    /// exit. Source-scanned: the quit branch runs inside a thread that opens real devices.
+    #[test]
+    fn run_radio_says_close_on_the_quit() {
+        let src = include_str!("service.rs");
+        let rest = &src[src.find("\npub fn run_radio(").expect("run_radio") + 1..];
+        let body = &rest[..rest.find("\n}\n").expect("the end of run_radio")];
+        let quit = body
+            .find("state.stop_for_shutdown(")
+            .expect("the quit branch");
+        let close = body[quit..]
+            .find("close_wsjtx(&mut wsjtx);")
+            .expect("the quit says Close")
+            + quit;
+        let done = body[quit..]
+            .find("SHUTDOWN_DONE.store(true")
+            .expect("the quit's end")
+            + quit;
+        assert!(close < done, "Close goes out before the app may exit");
     }
 
     /// `run_radio` (a thread that opens real devices, so it is source-scanned) gives the sink its

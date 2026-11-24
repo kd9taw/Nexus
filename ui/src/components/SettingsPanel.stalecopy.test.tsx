@@ -312,7 +312,7 @@ describe('an edit made in any section of Settings is saved', () => {
 
   const EDITS: SectionEdit[] = [
     { section: 'operator-radio', ...field('mygrid', 'EN52', 'EN61', 'FN31'), edit: setIn('operator-radio', 'textbox', /^Grid/, 'FN31') },
-    { section: 'radios', ...field('simultaneousRadios', false, false, true), edit: clickIn('radios', 'checkbox', 'Run both radios at the same time') },
+    { section: 'radios', ...field('simultaneousRadios', false, false, true), edit: clickIn('radios', 'checkbox', 'Run all radios at the same time') },
     { section: 'rig-control', ...field('wheelTuneSensitivity', 1, 0.5, 1.5), edit: setIn('rig-control', 'slider', 'Mouse-wheel tuning sensitivity', '1.5') },
     { section: 'rig-advanced', ...field('dataModesPlainSsb', false, false, true), edit: opened('rig-advanced', clickIn('rig-advanced', 'switch', /^Data modes use plain SSB/)) },
     { section: 'audio', ...field('rxGain', 1, 2, 3), edit: setIn('audio', 'slider', 'RX capture gain', '3') },

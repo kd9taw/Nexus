@@ -8250,7 +8250,7 @@ export const EN = {
   'radios.picker.aria': 'Choose radio',
   'radios.picker.title': 'Which radio?',
   'radios.picker.sub':
-    'You have two radios running at once. Pick the radio this window will operate — you can open a second window for the other. They share one logbook.',
+    'You run several radios at once. Pick the radio this window will operate — each of the others can open in a window of its own. They all share one logbook.',
   'radios.picker.inUse.title': '{{name}} is already open in another window',
   'radios.picker.inUse.tag': 'in use',
   'radios.picker.choose.title': 'Operate {{name}}',
@@ -8606,9 +8606,9 @@ export const EN = {
     'Run two rigs at once — e.g. an HF radio plus a VHF/UHF radio on a different antenna? Add a second radio; you can then Edit either one without interrupting the one you are operating on. Newcomers can ignore this.',
   // The accessible name is its own entry, not a slice of the hint below it: a hint is a whole
   // sentence and a control's name is a name, and the two are free to differ in a language.
-  'settings.radios.simultaneous.aria': 'Run both radios at the same time',
+  'settings.radios.simultaneous.aria': 'Run all radios at the same time',
   'settings.radios.simultaneous.hint':
-    '<b>Run both radios at the same time</b> — launch Nexus and it asks which radio this window drives; open a second window for the other. Both share one logbook. Leave off if you only ever use one radio at a time (you can still switch between them from the top bar).',
+    '<b>Run all radios at the same time</b> — launch Nexus and it asks which radio this window drives; each radio gets a window of its own. They all share one logbook. Leave off if you only ever use one radio at a time (you can still switch between them from the top bar).',
 
   // Band + mode routing. `{{n}}` is a rule's position in the table, counted from 1.
   'settings.routing.intro':

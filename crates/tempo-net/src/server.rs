@@ -6,7 +6,7 @@
 //! non-blocking for inbound control datagrams (Reply / HaltTx / FreeText).
 //!
 //! Every datagram carries the window's sender id ([`sender_id`]): `"Nexus"` for the station's
-//! one window, `"Nexus - <profile>"` for each radio window.
+//! one window, `"Nexus - <radio name>"` for each radio window.
 
 use crate::wsjtx::{self, Decode, Inbound, QsoLogged, Status};
 use std::io;
@@ -25,17 +25,32 @@ pub const APP_ID: &str = "Nexus";
 /// sends). GridTracker splits an id on it and shows the part after it as the rig's name.
 const PROFILE_SEPARATOR: &str = " - ";
 
-/// The sender id of the window running `profile` (`None`: the default profile, the station's one
+/// The sender id of the window named `name`, its WSJT-X `--rig-name` (`None`: the station's one
 /// window). Each window of a station is its own WSJT-X client, as each `wsjtx --rig-name` instance
 /// is: under one id GridTracker and JTAlert took two windows' Status for one station flipping
-/// between two bands. Stable for a profile, so a listener keeps one entry per window across
-/// launches. `profile` is the sanitized profile name (`[A-Za-z0-9_-]`, at most 32 characters),
-/// which holds none of the characters WSJT-X refuses in a rig name (`\`, `/`, `,`).
-pub fn sender_id(profile: Option<&str>) -> String {
-    match profile {
+/// between two bands. `name` is a radio window's radio name, cleaned by [`rig_name`], or a
+/// hand-named profile's name. The caller keeps it for the whole run, as WSJT-X keeps its own: a
+/// logger keys its instance, and addresses a Reply, by the whole id.
+pub fn sender_id(name: Option<&str>) -> String {
+    match name {
         Some(p) => format!("{APP_ID}{PROFILE_SEPARATOR}{p}"),
         None => APP_ID.to_string(),
     }
+}
+
+/// An operator's radio name made fit to be a window's rig name in [`sender_id`]: the characters
+/// WSJT-X refuses in `--rig-name` (`\`, `/` and `,`; `main.cpp` stops on them) dropped, every
+/// " - " made "-" so GridTracker, which shows what follows the last " - ", shows the whole name,
+/// and the ends trimmed. Empty when nothing is left.
+pub fn rig_name(name: &str) -> String {
+    let mut out: String = name
+        .chars()
+        .filter(|c| !matches!(c, '\\' | '/' | ','))
+        .collect();
+    while out.contains(PROFILE_SEPARATOR) {
+        out = out.replace(PROFILE_SEPARATOR, "-");
+    }
+    out.trim().to_string()
 }
 
 /// Whether `id` is one of this station's own windows ([`sender_id`] of any profile): a datagram
@@ -261,7 +276,6 @@ impl WsjtxServer {
         self.send(&wsjtx::encode_logged_adif(&self.id, adif_record))
     }
 
-    /// Send a Close (Tempo is shutting down).
     /// **Clear (type 3)** — tell consumers (JTAlert/GridTracker) we erased a
     /// decode window so they clear theirs: 0 = Band Activity, 1 = Rx Frequency,
     /// 2 = both.
@@ -269,6 +283,9 @@ impl WsjtxServer {
         self.send(&wsjtx::encode_clear(&self.id, window))
     }
 
+    /// **Close (type 6)**: this client is going, under the id it sent everything with, as WSJT-X's
+    /// `MessageClient` says as it ends. A listener drops the instance on it; GridTracker otherwise
+    /// keeps a gone window in its list until it restarts.
     pub fn send_close(&self) -> io::Result<()> {
         self.send(&wsjtx::encode_close(&self.id))
     }
@@ -556,6 +573,63 @@ mod tests {
         ] {
             assert!(!is_nexus_id(id), "{id:?}");
         }
+    }
+
+    /// A radio's name becomes a rig name GridTracker shows whole and WSJT-X would accept.
+    #[test]
+    fn a_radio_name_is_cleaned_as_a_rig_name() {
+        for (name, cleaned) in [
+            ("IC-7300", "IC-7300"),
+            ("  FT-991A shack ", "FT-991A shack"),
+            ("IC-705 - portable", "IC-705-portable"),
+            ("a  -  b", "a-b"),
+            ("K3/P3, \\main", "K3P3 main"),
+            ("Ä 9700 ✓", "Ä 9700 ✓"),
+            (" / , ", ""),
+            ("", ""),
+        ] {
+            assert_eq!(rig_name(name), cleaned, "{name:?}");
+        }
+        let id = sender_id(Some(&rig_name("IC-705 - portable")));
+        assert_eq!(id, "Nexus - IC-705-portable");
+        assert!(is_nexus_id(&id));
+        assert_eq!(
+            id.rsplit(PROFILE_SEPARATOR).next(),
+            Some("IC-705-portable"),
+            "what GridTracker shows"
+        );
+    }
+
+    /// A Reply addressed to a window under its radio's name reaches that window and no other.
+    #[test]
+    fn a_reply_to_a_radio_name_reaches_that_window_only() {
+        let reply = |to: &str| Inbound::Reply {
+            id: to.into(),
+            time_ms: 0,
+            snr: -5,
+            delta_time: 0.1,
+            delta_freq: 1500,
+            mode: "~".into(),
+            message: "CQ W1AW FN31".into(),
+            low_confidence: false,
+            modifiers: 0,
+        };
+        let (base, ic7300, ic705) = (
+            sender_id(None),
+            sender_id(Some(&rig_name("IC-7300"))),
+            sender_id(Some(&rig_name("IC-705 - portable"))),
+        );
+        assert!(addressed_to(&ic7300, &reply("Nexus - IC-7300")));
+        assert!(!addressed_to(&ic705, &reply("Nexus - IC-7300")));
+        assert!(
+            !addressed_to(&base, &reply("Nexus - IC-7300")),
+            "a Nexus window's, so not the base window's"
+        );
+        assert!(addressed_to(&ic705, &reply("Nexus - IC-705-portable")));
+        assert!(
+            !addressed_to(&ic705, &reply("Nexus - ic-705-portable")),
+            "exact"
+        );
     }
 
     /// A request that acts on one station is taken only by the window it names; a halt by every
