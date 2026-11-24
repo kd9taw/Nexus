@@ -37,12 +37,25 @@ function firstClickOn(el: Element) {
   fireEvent.click(el, { detail: 1 })
 }
 
-it("a card's Work button double-clicked after another card was selected works that card, every time", () => {
+it("a card's Work button double-clicked after another card was selected works that card, once", () => {
   const { onCall, card } = cards([st('AAAA'), st('BBBB')])
   fireEvent.click(card('AAAA').querySelector('.station-open')!, { detail: 1 }) // an earlier, separate selection
   const w = card('BBBB').querySelector('.station-work')!
   fireEvent.click(w, { detail: 1 }); fireEvent.click(w, { detail: 2 }); fireEvent.doubleClick(w, { detail: 2 })
-  expect(onCall.mock.calls.map((c) => c[0])).toEqual(['BBBB', 'BBBB', 'BBBB'])
+  expect(onCall.mock.calls.map((c) => c[0])).toEqual(['BBBB'])
+})
+
+// Work works on ONE click. A double-click on it is the same intent, once: its second click (which, with
+// the cards re-sorting between the clicks, can land on another card's Work and arm TX for that station)
+// and the double-click it ends with work nothing more.
+it("a card's Work button double-clicked while the cards re-sort works the first card, once", () => {
+  const { onCall, card } = cards([st('AAAA'), st('BBBB')])
+  const wa = card('AAAA').querySelector('.station-work')!
+  firstClickOn(wa)
+  const wb = card('BBBB').querySelector('.station-work')! // the cards re-sorted: B's Work is under the pointer now
+  fireEvent.mouseDown(wb, { detail: 2 }); fireEvent.mouseUp(wb, { detail: 2 }); fireEvent.click(wb, { detail: 2 })
+  fireEvent.doubleClick(wb, { detail: 2 })
+  expect(onCall.mock.calls.map((c) => c[0])).toEqual(['AAAA'])
 })
 
 it("a card's body double-clicked after another card was selected works that card", () => {
