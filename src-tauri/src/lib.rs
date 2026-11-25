@@ -31915,17 +31915,103 @@ fn save_station_profile_on(
 
 /// Remove one "My station" profile. Home and the profile the station is on stay. Returns the
 /// snapshot.
+///
+/// #503: the profile's own QRZ Logbook key goes from the keychain with it, so a profile made
+/// later with the same id never uploads into this one's book.
 #[tauri::command(async)]
 fn remove_station_profile(
     state: State<'_, SharedEngine>,
     id: String,
 ) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
-    eng.remove_station_profile(&id)?;
+    let forgot = remove_station_profile_on(&state, &id, &|id| {
+        clear_keychain_entry(&qrz_logbook_profile_keychain(id)?)
+    })?;
+    let eng = engine_lock(&state);
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: remove_station_profile save failed: {e}")
     });
+    forgot.map_err(|e| format!("The profile is removed, but not its QRZ Logbook key: {e}"))?;
     Ok(eng.snapshot())
+}
+
+/// [`remove_station_profile`]'s body, with the profile's own keychain entries removed by `forget`
+/// (handed the profile id) once the profile is gone. A removal that is refused forgets nothing.
+/// `Ok` carries whether the forgetting worked: the profile is gone either way, and is saved.
+fn remove_station_profile_on(
+    engine: &SharedEngine,
+    id: &str,
+    forget: &dyn Fn(&str) -> Result<(), String>,
+) -> Result<Result<(), String>, String> {
+    engine_lock(engine).remove_station_profile(id)?;
+    let forgot = forget(id);
+    forget_qrz_book_owner();
+    Ok(forgot)
+}
+
+/// #503: store (or, if empty, clear) station profile `id`'s own QRZ Logbook API key in the OS
+/// keychain. Write-only, like the station-wide key ([`set_qrz_logbook_key`]); never in the
+/// settings file. While the station is on that profile its contacts go up with this key; a
+/// profile with none uses the station-wide key. Unlike the station-wide key, saving one does not
+/// switch QRZ auto-upload on: that switch is the station's, in Settings ▸ Services.
+#[tauri::command(async)]
+fn set_station_profile_qrz_key(
+    state: State<'_, SharedEngine>,
+    id: String,
+    key: String,
+) -> Result<(), String> {
+    set_station_profile_qrz_key_on(&state, &id, &key, &|id, key| {
+        let entry = qrz_logbook_profile_keychain(id)?;
+        match key {
+            Some(key) => entry
+                .set_password(key)
+                .map_err(|e| format!("couldn't save to the system keychain: {e}")),
+            None => clear_keychain_entry(&entry),
+        }
+    })
+}
+
+/// Writes a station profile's QRZ Logbook key (the profile id, and the key or `None` to clear it).
+type ProfileKeyWrite<'a> = dyn Fn(&str, Option<&str>) -> Result<(), String> + 'a;
+
+/// [`set_station_profile_qrz_key`]'s body, with the keychain reached through `write` (the
+/// profile id, and the key or `None` to clear it). Refused, with nothing written, for an id that
+/// names no profile.
+fn set_station_profile_qrz_key_on(
+    engine: &SharedEngine,
+    id: &str,
+    key: &str,
+    write: &ProfileKeyWrite<'_>,
+) -> Result<(), String> {
+    if !engine_lock(engine)
+        .settings()
+        .station_profiles
+        .iter()
+        .any(|p| p.id == id)
+    {
+        return Err("No such station profile.".into());
+    }
+    let key = entered_credential(key); // #224
+    write(id, Some(key).filter(|k| !k.is_empty()))?;
+    // #291: a different key can unlock a different book.
+    forget_qrz_book_owner();
+    conn_log(
+        "QRZ Logbook",
+        "info",
+        if key.is_empty() {
+            "a station profile's API key cleared from the OS keychain"
+        } else {
+            "a station profile's API key saved to the OS keychain"
+        },
+    );
+    Ok(())
+}
+
+/// #503: whether station profile `id` has its own QRZ Logbook key stored. Says yes or no, never
+/// anything of the key.
+#[tauri::command(async)]
+fn station_profile_qrz_key_stored(id: String) -> Result<bool, String> {
+    login_stored(&qrz_logbook_profile_keychain(&id)?)
+        .map_err(|e| format!("couldn't read the system keychain: {e}"))
 }
 
 /// The first-run wizard's experience answer (also Settings ▸ Station ▸ Your experience), and the
@@ -36940,13 +37026,13 @@ struct QrzAccess {
 /// ([`sync_qrz_since`]), and the Settings call.
 fn qrz_access(engine: &SharedEngine) -> Result<QrzAccess, String> {
     let owncall = engine_lock(engine).settings().mycall.trim().to_string();
-    let key = qrz_logbook_keychain()?.get_password().map_err(|_| {
+    let key = qrz_logbook_key(engine)?.ok_or_else(|| {
         "No QRZ Logbook API key stored — this is the per-logbook key from logbook.qrz.com \
          (Settings ▸ Services ▸ Confirmations ▸ QRZ), not your QRZ password."
             .to_string()
     })?;
     Ok(QrzAccess {
-        key,
+        key: key.key,
         owncall: Some(owncall).filter(|c| !c.is_empty()),
     })
 }
@@ -39993,7 +40079,17 @@ fn credentials_status(
     // revision (`log_folds::upload_health_kept`): the panel polls every 5 s, and an unchanged
     // log is not read again.
     #[allow(clippy::type_complexity)]
-    let (lotw_user, eqsl_user, qrz_user, clublog_email, mycall, clublog_key, cloudlog_url, toggles) = {
+    let (
+        lotw_user,
+        eqsl_user,
+        qrz_user,
+        clublog_email,
+        mycall,
+        clublog_key,
+        cloudlog_url,
+        toggles,
+        profile,
+    ) = {
         let eng = engine_lock(engine);
         let st = eng.settings();
         (
@@ -40019,6 +40115,8 @@ fn credentials_status(
                 st.wrl_upload,
                 st.cloudlog_upload && !st.cloudlog_url.trim().is_empty(),
             ),
+            // #503: the profile the station is on, whose own QRZ Logbook key goes first.
+            st.active_station_profile().map(|p| p.id.clone()),
         )
     };
     let health = log_folds::upload_health_kept(engine, tallies)?;
@@ -40084,7 +40182,11 @@ fn credentials_status(
         CredStatus {
             id: "qrz-logbook".into(),
             connector: "QRZ Logbook".into(),
-            stored: has(QRZ_LOGBOOK_KEYCHAIN_USER),
+            // The key uploads use now: the profile's own, or the station-wide one (#503).
+            stored: profile
+                .as_deref()
+                .is_some_and(|id| has(&qrz_logbook_profile_user(id)))
+                || has(QRZ_LOGBOOK_KEYCHAIN_USER),
             identity: qrz_user,
             uploads: true,
             enabled: qrz_book_on,
@@ -40246,6 +40348,82 @@ fn qrz_keychain() -> Result<keyring::Entry, String> {
 fn qrz_logbook_keychain() -> Result<keyring::Entry, String> {
     keyring::Entry::new(LOTW_KEYCHAIN_SERVICE, QRZ_LOGBOOK_KEYCHAIN_USER)
         .map_err(|e| format!("couldn't open the system keychain: {e}"))
+}
+
+/// #503: the keychain user a station profile's own QRZ Logbook API key is kept under, beside the
+/// station-wide one ([`QRZ_LOGBOOK_KEYCHAIN_USER`]). Keyed by the profile's id, which stays the
+/// same while the profile exists; removing the profile removes the entry
+/// ([`remove_station_profile`]). The key itself is never in the settings file, the profile or a
+/// backup: only in the keychain.
+fn qrz_logbook_profile_user(profile_id: &str) -> String {
+    format!("{QRZ_LOGBOOK_KEYCHAIN_USER}.{profile_id}")
+}
+
+fn qrz_logbook_profile_keychain(profile_id: &str) -> Result<keyring::Entry, String> {
+    keyring::Entry::new(LOTW_KEYCHAIN_SERVICE, &qrz_logbook_profile_user(profile_id))
+        .map_err(|e| format!("couldn't open the system keychain: {e}"))
+}
+
+/// The QRZ Logbook API key the station uses now, and the keychain user it is kept under (the
+/// book owner learned for it is kept against that user, [`QRZ_BOOK_OWNER`]).
+///
+/// ⛔ `key` is a secret: it goes into a request body and to nothing else — never to `conn_log`,
+/// never into an error, never into a stamp.
+struct QrzBookKey {
+    user: String,
+    key: String,
+}
+
+/// #503: which QRZ Logbook key, in order: the station profile's own (`profile`, the profile the
+/// station is on) when it has one, else the station-wide key, so a station that never set a
+/// profile key goes on exactly as before. `read` answers a keychain user's key, `Ok(None)` for the
+/// keychain's genuine "no entry"; `Ok(None)` here means no key at all.
+///
+/// ⛔ A profile entry that cannot be read (a locked keychain, a value that is not text) is an
+/// error, never a fall back to the station-wide key: that key may open another call's book, and
+/// sending the profile's contacts there is the bug this exists to end.
+fn pick_qrz_logbook_key(
+    profile: Option<&str>,
+    read: &dyn Fn(&str) -> Result<Option<String>, String>,
+) -> Result<Option<QrzBookKey>, String> {
+    let profile_user = profile.map(qrz_logbook_profile_user);
+    for user in profile_user
+        .into_iter()
+        .chain([QRZ_LOGBOOK_KEYCHAIN_USER.to_string()])
+    {
+        if let Some(key) = read(&user)? {
+            return Ok(Some(QrzBookKey { user, key }));
+        }
+    }
+    Ok(None)
+}
+
+/// One keychain user's secret: `Ok(None)` only for the keychain's genuine "no entry".
+fn read_keychain_secret(user: &str) -> Result<Option<String>, String> {
+    let entry = keyring::Entry::new(LOTW_KEYCHAIN_SERVICE, user)
+        .map_err(|e| format!("couldn't open the system keychain: {e}"))?;
+    match entry.get_password() {
+        Ok(key) => Ok(Some(key)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(format!("couldn't read the system keychain: {e}")),
+    }
+}
+
+/// The station profile the station is on, when it has profiles: whose QRZ key is used.
+fn active_station_profile_id(engine: &SharedEngine) -> Option<String> {
+    engine_lock(engine)
+        .settings()
+        .active_station_profile()
+        .map(|p| p.id.clone())
+}
+
+/// [`pick_qrz_logbook_key`] for the profile the station is on, from the OS keychain. `Ok(None)`
+/// when there is no key; each caller says so in its own words.
+fn qrz_logbook_key(engine: &SharedEngine) -> Result<Option<QrzBookKey>, String> {
+    pick_qrz_logbook_key(
+        active_station_profile_id(engine).as_deref(),
+        &read_keychain_secret,
+    )
 }
 
 fn hamqth_keychain() -> Result<keyring::Entry, String> {
@@ -41102,8 +41280,7 @@ fn set_qrz_logbook_key(
     let entry = qrz_logbook_keychain()?;
     // #291: a different key can unlock a different book, so the owner learned for the old one
     // (and whether this session already asked) no longer applies.
-    *QRZ_BOOK_OWNER.lock().unwrap_or_else(|e| e.into_inner()) = None;
-    QRZ_BOOK_OWNER_ASKED.store(false, std::sync::atomic::Ordering::Relaxed);
+    forget_qrz_book_owner();
     if key.is_empty() {
         clear_keychain_entry(&entry)?;
         conn_log(
@@ -43005,13 +43182,12 @@ fn sync_qrz_since(
     since_unix: Option<u64>,
     wait: bool,
 ) -> Result<LotwSyncResult, QrzSyncFailure> {
-    let key = qrz_logbook_keychain()
+    let key = qrz_logbook_key(engine)
         .map_err(|message| QrzSyncFailure {
             detail: QRZ_SYNC_NO_KEY,
             message: ScreenReason::new(message),
         })?
-        .get_password()
-        .map_err(|_| QrzSyncFailure {
+        .ok_or_else(|| QrzSyncFailure {
             detail: QRZ_SYNC_NO_KEY,
             message: ScreenReason::new(
                 "No QRZ Logbook API key stored — this is the per-logbook key from \
@@ -43019,7 +43195,8 @@ fn sync_qrz_since(
                  QRZ password."
                     .to_string(),
             ),
-        })?;
+        })?
+        .key;
     // The body carries the key; the transport never logs it.
     let post = |body: String| {
         propagation::live::qrz::post_form(
@@ -44368,18 +44545,49 @@ fn n3fjp_test_reason(e: &tempo_net::n3fjp::TestError) -> String {
 /// Test the QRZ Logbook connection: a real STATUS round-trip that validates
 /// the API key (and shows which logbook it unlocks) WITHOUT inserting anything.
 /// This is the verification the operator runs after entering credentials.
+///
+/// #503: `profile` tests the key that station profile uploads with (its own, else the
+/// station-wide one) against its call; absent, the key the station uses now. Only the latter
+/// marks the Connections row, which is about the key in use.
 #[tauri::command]
-async fn qrz_test_connection(state: State<'_, SharedEngine>) -> Result<String, String> {
-    // The operator's station callsign, to warn on a book/callsign mismatch (F4MQS).
-    let mycall = {
+async fn qrz_test_connection(
+    state: State<'_, SharedEngine>,
+    profile: Option<String>,
+) -> Result<String, String> {
+    // The station callsign the key is for, to warn on a book/callsign mismatch (F4MQS), and the
+    // profile whose key is tested.
+    let (key_profile, mycall) = {
         let eng = engine_lock(&state);
-        eng.settings().mycall.trim().to_string()
+        let st = eng.settings();
+        match profile.as_deref() {
+            None => (
+                st.active_station_profile().map(|p| p.id.clone()),
+                st.mycall.trim().to_string(),
+            ),
+            Some(id) => {
+                let p = st
+                    .station_profiles
+                    .iter()
+                    .find(|p| p.id == id)
+                    .ok_or("No such station profile.")?;
+                // The profile the station is on has the station's call (see the profiles' module).
+                let call = if p.id == st.active_station_profile {
+                    st.mycall.trim().to_string()
+                } else {
+                    p.call.clone()
+                };
+                (Some(p.id.clone()), call)
+            }
+        }
     };
     let res = conn_logged(
         "QRZ Logbook",
         |s: &String| format!("connection test OK — {s}"),
-        qrz_test_connection_impl(&mycall).await,
+        qrz_test_connection_impl(key_profile.as_deref(), &mycall).await,
     );
+    if profile.is_some() {
+        return res;
+    }
     // #245, defect 2. `conn_logged` only appends to the rolling connection log, which the
     // panel's DOT does not read — so before this the operator could press Test, watch it
     // report the right book owner and QSO count, and still see amber. A real STATUS round
@@ -44485,13 +44693,57 @@ static UPLOAD_ACCOUNT_WARNED: std::sync::Mutex<std::collections::BTreeSet<String
     std::sync::Mutex::new(std::collections::BTreeSet::new());
 
 /// #291: the QRZ logbook's owner call, learned from a STATUS round trip — by Test Connection,
-/// or once per session at upload time (see [`qrz_upload_account_warning_from`]). Cleared when
-/// the Logbook API key is saved or cleared, since a new key can unlock a different book.
-static QRZ_BOOK_OWNER: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
-/// Whether this session already asked QRZ for the owner at upload time, so a STATUS that fails
-/// (QRZ down) is not repeated for every contact. Cleared with [`QRZ_BOOK_OWNER`].
-static QRZ_BOOK_OWNER_ASKED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+/// or once per session at upload time (see [`qrz_upload_account_warning_from`]) — and whether
+/// this session already asked QRZ for it at upload time, so a STATUS that fails (QRZ down) is
+/// not repeated for every contact. Both are for the key kept under `user` (#503: each station
+/// profile may have its own key, so its own book): another key reads as nothing learned yet
+/// ([`qrz_book_owner_for`]). Forgotten when a key is saved or cleared, since a new key can
+/// unlock a different book.
+struct QrzBookOwner {
+    user: String,
+    owner: Option<String>,
+    asked: bool,
+}
+
+/// Nothing learned, for no key.
+const QRZ_BOOK_OWNER_NONE: QrzBookOwner = QrzBookOwner {
+    user: String::new(),
+    owner: None,
+    asked: false,
+};
+
+static QRZ_BOOK_OWNER: std::sync::Mutex<QrzBookOwner> = std::sync::Mutex::new(QRZ_BOOK_OWNER_NONE);
+
+/// The owner learned for the key kept under `user`, and whether this session asked for it.
+fn qrz_book_owner_for(user: &str) -> (Option<String>, bool) {
+    let held = QRZ_BOOK_OWNER.lock().unwrap_or_else(|e| e.into_inner());
+    if held.user == user {
+        (held.owner.clone(), held.asked)
+    } else {
+        (None, false)
+    }
+}
+
+/// Keep what was learned for the key kept under `user`: an `owner` when QRZ named one (else the
+/// one already held for that key stays), and that this session `asked`.
+fn note_qrz_book_owner(user: &str, owner: Option<String>, asked: bool) {
+    let mut held = QRZ_BOOK_OWNER.lock().unwrap_or_else(|e| e.into_inner());
+    if held.user != user {
+        *held = QrzBookOwner {
+            user: user.to_string(),
+            ..QRZ_BOOK_OWNER_NONE
+        };
+    }
+    if owner.is_some() {
+        held.owner = owner;
+    }
+    held.asked |= asked;
+}
+
+/// Forget the owner learned for any key: a key was saved or cleared.
+fn forget_qrz_book_owner() {
+    *QRZ_BOOK_OWNER.lock().unwrap_or_else(|e| e.into_inner()) = QRZ_BOOK_OWNER_NONE;
+}
 
 /// #291: QRZ's upload-time account warning — the Test button's owner check, run when a
 /// contact actually goes up. Returns `(warning, owner_to_cache)`: the warning is `Some` the
@@ -44536,10 +44788,9 @@ fn first_upload_account_warning(
     ))
 }
 
-async fn qrz_test_connection_impl(mycall: &str) -> Result<String, String> {
-    let key = qrz_logbook_keychain()?
-        .get_password()
-        .map_err(|_| {
+async fn qrz_test_connection_impl(profile: Option<&str>, mycall: &str) -> Result<String, String> {
+    let QrzBookKey { user, key } = pick_qrz_logbook_key(profile, &read_keychain_secret)?
+        .ok_or_else(|| {
             "No QRZ Logbook API key stored — note this is the per-logbook key from              logbook.qrz.com (Settings ▸ Logbook ▸ API), NOT your QRZ password."
                 .to_string()
         })?;
@@ -44554,18 +44805,18 @@ async fn qrz_test_connection_impl(mycall: &str) -> Result<String, String> {
     })
     .await
     .map_err(|e| e.to_string())??;
-    qrz_status_reply(&resp, &key, mycall)
+    qrz_status_reply(&resp, &key, &user, mycall)
 }
 
-/// What a QRZ Logbook Test answers, from QRZ's STATUS reply `resp` to a request made with `key`.
-fn qrz_status_reply(resp: &str, key: &str, mycall: &str) -> Result<String, String> {
+/// What a QRZ Logbook Test answers, from QRZ's STATUS reply `resp` to a request made with `key`,
+/// the one kept under the keychain user `user`.
+fn qrz_status_reply(resp: &str, key: &str, user: &str, mycall: &str) -> Result<String, String> {
     let st = tempo_core::qrz::parse_status_response(resp);
     if st.ok {
         let owner_raw = st.owner.clone().unwrap_or_default();
         // #291: the upload path reuses this owner instead of spending its own STATUS call.
         if !owner_raw.trim().is_empty() {
-            *QRZ_BOOK_OWNER.lock().unwrap_or_else(|e| e.into_inner()) =
-                Some(owner_raw.trim().to_string());
+            note_qrz_book_owner(user, Some(owner_raw.trim().to_string()), false);
         }
         let owner = st.owner.unwrap_or_else(|| "your account".into());
         let book = st.book.map(|b| format!(" ({b})")).unwrap_or_default();
@@ -45925,9 +46176,8 @@ fn qrz_push_qso_impl(
     engine: &SharedEngine,
     wait: bool,
 ) -> Result<tempo_app::dto::QrzPushResultDto, String> {
-    let key = qrz_logbook_keychain()?
-        .get_password()
-        .map_err(|_| "No QRZ Logbook API key stored — set it in Settings.".to_string())?;
+    let QrzBookKey { user, key } = qrz_logbook_key(engine)?
+        .ok_or_else(|| "No QRZ Logbook API key stored — set it in Settings.".to_string())?;
     // #291: the Test button's owner check, run where a portable call is actually rejected —
     // on the upload. The call the contact goes up under is its STATION_CALLSIGN, else today's.
     let station_call = record
@@ -45938,11 +46188,7 @@ fn qrz_push_qso_impl(
         .map(str::to_string)
         .unwrap_or_else(|| engine_lock(engine).settings().mycall.trim().to_string());
     {
-        let cached = QRZ_BOOK_OWNER
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let asked = QRZ_BOOK_OWNER_ASKED.load(std::sync::atomic::Ordering::Relaxed);
+        let (cached, asked) = qrz_book_owner_for(&user);
         // A snapshot, so the warned-set lock is never held across the STATUS round trip; the
         // real set is consulted again below before anything is said.
         let mut snapshot = UPLOAD_ACCOUNT_WARNED
@@ -45954,7 +46200,7 @@ fn qrz_push_qso_impl(
             cached,
             asked,
             || {
-                QRZ_BOOK_OWNER_ASKED.store(true, std::sync::atomic::Ordering::Relaxed);
+                note_qrz_book_owner(&user, None, true);
                 // The same STATUS request Test Connection sends. Only the owner is kept; the
                 // response is never logged (it is QRZ's, and the request carried the key).
                 let body = tempo_core::qrz::build_status_body(&key);
@@ -45973,14 +46219,10 @@ fn qrz_push_qso_impl(
             &mut snapshot,
         );
         if let Some(owner) = fetched {
-            *QRZ_BOOK_OWNER.lock().unwrap_or_else(|e| e.into_inner()) = Some(owner);
+            note_qrz_book_owner(&user, Some(owner), true);
         }
         if let Some(warning) = warning {
-            let owner = QRZ_BOOK_OWNER
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .clone()
-                .unwrap_or_default();
+            let owner = qrz_book_owner_for(&user).0.unwrap_or_default();
             let first = first_upload_account_warning(
                 &mut UPLOAD_ACCOUNT_WARNED
                     .lock()
@@ -46070,24 +46312,27 @@ static QRZ_CORRECT_MISS: std::sync::Mutex<Option<tempo_core::qrz::QrzMissRecover
 ///
 /// ⛔ The return value is a secret. It goes to `tempo_core::qrz_correct` and to the transport,
 /// and to nothing else — never to `conn_log`, never into an error, never into a stamp.
-fn qrz_correct_key() -> Result<String, String> {
-    qrz_logbook_keychain()?.get_password().map_err(|_| {
+fn qrz_correct_key(engine: &SharedEngine) -> Result<String, String> {
+    let key = qrz_logbook_key(engine)?.ok_or_else(|| {
         "No QRZ Logbook API key stored — set it in Settings ▸ Services ▸ \
          Confirmations ▸ QRZ."
             .to_string()
-    })
+    })?;
+    Ok(key.key)
 }
 
 /// Preview the correction of ONE contact: read QRZ's own copy, run every refusal, and give back
 /// the text the operator is asked to approve. Nothing is written at QRZ by this command.
 #[tauri::command]
 async fn qrz_correct_preview(
+    state: State<'_, SharedEngine>,
     record: LoggedQso,
     selected: usize,
 ) -> Result<tempo_app::dto::QrzCorrectPreviewDto, String> {
+    let engine = state.inner().clone();
     // Blocking HTTP off the async executor (see qrz_push_qso).
     tauri::async_runtime::spawn_blocking(move || {
-        let key = qrz_correct_key()?;
+        let key = qrz_correct_key(&engine)?;
         let rec: tempo_core::logbook::QsoRecord = record.into();
         let plan = tempo_core::qrz_correct::preview(
             &propagation::live::qrz::LogbookApi {
@@ -46113,11 +46358,13 @@ async fn qrz_correct_preview(
 /// the operator read the dialog.
 #[tauri::command]
 async fn qrz_correct_apply(
+    state: State<'_, SharedEngine>,
     record: LoggedQso,
     selected: usize,
 ) -> Result<tempo_app::dto::QrzCorrectResultDto, String> {
+    let engine = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let key = qrz_correct_key()?;
+        let key = qrz_correct_key(&engine)?;
         let rec: tempo_core::logbook::QsoRecord = record.into();
         let outcome = tempo_core::qrz_correct::apply(
             &propagation::live::qrz::LogbookApi {
@@ -46156,7 +46403,8 @@ async fn qrz_correct_apply(
 /// QRZ's delete is permanent and has no undo, so the authority is consumed: a second press finds
 /// the slot empty and refuses rather than aiming at whatever is there now.
 #[tauri::command]
-async fn qrz_correct_undo_miss() -> Result<String, String> {
+async fn qrz_correct_undo_miss(state: State<'_, SharedEngine>) -> Result<String, String> {
+    let engine = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let recovery = QRZ_CORRECT_MISS
             .lock()
@@ -46168,7 +46416,7 @@ async fn qrz_correct_undo_miss() -> Result<String, String> {
                  logbook."
                     .to_string()
             })?;
-        let key = qrz_correct_key()?;
+        let key = qrz_correct_key(&engine)?;
         let said = tempo_core::qrz_correct::recover_from_miss(
             &propagation::live::qrz::LogbookApi {
                 app_version: env!("CARGO_PKG_VERSION"),
@@ -56664,6 +56912,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         switch_station_profile,
         save_station_profile,
         remove_station_profile,
+        set_station_profile_qrz_key,
+        station_profile_qrz_key_stored,
         set_experience_level,
         mark_setup_wizard_seen,
         dismiss_prop_engine_note,
@@ -77593,6 +77843,7 @@ mod remote_credential_reply_tests {
         let ok = qrz_status_reply(
             "RESULT=OK&OWNER=W9TST&BOOK_NAME=Main&COUNT=12",
             QRZ_BOOK_KEY,
+            QRZ_LOGBOOK_KEYCHAIN_USER,
             "W9TST",
         );
         assert_eq!(
@@ -77600,7 +77851,12 @@ mod remote_credential_reply_tests {
             Ok("W9TST (Main) — 12 QSOs in the online logbook".to_string())
         );
         assert_eq!(
-            qrz_status_reply("RESULT=AUTH&REASON=invalid api key", QRZ_BOOK_KEY, "W9TST"),
+            qrz_status_reply(
+                "RESULT=AUTH&REASON=invalid api key",
+                QRZ_BOOK_KEY,
+                QRZ_LOGBOOK_KEYCHAIN_USER,
+                "W9TST"
+            ),
             Err("invalid api key".to_string()),
             "a reason with no key in it reaches the operator as QRZ wrote it"
         );
@@ -77608,6 +77864,7 @@ mod remote_credential_reply_tests {
             qrz_status_reply(
                 "RESULT=FAIL&REASON=invalid api key A1B2-C3D4-E5F6-0789",
                 QRZ_BOOK_KEY,
+                QRZ_LOGBOOK_KEYCHAIN_USER,
                 "W9TST"
             ),
             Err("invalid api key «api key»".to_string()),
@@ -77617,6 +77874,7 @@ mod remote_credential_reply_tests {
             qrz_status_reply(
                 "RESULT=AUTH&REASON=bad key a1b2-c3d4-e5f6-0789",
                 QRZ_BOOK_KEY,
+                QRZ_LOGBOOK_KEYCHAIN_USER,
                 "W9TST"
             ),
             Err(QRZ_WORDS_WITHHELD.to_string()),
@@ -77629,7 +77887,7 @@ mod remote_credential_reply_tests {
             "RESULT=AUTH&REASON=bad key a1b2-c3d4-e5f6-0789",
             "RESULT=AUTH&REASON=bad key A1B2C3D4E5F60789",
         ] {
-            let answer = qrz_status_reply(echo, QRZ_BOOK_KEY, "W9TST");
+            let answer = qrz_status_reply(echo, QRZ_BOOK_KEY, QRZ_LOGBOOK_KEYCHAIN_USER, "W9TST");
             let error = answer.expect_err("a refused key is an error");
             assert!(!error.is_empty(), "{echo}");
             assert_eq!(
@@ -79063,5 +79321,233 @@ mod fetch_cap_tests {
             checked >= 5,
             "only {checked} HTTP files were found; is the scan looking?"
         );
+    }
+}
+
+/// #503: a station profile may have its own QRZ Logbook API key, kept in the OS keychain only. A
+/// made-up keychain throughout, never the OS one.
+#[cfg(test)]
+mod qrz_profile_key_tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::collections::{BTreeMap, BTreeSet};
+    use tempo_app::settings::HOME_STATION_PROFILE;
+
+    /// Made-up keys, in the shape QRZ issues.
+    const STATION_KEY: &str = "A1B2-C3D4-E5F6-0789";
+    const PARK_KEY: &str = "9F8E-7D6C-5B4A-3210";
+
+    /// A keychain holding `entries` (user, key).
+    fn keychain(entries: &[(&str, &str)]) -> impl Fn(&str) -> Result<Option<String>, String> {
+        let held: BTreeMap<String, String> = entries
+            .iter()
+            .map(|(u, k)| (u.to_string(), k.to_string()))
+            .collect();
+        move |user: &str| Ok(held.get(user).cloned())
+    }
+
+    /// The (keychain user, key) chosen for `profile`.
+    fn pick(
+        profile: Option<&str>,
+        read: &dyn Fn(&str) -> Result<Option<String>, String>,
+    ) -> Option<(String, String)> {
+        pick_qrz_logbook_key(profile, read)
+            .expect("the made-up keychain reads")
+            .map(|k| (k.user, k.key))
+    }
+
+    /// A station with Home (KD9TAW) and a park profile (KD9TAW/P), on Home.
+    fn station_with_a_park_profile() -> (SharedEngine, String) {
+        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("KD9TAW", "EN52", 0),
+        ));
+        let id = engine_lock(&engine)
+            .save_station_profile(tempo_app::settings::StationProfile {
+                name: "Park".into(),
+                call: "KD9TAW/P".into(),
+                grid: "EN43".into(),
+                ..Default::default()
+            })
+            .expect("saved");
+        (engine, id)
+    }
+
+    /// ⭐ The profile the station is on uploads with its own key; a profile with none, and a
+    /// station with no profiles, with the station-wide key, so nobody has to set anything again.
+    #[test]
+    fn a_profiles_own_key_goes_first_and_the_station_key_is_the_fallback() {
+        let station = Some((
+            QRZ_LOGBOOK_KEYCHAIN_USER.to_string(),
+            STATION_KEY.to_string(),
+        ));
+        let park = Some(("qrz-logbook-key.p1".to_string(), PARK_KEY.to_string()));
+        let both = keychain(&[
+            (QRZ_LOGBOOK_KEYCHAIN_USER, STATION_KEY),
+            ("qrz-logbook-key.p1", PARK_KEY),
+        ]);
+        assert_eq!(pick(Some("p1"), &both), park);
+        assert_eq!(pick(Some("p2"), &both), station, "no key of its own");
+        assert_eq!(pick(Some(HOME_STATION_PROFILE), &both), station);
+        assert_eq!(pick(None, &both), station, "a station with no profiles");
+        let park_only = keychain(&[("qrz-logbook-key.p1", PARK_KEY)]);
+        assert_eq!(pick(Some("p1"), &park_only), park);
+        assert_eq!(
+            pick(Some("p2"), &park_only),
+            None,
+            "never another profile's key"
+        );
+        assert_eq!(pick(None, &park_only), None);
+        assert_eq!(pick(Some("p1"), &keychain(&[])), None);
+    }
+
+    /// ⛔ A profile key the keychain cannot read is an error: falling back to the station-wide
+    /// key would send the profile's contacts into another call's book.
+    #[test]
+    fn an_unreadable_profile_key_is_an_error_never_the_station_key() {
+        let locked = |user: &str| -> Result<Option<String>, String> {
+            if user == QRZ_LOGBOOK_KEYCHAIN_USER {
+                Ok(Some(STATION_KEY.to_string()))
+            } else {
+                Err("couldn't read the system keychain: locked".into())
+            }
+        };
+        assert!(pick_qrz_logbook_key(Some("p1"), &locked).is_err());
+        assert!(
+            pick_qrz_logbook_key(None, &locked).is_ok_and(|k| k.is_some()),
+            "CONTROL: the station key itself reads"
+        );
+    }
+
+    /// Each profile's key has its own keychain user, beside the station-wide one, which stays
+    /// where every existing install keeps it.
+    #[test]
+    fn each_profile_has_its_own_keychain_user_beside_the_station_key() {
+        assert_eq!(QRZ_LOGBOOK_KEYCHAIN_USER, "qrz-logbook-key");
+        assert_eq!(qrz_logbook_profile_user("p1"), "qrz-logbook-key.p1");
+        assert_eq!(
+            qrz_logbook_profile_user(HOME_STATION_PROFILE),
+            "qrz-logbook-key.home"
+        );
+        let users: BTreeSet<String> = [HOME_STATION_PROFILE, "p1", "p2", "p10"]
+            .into_iter()
+            .map(qrz_logbook_profile_user)
+            .chain([QRZ_LOGBOOK_KEYCHAIN_USER.to_string()])
+            .collect();
+        assert_eq!(users.len(), 5);
+    }
+
+    /// The owner learned for one key's book is not taken for another's.
+    #[test]
+    fn the_book_owner_is_kept_per_key() {
+        forget_qrz_book_owner();
+        note_qrz_book_owner("qrz-logbook-key.p1", Some("KD9TAW/P".into()), true);
+        assert_eq!(
+            qrz_book_owner_for("qrz-logbook-key.p1"),
+            (Some("KD9TAW/P".into()), true)
+        );
+        assert_eq!(qrz_book_owner_for(QRZ_LOGBOOK_KEYCHAIN_USER), (None, false));
+        forget_qrz_book_owner();
+        assert_eq!(qrz_book_owner_for("qrz-logbook-key.p1"), (None, false));
+    }
+
+    /// ⭐ Removing a profile removes its key from the keychain; a removal that is refused removes
+    /// nothing.
+    #[test]
+    fn removing_a_profile_removes_its_key_and_a_refused_removal_removes_nothing() {
+        let (engine, park) = station_with_a_park_profile();
+        let forgot = RefCell::new(Vec::<String>::new());
+        let forget = |id: &str| -> Result<(), String> {
+            forgot.borrow_mut().push(qrz_logbook_profile_user(id));
+            Ok(())
+        };
+        assert!(remove_station_profile_on(&engine, HOME_STATION_PROFILE, &forget).is_err());
+        engine_lock(&engine).switch_station_profile(&park).unwrap();
+        assert!(
+            remove_station_profile_on(&engine, &park, &forget).is_err(),
+            "the profile the station is on stays"
+        );
+        assert!(
+            forgot.borrow().is_empty(),
+            "nothing forgotten for a refused removal"
+        );
+        engine_lock(&engine)
+            .switch_station_profile(HOME_STATION_PROFILE)
+            .unwrap();
+        assert_eq!(
+            remove_station_profile_on(&engine, &park, &forget),
+            Ok(Ok(()))
+        );
+        assert_eq!(*forgot.borrow(), vec![qrz_logbook_profile_user(&park)]);
+        assert!(!engine_lock(&engine)
+            .settings()
+            .station_profiles
+            .iter()
+            .any(|p| p.id == park));
+    }
+
+    /// A key that cannot be cleared is said, and the profile is gone anyway.
+    #[test]
+    fn a_key_that_cannot_be_cleared_is_said_after_the_profile_is_gone() {
+        let (engine, park) = station_with_a_park_profile();
+        let r = remove_station_profile_on(&engine, &park, &|_| Err("locked".into()));
+        assert_eq!(r, Ok(Err("locked".to_string())));
+        assert_eq!(engine_lock(&engine).settings().station_profiles.len(), 1);
+    }
+
+    /// ⛔ The key goes to the keychain under the profile's own user and nowhere else: not into the
+    /// settings, the profile, the settings file or a backup. A profile handed in carrying a key
+    /// field (an old form, a hand-edited file) keeps none of it.
+    #[test]
+    fn a_profile_key_is_never_in_the_settings_a_profile_or_a_backup() {
+        let (engine, park) = station_with_a_park_profile();
+        let written = RefCell::new(Vec::<(String, Option<String>)>::new());
+        let write = |id: &str, key: Option<&str>| -> Result<(), String> {
+            written
+                .borrow_mut()
+                .push((qrz_logbook_profile_user(id), key.map(str::to_string)));
+            Ok(())
+        };
+        set_station_profile_qrz_key_on(&engine, &park, &format!(" {PARK_KEY}\n"), &write)
+            .expect("saved");
+        assert_eq!(
+            *written.borrow(),
+            vec![(qrz_logbook_profile_user(&park), Some(PARK_KEY.to_string()))],
+            "trimmed, under the profile's own user"
+        );
+        let mut profile =
+            serde_json::to_value(&engine_lock(&engine).settings().station_profiles[1])
+                .expect("a profile serialises");
+        profile["qrzLogbookKey"] = PARK_KEY.into();
+        let taken: tempo_app::settings::StationProfile =
+            serde_json::from_value(profile).expect("a profile with a stray field reads");
+        engine_lock(&engine)
+            .save_station_profile(taken)
+            .expect("saved");
+        let settings = engine_lock(&engine).settings().clone();
+        for (what, text) in [
+            ("settings", serde_json::to_string(&settings).unwrap()),
+            (
+                "settings file",
+                serde_json::to_string(&settings.for_storage()).unwrap(),
+            ),
+            (
+                "backup",
+                settings_bundle(&engine, Default::default(), None).expect("a bundle"),
+            ),
+        ] {
+            assert!(!text.contains(PARK_KEY), "{what} holds the key");
+            assert!(
+                text.contains("KD9TAW/P"),
+                "CONTROL: {what} holds the profile"
+            );
+        }
+        // Empty clears; an id that names no profile is refused with nothing written.
+        set_station_profile_qrz_key_on(&engine, &park, "  ", &write).expect("cleared");
+        assert_eq!(
+            written.borrow().last(),
+            Some(&(qrz_logbook_profile_user(&park), None))
+        );
+        assert!(set_station_profile_qrz_key_on(&engine, "p9", PARK_KEY, &write).is_err());
+        assert_eq!(written.borrow().len(), 2);
     }
 }

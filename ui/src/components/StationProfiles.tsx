@@ -5,11 +5,17 @@
 //
 // ⚠️ ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts): every operator-visible string comes
 // from the catalog. The call, grid, park and IOTA references are tokens and stay as typed.
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { t } from '../i18n'
 import type { Settings, StationProfile } from '../types'
 import { HOME_STATION_PROFILE } from '../types'
-import { removeStationProfile, saveStationProfile } from '../api'
+import {
+  qrzTestConnection,
+  removeStationProfile,
+  saveStationProfile,
+  setStationProfileQrzKey,
+  stationProfileQrzKeyStored,
+} from '../api'
 import { withErrorToast } from '../toast'
 
 /** The name a profile shows: Home's in the reader's language, the others as the operator named
@@ -64,6 +70,76 @@ const NUMBER_FIELDS: { key: NumberKey; label: () => string }[] = [
   { key: 'ituZone', label: () => t('settings.stationProfiles.ituZone') },
   { key: 'powerW', label: () => t('settings.stationProfiles.power') },
 ]
+
+/** #503: a saved profile's own QRZ Logbook API key. Kept in the system keychain through its own
+ *  writer, never in the profile the form saves; masked, never read back. Without one, the
+ *  profile's contacts go up with the key in Settings ▸ Services. */
+function ProfileQrzKey({ id }: { id: string }) {
+  const [key, setKey] = useState('')
+  const [own, setOwn] = useState<boolean | null>(null)
+  const [test, setTest] = useState<{ ok: boolean; msg: string } | null>(null)
+  // Bumped after a write, so whether a key is stored is read again.
+  const [written, setWritten] = useState(0)
+  useEffect(() => {
+    stationProfileQrzKeyStored(id)
+      .then(setOwn)
+      .catch(() => setOwn(null))
+  }, [id, written])
+  const write = async (value: string) => {
+    const ok = await withErrorToast(async () => {
+      await setStationProfileQrzKey(id, value)
+      return true
+    }, t('settings.stationProfiles.qrzKey.failed'))
+    if (!ok) return
+    setKey('')
+    setTest(null)
+    setWritten((n) => n + 1)
+  }
+  const runTest = () => {
+    setTest({ ok: true, msg: t('settings.connections.test.testing') })
+    qrzTestConnection(id)
+      .then((detail) => setTest({ ok: true, msg: t('settings.connections.qrz.test.ok', { detail }) }))
+      .catch((e) => setTest({ ok: false, msg: t('settings.stationProfiles.qrzKey.testFail', { detail: String(e) }) }))
+  }
+  return (
+    <div className="settings-field">
+      <span className="settings-label">{t('settings.stationProfiles.qrzKey')}</span>
+      <div className="settings-input-row">
+        <input
+          className="settings-input"
+          type="password"
+          aria-label={t('settings.stationProfiles.qrzKey')}
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <button type="button" className="settings-refresh" onClick={() => void write(key)} disabled={!key.trim()}>
+          {t('settings.stationProfiles.qrzKey.save')}
+        </button>
+        {own && (
+          <button type="button" className="settings-refresh" onClick={() => void write('')}>
+            {t('settings.stationProfiles.qrzKey.clear')}
+          </button>
+        )}
+        <button type="button" className="settings-refresh" onClick={runTest}>
+          {t('settings.connections.qrz.test.action')}
+        </button>
+      </div>
+      {own !== null && (
+        <span className="settings-hint">
+          {own ? t('settings.stationProfiles.qrzKey.own') : t('settings.stationProfiles.qrzKey.none')}
+        </span>
+      )}
+      {test && (
+        <span className="settings-hint" role="status">
+          {test.msg}
+        </span>
+      )}
+      <span className="settings-hint">{t('settings.stationProfiles.qrzKey.hint')}</span>
+    </div>
+  )
+}
 
 interface Props {
   form: Settings
@@ -165,6 +241,7 @@ export function StationProfiles({ form, readOnly, onChanged }: Props) {
               />
             </label>
           ))}
+          {editing.id !== '' && <ProfileQrzKey id={editing.id} />}
           <div className="settings-field">
             <span>
               <button type="button" className="settings-linkbtn" onClick={() => void save()}>

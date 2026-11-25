@@ -2820,8 +2820,10 @@ export async function clearQrzLogbookKey(): Promise<void> {
 /** Validate the QRZ Logbook API key with a real STATUS round-trip (no insert).
  * Resolves to a human summary ("KD9TAW (My Logbook) — 1234 QSOs…") or rejects
  * with the failure reason. */
-export async function qrzTestConnection(): Promise<string> {
-  return invoke<string>('qrz_test_connection', {})
+export async function qrzTestConnection(profile?: string): Promise<string> {
+  // #503: `profile` tests the key that station profile uploads with (its own, else the
+  // station-wide one); absent, the key in use now.
+  return invoke<string>('qrz_test_connection', profile ? { profile } : {})
 }
 
 /** Sign in to LoTW with the stored website login and read a report of no records (never an
@@ -3960,6 +3962,17 @@ export async function saveStationProfile(profile: StationProfile): Promise<AppSn
 /** Remove one "My station" profile; Home and the one the station is on stay. */
 export async function removeStationProfile(id: string): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('remove_station_profile', { id })
+}
+
+/** #503: store (or, if empty, clear) a station profile's own QRZ Logbook API key in the system
+ *  keychain. Write-only, and never part of the profile itself. */
+export async function setStationProfileQrzKey(id: string, key: string): Promise<void> {
+  await invoke<void>('set_station_profile_qrz_key', { id, key })
+}
+
+/** #503: whether a station profile has its own QRZ Logbook key stored (yes or no, nothing of it). */
+export async function stationProfileQrzKeyStored(id: string): Promise<boolean> {
+  return invoke<boolean>('station_profile_qrz_key_stored', { id })
 }
 
 /** The first-run wizard's experience answer (also Settings ▸ Station) — the ONE writer of
