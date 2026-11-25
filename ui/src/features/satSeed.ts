@@ -57,6 +57,7 @@ import {
   satChasingSet,
   toggleSatChasing,
 } from './satChase'
+import { isInOrbitStatus } from './satHealth'
 
 /** Presence = seeded, forever. Holds what was starred and when, so the notice
  * can name a number and a support question has an answer. */
@@ -187,7 +188,7 @@ export function rankSatSeedCandidates(view: SatView, cap = SAT_SEED_CAP): SatSee
     })
   }
   const ranked = view.birds
-    .filter((b) => b.status === 'alive' && b.amateur === true)
+    .filter((b) => isInOrbitStatus(b.status) && b.amateur === true)
     .map((b) => ({
       name: b.name,
       norad: b.norad ?? null,

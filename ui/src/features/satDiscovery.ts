@@ -118,7 +118,7 @@ function classTier(birdType: string | null): number {
 
 /** Geometry-only pass quality — passScore's shape minus its status terms.
  * The status terms are dropped deliberately: on this surface status is the
- * bundled catalog's, which reads 'alive' for every admitted bird (a constant
+ * bundled catalog's, which reads 'in orbit' for every admitted bird (a constant
  * buys no ranking), and the live SatNOGS overlay is favorites-only. */
 function geomScore(p: SatPass): number {
   const durMin = (p.losUnix - p.aosUnix) / 60

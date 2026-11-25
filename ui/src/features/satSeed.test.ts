@@ -99,6 +99,14 @@ describe('rankSatSeedCandidates — "most-workable ACTIVE birds"', () => {
     expect(rankSatSeedCandidates(v).map((c) => c.name)).toEqual(['SO-50'])
   })
 
+  it('seeds a bird the post-rename catalog calls "in orbit" — the live mirror never says "alive"', () => {
+    const v = view({
+      birds: [bird('SO-50', 27607, { status: 'in orbit' }), bird('AO-7', 7530)],
+      passes: [pass('SO-50', 27607, 40), pass('AO-7', 7530, 30)],
+    })
+    expect(rankSatSeedCandidates(v).map((c) => c.name)).toEqual(['SO-50', 'AO-7'])
+  })
+
   it('drops a bird with no status at all — an unknown bird is never starred blind', () => {
     const v = view({
       birds: [bird('MYSTERY', 90002, { status: null, amateur: undefined })],

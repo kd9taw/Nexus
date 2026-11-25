@@ -62,7 +62,7 @@ import {
 import { NEED_CHIP } from '../features/needVisuals'
 import { SAT_VFO_MAPS, satVfoLabel, satVfoPair } from '../features/satVfo'
 import { isSatChased, satChaseKeys, satChasingSet, toggleSatChasing } from '../features/satChase'
-import { satBirdHealth, satExcludedHealth } from '../features/satHealth'
+import { isInOrbitStatus, satBirdHealth, satExcludedHealth } from '../features/satHealth'
 import { elementBandParts, elementBandSummary } from '../features/elementBands'
 import {
   ackSatSeedNotice,
@@ -459,7 +459,7 @@ function SkedBand({ favKey, nowSecs }: { favKey: string; nowSecs: number }) {
 function passScore(p: SatPass): number {
   const dead = p.status === 'dead' || p.status === 're-entered'
   const durMin = (p.losUnix - p.aosUnix) / 60
-  return (dead ? -1000 : 0) + p.maxElDeg + Math.min(durMin, 15) * 0.8 + (p.status === 'alive' ? 8 : 0)
+  return (dead ? -1000 : 0) + p.maxElDeg + Math.min(durMin, 15) * 0.8 + (isInOrbitStatus(p.status) ? 8 : 0)
 }
 
 /** The pass-quality ladder — the section's ONE quality vocabulary. The
@@ -482,7 +482,7 @@ function whyLine(p: SatPass, nowSecs: number): string {
   const el = Math.round(p.maxElDeg)
   const dur = Math.max(1, Math.round((p.losUnix - p.aosUnix) / 60))
   const status =
-    p.status === 'alive'
+    isInOrbitStatus(p.status)
       ? t('sat.why.alive')
       : p.status === 'dead' || p.status === 're-entered'
         ? // The upstream status word, printed as it arrived (uppercased for the
@@ -2621,7 +2621,7 @@ export function SatellitesView({ focusSat, focusNorad, snap, onPopOut, onOpenLog
         // snapshot — the live SatNOGS status and the stamped `earn` (matched
         // by bird + AOS, detailEarn's ±180 s tolerance). Non-★ rows carry
         // NEITHER: earn is stamped only by get_sat_pass_needs (the
-        // declined-cost ruling) and the snapshot's status reads 'alive' for
+        // declined-cost ruling) and the snapshot's status reads 'in orbit' for
         // every admitted bird (the discovery band's no-status-chip refusal,
         // same reason) — so no claim, never a guessed one.
         const fav = isSatChased(p.name, p.norad, chaseKeys)
@@ -3358,7 +3358,7 @@ export function SatellitesView({ focusSat, focusNorad, snap, onPopOut, onOpenLog
                 </span>
               )}
               {detail.status && (
-                <span className={`sat-chip ${detail.status === 'alive' ? 'alive' : 'dead'}`}>
+                <span className={`sat-chip ${isInOrbitStatus(detail.status) ? 'alive' : 'dead'}`}>
                   {detail.status}
                 </span>
               )}
@@ -3744,7 +3744,7 @@ export function SatellitesView({ focusSat, focusNorad, snap, onPopOut, onOpenLog
                       <td>{Math.max(1, Math.round((p.losUnix - p.aosUnix) / 60))} m</td>
                       <td>{wind8(p.aosAzDeg)}→{wind8(p.losAzDeg)}</td>
                       <td>
-                        {p.status === 'alive' && (
+                        {isInOrbitStatus(p.status) && (
                           <span className="sat-chip alive" title={t('sat.schedule.alive.title')}>
                             {t('sat.schedule.alive.label')}
                           </span>
@@ -3891,7 +3891,7 @@ export function SatellitesView({ focusSat, focusNorad, snap, onPopOut, onOpenLog
                             {wind8(p.aosAzDeg)}→{wind8(p.losAzDeg)}
                           </td>
                           {/* Status: EMPTY on purpose. These rows carry the
-                              bundled catalog's status, which reads 'alive'
+                              bundled catalog's status, which reads 'in orbit'
                               for every bird admitted here — including birds
                               the live SatNOGS overlay (favorites-only) knows
                               are dead. A constant chip that is sometimes

@@ -5,8 +5,8 @@
 // It exists because "is this bird still worth chasing" was being re-derived
 // per surface from two fields that mean different things:
 //
-//  - `status` is SatNOGS's orbital verdict (alive | dead | re-entered |
-//    launch failed | future). It is ABSENT whenever the serving snapshot has no catalog (a
+//  - `status` is SatNOGS's orbital verdict (in orbit | re-entered |
+//    launch failed | future; older catalogs say alive | dead). It is ABSENT whenever the serving snapshot has no catalog (a
 //    schema-1 manifest, the Celestrak fallback leg) — absent means NOT ASKED,
 //    and a chip drawn from it would be an invention, not a report.
 //  - `amateur` is the mirror catalog's "carries at least one LIVE amateur
@@ -39,6 +39,18 @@ export interface SatHealth {
 }
 
 /**
+ * Whether SatNOGS calls the bird up there and working. In 2026-08 SatNOGS
+ * renamed that value from `alive` to `in orbit`, and the mirror carries the
+ * word through as it arrived — so the live catalog says `in orbit` while
+ * older catalogs and caches still say `alive`. Both mean the same thing;
+ * every surface that asks "is this a live bird" asks here, never with its
+ * own string compare.
+ */
+export function isInOrbitStatus(status?: string | null): boolean {
+  return status === 'in orbit' || status === 'alive'
+}
+
+/**
  * The mark for a bird that HAS a row in the view (elements exist, the
  * position is real). `null` = nothing to report — either it is alive and
  * transmitting, or nobody has told us anything about it.
@@ -52,15 +64,16 @@ export function satBirdHealth(
   amateur?: boolean | null,
 ): SatHealth | null {
   if (status == null || status === '') return null // never asked — say nothing
+  if (isInOrbitStatus(status)) {
+    return amateur === false
+      ? {
+          label: t('sat.health.silent.label'),
+          title: t('sat.health.silent.title'),
+          tone: 'dead',
+        }
+      : null
+  }
   switch (status) {
-    case 'alive':
-      return amateur === false
-        ? {
-            label: t('sat.health.silent.label'),
-            title: t('sat.health.silent.title'),
-            tone: 'dead',
-          }
-        : null
     case 'dead':
       return {
         label: t('sat.health.dead.label'),

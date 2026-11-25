@@ -805,7 +805,8 @@ export interface SatView {
     /** Ground track ±now ([unix, lat, lon] per minute): past = trail, future =
      * projection; the map interpolates along it for real-time motion. */
     track: [number, number, number][]
-    /** SatNOGS status ('alive' | 'dead' | 're-entered' | 'future') from the
+    /** SatNOGS status ('in orbit' | 're-entered' | 'launch failed' | 'future'; older
+     * catalogs say 'alive' | 'dead' — read it through isInOrbitStatus) from the
      * mirror's amateur catalog. Absent when the serving snapshot predates the
      * catalog or came from the Celestrak fallback leg — never guessed. */
     status?: string | null
@@ -984,7 +985,8 @@ export interface SatDetail {
   name: string
   /** NORAD catalog number parsed from the TLE; null if unparseable. */
   norad: number | null
-  /** SatNOGS operational status ("alive"/"dead"/"re-entered"/"future");
+  /** SatNOGS operational status ("in orbit"/"re-entered"/"launch failed"/"future";
+   * older data says "alive"/"dead" — read it through isInOrbitStatus);
    * null = no data yet (offline since install) — render nothing, never guess. */
   status: string | null
   transmitters: SatTransmitter[]

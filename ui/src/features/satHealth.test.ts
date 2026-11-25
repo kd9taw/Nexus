@@ -7,7 +7,7 @@
 // facts, and guessing either one is how a re-entered bird kept its ★ with no
 // mark anywhere.
 import { describe, it, expect } from 'vitest'
-import { satBirdHealth, satExcludedHealth } from './satHealth'
+import { isInOrbitStatus, satBirdHealth, satExcludedHealth } from './satHealth'
 
 describe('satBirdHealth (a bird that HAS a row — elements exist)', () => {
   it('an alive bird with a live amateur transmitter is unmarked', () => {
@@ -58,6 +58,24 @@ describe('satBirdHealth (a bird that HAS a row — elements exist)', () => {
 
   it('flags a pre-launch bird as not yet workable', () => {
     expect(satBirdHealth('future', true)?.label).toBe('pre-launch')
+  })
+
+  // SatNOGS renamed its working-bird status from `alive` to `in orbit` in
+  // 2026-08, and the mirror passes the word through as it arrived — every
+  // live bird in the published catalog now reads `in orbit`. It must read
+  // exactly as `alive` did, never as an unseen word under the grey chip.
+  it('reads the post-rename "in orbit" exactly as "alive"', () => {
+    expect(satBirdHealth('in orbit', true)).toBeNull()
+    expect(satBirdHealth('in orbit', undefined)).toBeNull()
+    expect(satBirdHealth('in orbit', false)).toEqual(satBirdHealth('alive', false))
+  })
+
+  it('isInOrbitStatus knows both spellings and nothing else', () => {
+    expect(isInOrbitStatus('in orbit')).toBe(true)
+    expect(isInOrbitStatus('alive')).toBe(true)
+    for (const s of ['dead', 're-entered', 'launch failed', 'future', '', null, undefined]) {
+      expect(isInOrbitStatus(s), String(s)).toBe(false)
+    }
   })
 })
 
