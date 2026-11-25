@@ -129,10 +129,9 @@ describe('the Phone scope on a radio with its own scope', () => {
     await mountRead({})
     expect(group()).toBeNull()
     radioScopeSeen()
-    // RF reads the radio's scope only, so a gap between its sweeps never shows the audio FFT in its
-    // place (an IC-7300 through wfview sweeps more than a second apart, which the rig scope read
-    // gave way to every couple of seconds).
-    expect(feeds()).toEqual(['rf'])
+    // RF by DEFAULT is the rig scope read as before: when the radio's scope stops, it gives way to
+    // the audio view rather than leaving an operator who never chose RF on an empty scope.
+    expect(feeds()).toEqual(['scope'])
     expect([...within(group()!).getAllByRole('button')].map((b) => b.textContent)).toEqual(['RF', 'Audio'])
     expect(viewChip('RF').getAttribute('aria-pressed')).toBe('true')
     // Phone's default span is still Band.
@@ -156,7 +155,7 @@ describe('the Phone scope on a radio with its own scope', () => {
       localStorage.setItem('nexus.phone.scopeView', bad)
       await mountRead({})
       radioScopeSeen()
-      expect(feeds(), `stored ${JSON.stringify(bad)}`).toEqual(['rf'])
+      expect(feeds(), `stored ${JSON.stringify(bad)}: the default, not a pick`).toEqual(['scope'])
       expect(viewChip('RF').getAttribute('aria-pressed')).toBe('true')
       cleanup()
     }
@@ -164,6 +163,23 @@ describe('the Phone scope on a radio with its own scope', () => {
     await mountRead({})
     radioScopeSeen()
     expect(feeds()).toEqual(['audio'])
+  })
+
+  it("RF the operator PICKED reads the radio's scope only, in this window and the next opened", async () => {
+    // A picked RF holds the radio's scope through a gap between its sweeps (an IC-7300 through
+    // wfview sweeps more than a second apart, which the rig scope read gave way to every couple of
+    // seconds), and says the scope is not arriving rather than switching to the audio.
+    await mountRead({})
+    radioScopeSeen()
+    expect(feeds(), 'control: the default').toEqual(['scope'])
+    fireEvent.click(viewChip('RF'))
+    expect(feeds()).toEqual(['rf'])
+    cleanup()
+    localStorage.setItem('nexus.phone.scopeView', 'rf')
+    await mountRead({})
+    expect(feeds(), 'before the radio scope is seen, the rig scope read finds it').toEqual(['scope'])
+    radioScopeSeen()
+    expect(feeds()).toEqual(['rf'])
   })
 
   it('ONE span owner: no rig-span row beside the span chips, and the Ref level stays', async () => {

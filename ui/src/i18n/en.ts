@@ -15534,7 +15534,7 @@ export const EN = {
   // sound-card audio, or (CW) both stacked. And the hint shown while the radio's scope sweeps slowly.
   'scope.view.aria': 'What the scope shows',
   'scope.view.rf.label': 'RF',
-  'scope.view.rf.title': "The radio's own scope: the band around your dial. If the radio's scope stops arriving, this view shows 'No scope data from the radio' rather than switching to the audio",
+  'scope.view.rf.title': "The radio's own scope: the band around your dial. Once picked, if the radio's scope stops arriving, this view shows 'No scope data from the radio' rather than switching to the audio",
   'scope.view.audio.label': 'Audio',
   'scope.view.audio.title': "The sound-card audio: what came through the radio's filter, in fine detail",
   'scope.view.both.label': 'Both',

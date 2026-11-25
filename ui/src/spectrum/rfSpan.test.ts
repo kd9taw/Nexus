@@ -11,6 +11,8 @@ import {
   loadRfSpan,
   onlyPart,
   saveRfSpan,
+  saveScopeView,
+  scopeViewPicked,
   spanAsk,
   sweepFits,
   sweepFor,
@@ -444,5 +446,21 @@ describe('the stored choice, per window', () => {
   it('a stored value that is no span reads as the default', () => {
     localStorage.setItem('nexus.cw.rfSpan', '±3M')
     expect(loadRfSpan('cw', ids, 'band')).toBe('band')
+  })
+})
+
+describe('scopeViewPicked: a view the operator chose, not the default', () => {
+  afterEach(() => localStorage.clear())
+
+  it('nothing stored, or a word the cockpit does not offer, is the default; a saved view is a pick', () => {
+    for (const cockpit of ['phone', 'cw'] as const) {
+      expect(scopeViewPicked(cockpit), `${cockpit}: nothing stored`).toBe(false)
+      saveScopeView(cockpit, 'rf')
+      expect(scopeViewPicked(cockpit), `${cockpit}: RF saved`).toBe(true)
+    }
+    localStorage.setItem('nexus.phone.scopeView', 'both')
+    expect(scopeViewPicked('phone'), 'Both is not a Phone view').toBe(false)
+    localStorage.setItem('nexus.cw.scopeView', 'bogus')
+    expect(scopeViewPicked('cw')).toBe(false)
   })
 })

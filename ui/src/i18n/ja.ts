@@ -9868,7 +9868,7 @@ export const JA: PartialCatalog = {
   "scope.rf.none": "無線機からのスコープデータがありません",
   "scope.view.aria": "スコープの表示内容",
   "scope.view.rf.label": "RF",
-  "scope.view.rf.title": "無線機自身のスコープ：ダイヤル周波数の周りのバンド。スコープが届かなくなると、オーディオに切り替えず「無線機からのスコープデータがありません」と表示します",
+  "scope.view.rf.title": "無線機自身のスコープ：ダイヤル周波数の周りのバンド。選択した後は、スコープが届かなくなると、オーディオに切り替えず「無線機からのスコープデータがありません」と表示します",
   "scope.view.audio.label": "音声",
   "scope.view.audio.title": "サウンドカードの音声：無線機のフィルターを通った信号を細かく表示",
   "scope.view.both.label": "両方",

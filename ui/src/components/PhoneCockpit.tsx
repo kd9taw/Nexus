@@ -136,6 +136,7 @@ import {
   PHONE_SCOPE_VIEWS,
   saveRfSpan,
   saveScopeView,
+  scopeViewPicked,
   sweepFor,
   useSpanAsk,
   type ScopeView,
@@ -940,19 +941,24 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
   const [rigScopeOf, setRigScopeOf] = useState<{ radio: number | undefined } | null>(null)
   const rigScope = rigScopeOf != null && rigScopeOf.radio === snap.activeRadioId
   const [scopeView, setScopeViewState] = useState<ScopeView>(() => loadScopeView('phone'))
+  // Whether the operator picked the view (here or in an earlier open of this window), not the default.
+  const [viewPicked, setViewPicked] = useState(() => scopeViewPicked('phone'))
   // How fast the radio's scope is sweeping, as measured where it is drawn (PhoneScope `onSweepRate`).
   const [sweepRate, setSweepRate] = useState<number | null>(null)
   const setScopeView = (v: ScopeView) => {
     setScopeViewState(v)
+    setViewPicked(true)
     saveScopeView('phone', v)
     setScopeFeed(null)
     setSweepRate(null)
   }
   // AUDIO: the sound-card view alone, which never gives way to the radio's scope (`feed='audio'`).
   const audioOnlyView = rigScope && scopeView === 'audio'
-  // RF: the radio's scope only (`feed='rf'`), never the audio FFT in a gap between its sweeps (CW's
-  // twin `singleFeed` says why). Before a radio scope is seen, the rig scope read finds it.
-  const singleFeed = audioOnlyView ? 'audio' : rigScope && scopeView === 'rf' ? 'rf' : 'scope'
+  // RF the operator PICKED: the radio's scope only (`feed='rf'`), never the audio FFT in a gap
+  // between its sweeps (CW's twin `singleFeed` says why). RF by DEFAULT stays the rig scope read,
+  // which gives way to the audio view when the radio's scope stops, so an operator who never chose
+  // RF is not left on an empty scope. Before a radio scope is seen, the rig scope read finds it.
+  const singleFeed = audioOnlyView ? 'audio' : rigScope && scopeView === 'rf' && viewPicked ? 'rf' : 'scope'
   const noteFeed = (source: string, loHz: number, hiHz: number) => {
     setScopeFeed({ source, loHz, hiHz })
     if (isRadioScopeSource(source) && !rigScope) setRigScopeOf({ radio: snap.activeRadioId })
