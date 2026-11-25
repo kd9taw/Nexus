@@ -1692,6 +1692,38 @@ fn the_operators_ptt_is_metered_from_the_sdr_programs_sensors() {
     });
 }
 
+/// ⭐ THE POWER METER SHOWS ONCE THE SDR PROGRAM REPORTS IT, HOWEVER LATE IN THE OVER (#565). A
+/// program that pushes its transmit meters only once it transmits has none at the over's first
+/// watts read: that read is a miss, asked again, and the watts reach the engine with the first push.
+/// Before, it read as a radio with no watts meter, and the loop asked for a meter TCI never answers
+/// for the rest of the session ("Not Reported").
+#[test]
+fn the_power_meter_shows_once_the_sdr_program_reports_it() {
+    let mut s = TciScene::new(
+        [Fault::TxSensorsLate {
+            after: Duration::from_millis(800),
+        }],
+        waits(),
+        phone,
+    );
+    s.run(300);
+    s.engine().set_ptt(true);
+    s.run_until("the PTT never keyed", |s| s.sent(0, "trx:0,true") == 1);
+    assert!(
+        s.daemon()
+            .session()
+            .read(|snap| snap.model.trx(trx0()).tx_sensors.known().is_none()),
+        "premise: keyed with no transmit meters reported yet"
+    );
+    s.run_until("no power while keyed", |s| {
+        s.engine().snapshot().radio.tx_po_w.is_some_and(|w| w > 0.0)
+    });
+    s.engine().set_ptt(false);
+    s.run_until("the release never unkeyed", |s| {
+        s.sent(0, "trx:0,false") >= 1
+    });
+}
+
 /// ⭐ TUNE ON TCI IS THE SDR PROGRAM'S OWN CARRIER (`tune:0,true`), not a tone of Nexus's: nothing is
 /// played, the PTT is never asked, and the release ends it (`tune:0,false`).
 #[test]

@@ -270,6 +270,8 @@ pub(crate) enum Action {
         conn: usize,
         gen: u64,
     },
+    /// [`Fault::TxSensorsLate`]: the transmit meters are pushed from now on.
+    TxSensorsFrom,
     Echo {
         trx: u32,
         key: u64,
@@ -864,6 +866,9 @@ impl Radio {
             } => self.chrono_tick(conn, trx, key, n, epoch),
             Action::RxSensors { conn, gen } => self.rx_sensors_tick(conn, gen),
             Action::TxSensors { conn, gen } => self.tx_sensors_tick(conn, gen),
+            Action::TxSensorsFrom => {
+                self.fired.insert("TxSensorsLate:pushing".into());
+            }
             Action::Echo { trx, key } => self.echo(trx as usize, key),
             Action::TailEnd { trx, key } => {
                 if self.trx[trx as usize].key.is_some_and(|k| k.id == key) {
@@ -1878,6 +1883,14 @@ impl Radio {
             }
         }
         if let Some(after) = self.find(|f| match f {
+            Fault::TxSensorsLate { after } => Some(*after),
+            _ => None,
+        }) {
+            if self.once("TxSensorsLate") {
+                self.timer(now + after, Action::TxSensorsFrom);
+            }
+        }
+        if let Some(after) = self.find(|f| match f {
             Fault::ServerStop { after } => Some(*after),
             _ => None,
         }) {
@@ -2600,7 +2613,11 @@ impl Radio {
         else {
             return;
         };
-        if self.running {
+        let late = self
+            .find(|f| matches!(f, Fault::TxSensorsLate { .. }).then_some(()))
+            .is_some()
+            && !self.fired.contains("TxSensorsLate:pushing");
+        if self.running && !late {
             for t in 0..self.trx.len() {
                 let s = &self.trx[t];
                 let (power, swr) = match s.key {

@@ -734,8 +734,8 @@ fn the_meters_read_the_servers_sensors() {
         swr: 1.5,
     });
     let d = daemon(&sim);
-    // A meter not reported yet answers as a verb not implemented (`RPRT -11`): wait for the
-    // server's first push of each.
+    // A meter not reported yet has no value to answer with: wait for the server's first push of
+    // each.
     assert!(
         d.session().wait_until(WAIT, |s| {
             let t = s.model.trx(trx0());
@@ -749,6 +749,32 @@ fn the_meters_read_the_servers_sensors() {
     assert_eq!(c.ask("L RFPOWER 0.5", 1), "RPRT 0\n");
     assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
     ask_until_answer(&mut c, "l SWR", 1, "1.50\n");
+    ask_until_answer(&mut c, "l RFPOWER_METER_WATTS", 1, "50.0\n");
+    assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
+}
+
+/// ⭐ A TRANSMIT METER THE SERVER HAS NOT REPORTED YET IS A MISS (`RPRT -5`), NEVER A METER THE RADIO
+/// LACKS (`RPRT -11`) (#565). Read as "not available", the first watts read of an over made before
+/// the server's first `tx_sensors` cost the power meter for the session. Once the server reports,
+/// the same reads answer; a level TCI has no meter for is still `RPRT -11`.
+#[test]
+fn a_transmit_meter_not_reported_yet_is_a_miss_not_a_meter_the_radio_lacks() {
+    let sim = esdr3([Fault::TxSensorsLate {
+        after: Duration::from_millis(500),
+    }]);
+    let d = daemon(&sim);
+    let mut c = Client::connect(&d);
+    assert!(
+        d.session()
+            .read(|s| s.model.trx(trx0()).tx_sensors.known().is_none()),
+        "premise: no transmit meters reported yet"
+    );
+    assert_eq!(c.ask("l RFPOWER_METER_WATTS", 1), "RPRT -5\n");
+    assert_eq!(c.ask("l SWR", 1), "RPRT -5\n");
+    assert_eq!(c.ask("l RFPOWER_METER", 1), "RPRT -11\n", "no such meter");
+    assert_eq!(c.ask("M USB 0", 1), "RPRT 0\n");
+    assert_eq!(c.ask("L RFPOWER 0.5", 1), "RPRT 0\n");
+    assert_eq!(c.ask("T 1", 1), "RPRT 0\n");
     ask_until_answer(&mut c, "l RFPOWER_METER_WATTS", 1, "50.0\n");
     assert_eq!(c.ask("T 0", 1), "RPRT 0\n");
 }

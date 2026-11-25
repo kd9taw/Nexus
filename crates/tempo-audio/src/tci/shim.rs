@@ -19,7 +19,7 @@
 //! | `J <hz>` / `Z <hz>` | `rit_offset`/`xit_offset:<trx>,<hz>;` | done once reported |
 //! | `L RFPOWER <0..1>` / `l RFPOWER` | `drive:<trx>,<0–100>;` (`drive:<v>;` in TCI 1.x) / the model | the engine's ceiling decides the value, and it becomes the ceiling admission holds the server's drive to |
 //! | `l STRENGTH` | `rx_channel_sensors`, `rx_sensors` or the polled `rx_smeter`: dBm as dB from S9 at the dial | — |
-//! | `l SWR`, `l RFPOWER_METER_WATTS` | `tx_sensors` (its SWR, and its peak watts as WSJT-X reads them), else the older `tx_swr`, `tx_power` | — |
+//! | `l SWR`, `l RFPOWER_METER_WATTS` | `tx_sensors` (its SWR, and its peak watts as WSJT-X reads them), else the older `tx_swr`, `tx_power`; none reported yet is `RPRT -5`, a miss, never `-11` | — |
 //! | `\dump_caps`, `\dump_state` | authored ([`authored_caps`]): the server's `vfo_limits` as the receive range | — |
 //!
 //! Everything else answers as the shared encoder answers a backend that lacks it (`RPRT -11`),
@@ -723,6 +723,19 @@ impl RigBackend for TciShim {
                 Some(format!("{:.1}", watts.to_f64()))
             }),
             _ => None,
+        }
+    }
+
+    /// A transmit meter the server has not reported yet is the radio not answering (`RPRT -5`),
+    /// never one it lacks (`RPRT -11`) (#565). TCI's meters arrive only as the server pushes them
+    /// (`tx_sensors` while it transmits), so the first reads of an over can come before the first
+    /// push; read as "not available", the forward-power one cost Nexus the power meter for the
+    /// rest of the session. A miss is asked again, and the meter shows once the server reports.
+    fn try_level(&self, name: &str) -> Option<Result<String, SetFault>> {
+        match self.level(name) {
+            Some(value) => Some(Ok(value)),
+            None if matches!(name, "SWR" | "RFPOWER_METER_WATTS") => Some(Err(SetFault::NoAnswer)),
+            None => None,
         }
     }
 

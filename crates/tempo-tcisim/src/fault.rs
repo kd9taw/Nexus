@@ -227,6 +227,14 @@ pub enum Fault {
     /// past them it says the server did not answer, and it never treats a late echo of an old
     /// write as the answer to a new one.
     Slow { delay: Duration },
+
+    /// **Transmit meters late.** No `tx_sensors` is pushed until `after` past the radio's first
+    /// key: until then the transmit meters have never been reported, as with a server that pushes
+    /// them only once it transmits (ExpertSDR3 with a SunSDR, as reported).
+    ///
+    /// *Guard:* a meter not reported yet is a miss, asked again, never a meter the radio lacks:
+    /// the forward power shows once the server reports it.
+    TxSensorsLate { after: Duration },
 }
 
 /// Where [`Fault::SplitConcat`] cuts a command.
@@ -267,6 +275,7 @@ impl Fault {
             Fault::HoldsCw => "HoldsCw",
             Fault::UnknownVersion { .. } => "UnknownVersion",
             Fault::Slow { .. } => "Slow",
+            Fault::TxSensorsLate { .. } => "TxSensorsLate",
         }
     }
 }
@@ -465,6 +474,9 @@ mod tests {
             },
             Fault::Slow {
                 delay: Duration::ZERO,
+            },
+            Fault::TxSensorsLate {
+                after: Duration::ZERO,
             },
         ];
         let names: std::collections::BTreeSet<&str> = all.iter().map(Fault::name).collect();
