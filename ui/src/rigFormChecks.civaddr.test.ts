@@ -14,7 +14,8 @@ function rustCases(): [string, number | null | 'bad'][] {
   const src = readFileSync(RUST, 'utf8')
   const table = src.slice(src.indexOf('const CIV_ADDR_CASES'), src.indexOf('];', src.indexOf('const CIV_ADDR_CASES')))
   return [...table.matchAll(/\("([^"]*)", (Ok\(None\)|Ok\(Some\(0x([0-9A-Fa-f]+)\)\)|Err\(NotACivAddr\))\)/g)].map((m) => [
-    m[1],
+    // A Rust `\u{..}` escape is the character it names.
+    m[1].replace(/\\u\{([0-9A-Fa-f]+)\}/g, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16))),
     m[2] === 'Ok(None)' ? null : m[3] != null ? parseInt(m[3], 16) : 'bad',
   ])
 }
@@ -31,6 +32,7 @@ describe('the CI-V address', () => {
   it('is read as the engine reads it, case for case', () => {
     const cases = rustCases()
     expect(cases.length, 'control: the Rust table was actually parsed').toBeGreaterThan(10)
+    expect(cases.some(([text]) => text.startsWith('\uFEFF')), 'control: an escape was decoded').toBe(true)
     for (const [text, want] of cases) expect(parseCivAddr(text), JSON.stringify(text)).toBe(want)
   })
 

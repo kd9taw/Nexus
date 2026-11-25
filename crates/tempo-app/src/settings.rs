@@ -587,8 +587,10 @@ pub struct NotACivAddr;
 ///
 /// ⚠️ MIRRORED in the UI as `parseCivAddr` (ui/src/rigFormChecks.ts), which refuses the Save on
 /// `Err`; the UI's test reads this file's table of cases (`CIV_ADDR_CASES`) and holds it to them.
+/// The text is trimmed as JavaScript's `trim()` trims it (a byte-order mark goes, U+0085 stays),
+/// so the two agree on pasted text too.
 pub fn parse_civ_addr(text: &str) -> Result<Option<u8>, NotACivAddr> {
-    let t = text.trim();
+    let t = tempo_core::logbook::query::js_trim(text);
     if t.is_empty() {
         return Ok(None);
     }
@@ -9910,6 +9912,10 @@ mod tests {
         ("0X94", Ok(Some(0x94))),
         ("94h", Ok(Some(0x94))),
         (" b6 ", Ok(Some(0xB6))),
+        // A byte-order mark pasted in front is trimmed as the UI's `trim()` trims it; U+0085 is
+        // not trimmed by either side, so it stays and refuses.
+        ("\u{FEFF}94", Ok(Some(0x94))),
+        ("\u{85}94", Err(NotACivAddr)),
         ("1", Ok(Some(0x01))),
         ("DF", Ok(Some(0xDF))),
         ("00", Err(NotACivAddr)),
