@@ -7116,7 +7116,7 @@ export const ES: PartialCatalog = {
   "scope.rf.none": "Sin datos de scope del equipo",
   "scope.view.aria": "Lo que muestra el scope",
   "scope.view.rf.label": "RF",
-  "scope.view.rf.title": "El scope de la propia radio: la banda alrededor de tu frecuencia",
+  "scope.view.rf.title": "El scope de la propia radio: la banda alrededor de tu frecuencia. Si su scope deja de llegar, esta vista muestra «Sin datos de scope del equipo» en lugar de pasar al audio",
   "scope.view.audio.label": "Audio",
   "scope.view.audio.title": "El audio de la tarjeta de sonido: lo que pasó por el filtro de la radio, con todo detalle",
   "scope.view.both.label": "Ambos",
