@@ -5235,6 +5235,8 @@ export const IT: PartialCatalog = {
   "sat.health.dead.title": "SatNOGS segnala questo satellite come muto. I suoi passaggi sono ancora calcolati da elementi reali; non ci si aspetta di poterlo collegare.",
   "sat.health.reentered.label": "rientrato",
   "sat.health.reentered.title": "SatNOGS segnala che questo satellite è rientrato: non esiste più. Ogni passaggio mostrato è calcolato dagli ultimi elementi disponibili.",
+  "sat.health.launchFailed.label": "lancio fallito",
+  "sat.health.launchFailed.title": "SatNOGS segnala che questo satellite è andato perso al lancio: non ha mai raggiunto l'orbita, nulla da collegare.",
   "sat.health.preLaunch.label": "pre-lancio",
   "sat.health.preLaunch.title": "SatNOGS ha questo satellite in archivio ma non ancora rilasciato: nulla da collegare finché non viene lanciato.",
   "sat.health.unknown.title": "SatNOGS segnala lo stato di questo satellite come «{{status}}».",

@@ -6838,6 +6838,8 @@ export const FR: PartialCatalog = {
   "sat.health.noElements.title": "Aucune source ne fournit d'éléments orbitaux pour ce satellite en ce moment, ses passages ne peuvent donc pas être calculés. Il reste en favori ; les lignes reviendront avec les éléments.",
   "sat.health.noPosition.label": "sans position",
   "sat.health.noPosition.title": "Éléments à jour, mais le propagateur a refusé d'en tirer une position — une orbite en décroissance fait cela. Rien n'est masqué ; il n'y a réellement aucun endroit où dessiner.",
+  "sat.health.launchFailed.label": "lancement raté",
+  "sat.health.launchFailed.title": "SatNOGS indique que ce satellite a été perdu au lancement — il n'a jamais atteint l'orbite, rien à contacter.",
   "sat.health.preLaunch.label": "avant lancement",
   "sat.health.preLaunch.title": "SatNOGS a ce satellite en fiche mais pas encore déployé — rien à contacter avant son lancement.",
   "sat.health.reentered.label": "rentré",

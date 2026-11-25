@@ -28,6 +28,13 @@ describe('satBirdHealth (a bird that HAS a row — elements exist)', () => {
     expect(satBirdHealth('re-entered', true)?.tone).toBe('dead')
   })
 
+  it('marks a bird whose launch failed as gone, not as an unknown status', () => {
+    const h = satBirdHealth('launch failed', true)
+    expect(h?.label).toBe('launch failed')
+    expect(h?.tone).toBe('dead')
+    expect(h?.title).toMatch(/never reached orbit/)
+  })
+
   it('marks an ALIVE bird whose amateur transmitters have all gone quiet', () => {
     // The catalog's `amateur` flag IS "carries ≥1 live amateur transmitter".
     // Still in orbit, nothing to work — the operator must be told.

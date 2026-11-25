@@ -6887,6 +6887,9 @@ export const EN = {
   'sat.health.reentered.label': 're-entered',
   'sat.health.reentered.title':
     'SatNOGS reports this bird has re-entered — it is gone. Any pass shown is modelled from the last elements on file.',
+  'sat.health.launchFailed.label': 'launch failed',
+  'sat.health.launchFailed.title':
+    'SatNOGS reports this bird was lost at launch — it never reached orbit, so there is nothing to work.',
   'sat.health.preLaunch.label': 'pre-launch',
   'sat.health.preLaunch.title':
     'SatNOGS has this bird on record but not yet deployed — nothing to work until it launches.',

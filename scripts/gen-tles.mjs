@@ -35,8 +35,9 @@
 //     the whole story is on IN_ORBIT_STATUSES, including what the retirement
 //     of `dead` cost this predicate.
 //   * LISTED  = every bird SatNOGS has ever given an amateur transmitter,
-//     minus re-entries older than RECENT_DECAY_DAYS. So a bird that dies, goes
-//     silent, or re-enters KEEPS ITS ROW, carrying the status that says why.
+//     minus re-entries (and failed launches) older than RECENT_DECAY_DAYS. So
+//     a bird that dies, goes silent, re-enters or is lost on the way up KEEPS
+//     ITS ROW, carrying the status that says why.
 // The second tier is not decoration: the client's whole honesty story — the
 // dead / re-entered / pre-launch / alive-but-silent chips, and a ★ bird that
 // stays clickable after it stops working — is unreachable without it. Publish
@@ -302,7 +303,22 @@ export function classifyTransmitter(t) {
 /// (SATCAT fills it late; 88 records have none at all) the record's own
 /// `updated` stamp stands in, so a bird marked re-entered TODAY is listed for
 /// the whole window rather than vanishing the same day.
+///
+/// A `launch failed` bird rides the same window (see [`GONE_STATUSES`]).
 const RECENT_DECAY_DAYS = 180
+
+/// The statuses that mean "this bird is not up there and is not coming back",
+/// and so age out on [`RECENT_DECAY_DAYS`] instead of keeping their row
+/// forever. `re-entered` is the original. `launch failed` joined in 2026-11,
+/// when SatNOGS grew it as a fourth value for a bird lost on the way up — the
+/// first record was Stork 6 (99292), lost on LauncherOne on 2023-01-09, with
+/// `decayed` stamped to the launch date. It is a re-entry in every sense this
+/// file cares about: no orbit, no elements, nothing to work, and a decay date
+/// to age out on. So it follows the re-entry rule rather than `dead`'s keep-
+/// forever one: a bird a ★ was waiting on that fails at launch keeps the row
+/// that says so for a season, and a failure from years ago is history, not a
+/// catalog row (Stork 6 itself is long outside the window).
+const GONE_STATUSES = new Set(['re-entered', 'launch failed'])
 
 /// SatNOGS' word for "this bird is up there right now" — the field the ACTIVE
 /// tier and the share gate's denominator both hang on.
@@ -323,7 +339,8 @@ const RECENT_DECAY_DAYS = 180
 /// only understands the words of the day it was written is a mirror that
 /// breaks on the next rename. `dead` is KNOWN but deliberately NOT in orbit:
 /// upstream no longer emits it, and admitting it here would silently change
-/// what the fixture's dead-bird case means.
+/// what the fixture's dead-bird case means. `launch failed` (2026-11) is the
+/// same shape — known, never in orbit; see [`GONE_STATUSES`].
 ///
 /// WHAT THE RENAME COST. `dead` was the editorial half of the liveness test —
 /// "the orbit is fine, the bird is not" — and it is simply gone; SatNOGS' new
@@ -353,8 +370,10 @@ const RECENT_DECAY_DAYS = 180
 const IN_ORBIT_STATUSES = new Set(['in orbit', 'alive'])
 
 /// Every satellite status this script has an opinion about. SatNOGS' status is
-/// a SMALL CURATED enumeration — the API 400s on anything outside it, and three
-/// values cover all 2771 live records — not an open vocabulary like
+/// a SMALL CURATED enumeration — the API 400s on anything outside it, and a
+/// handful of values cover every live record (three across all 2771 in
+/// 2026-08; `launch failed` made four in 2026-11, classified the day this
+/// gate caught it) — not an open vocabulary like
 /// transmitter `mode`. So an unseen value here is a vocabulary move, never a
 /// stray record, and it is GATED rather than logged (the treatment
 /// `classifyTransmitter`'s unseen types get). The reason is the PARTIAL move: a
@@ -364,7 +383,7 @@ const IN_ORBIT_STATUSES = new Set(['in orbit', 'alive'])
 /// quietly shrink the active tier, and leave the share sitting inside its band
 /// with nothing tripped. A three-value enum growing a fourth value is worth a
 /// human's attention before the payload ships to a thousand operators.
-const KNOWN_SAT_STATUSES = new Set([...IN_ORBIT_STATUSES, 'dead', 're-entered', 'future'])
+const KNOWN_SAT_STATUSES = new Set([...IN_ORBIT_STATUSES, 'dead', 'future', ...GONE_STATUSES])
 
 const isInOrbit = (status) => IN_ORBIT_STATUSES.has(status)
 
@@ -583,11 +602,11 @@ const inAmateurBand = (hz) => {
 /// Is a bird still worth a catalog ROW? Everything except the historical
 /// tail: alive, dead, pre-launch and unrecognised statuses all stay listed
 /// (an unseen upstream value degrades to a label, exactly as the client's
-/// status chip does), and only a re-entry older than [`RECENT_DECAY_DAYS`]
-/// drops out — by then it has been gone for half a year and its elements
-/// could not be used anyway.
+/// status chip does), and only a re-entry or failed launch ([`GONE_STATUSES`])
+/// older than [`RECENT_DECAY_DAYS`] drops out — by then it has been gone for
+/// half a year and its elements could not be used anyway.
 function listable(status, decayed, updated, now) {
-  if (status !== 're-entered') return true
+  if (!GONE_STATUSES.has(status)) return true
   const stamp = Date.parse(decayed || updated || '')
   if (!Number.isFinite(stamp)) return false // no date at all = long gone
   return (now - stamp / 1000) / 86400 <= RECENT_DECAY_DAYS
@@ -607,7 +626,7 @@ function listable(status, decayed, updated, now) {
 /// and a bird whose every transmitter is silent is inactive however healthy
 /// the orbit is (AO-85 — three legs, all dead, listed and not active). Since
 /// the `dead` status was retired upstream the first clause only excludes
-/// re-entries and pre-launch birds; IO-117, which used to be this comment's
+/// re-entries, failed launches and pre-launch birds; IO-117, which used to be this comment's
 /// example of the first clause, is now caught by neither and is active.
 /// Neither loses its row — that is the whole point:
 /// "this bird stopped working" is a fact the operator is owed, and a bird that

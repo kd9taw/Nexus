@@ -2250,6 +2250,8 @@ export const DE: PartialCatalog = {
   "sat.health.dead.title": "SatNOGS meldet diesen Satelliten als stumm. Seine Überflüge werden weiter aus echten Bahnelementen berechnet; ein QSO ist nicht zu erwarten.",
   "sat.health.reentered.label": "verglüht",
   "sat.health.reentered.title": "SatNOGS meldet den Wiedereintritt dieses Satelliten — er ist weg. Jeder gezeigte Überflug ist aus den letzten vorliegenden Bahnelementen modelliert.",
+  "sat.health.launchFailed.label": "Start gescheitert",
+  "sat.health.launchFailed.title": "SatNOGS meldet, dass dieser Satellit beim Start verloren ging — er hat nie eine Umlaufbahn erreicht, es gibt nichts zu arbeiten.",
   "sat.health.preLaunch.label": "vor Start",
   "sat.health.preLaunch.title": "SatNOGS führt diesen Satelliten, er ist aber noch nicht ausgesetzt — bis zum Start gibt es nichts zu arbeiten.",
   "sat.health.unknown.title": "SatNOGS meldet den Status dieses Satelliten als „{{status}}“.",

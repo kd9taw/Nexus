@@ -4452,6 +4452,8 @@ export const JA: PartialCatalog = {
   "sat.health.dead.title": "SatNOGSはこの衛星を停波と報告しています。パスは実際の軌道要素から計算されますが、交信は期待できません。",
   "sat.health.reentered.label": "再突入",
   "sat.health.reentered.title": "SatNOGSはこの衛星が再突入したと報告しています — もう存在しません。表示されるパスは最後に保存された軌道要素によるモデルです。",
+  "sat.health.launchFailed.label": "打ち上げ失敗",
+  "sat.health.launchFailed.title": "SatNOGSはこの衛星が打ち上げで失われたと報告しています — 軌道に到達しておらず、交信できません。",
   "sat.health.preLaunch.label": "打ち上げ前",
   "sat.health.preLaunch.title": "SatNOGSに登録されていますが、まだ展開されていません — 打ち上げまでは交信できません。",
   "sat.health.unknown.title": "SatNOGSはこの衛星の状態を「{{status}}」と報告しています。",

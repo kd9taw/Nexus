@@ -116,6 +116,61 @@ test('a RECENT re-entry keeps its row; an old one is history, not a catalog', ()
   assert.ok(!birds.some((b) => b.norad == null), 'no NORAD, no bird')
 })
 
+test('a bird whose launch failed is a known status: listed while recent, never in orbit', () => {
+  // SatNOGS grew a fourth status, `launch failed`, in 2026-11 (Stork 6, lost
+  // on LauncherOne 2023-01-09, its `decayed` stamped with the launch date).
+  // It is upstream's verdict that the bird never reached orbit: KNOWN, so the
+  // vocabulary gate lets the run publish, and NOT in orbit, so it can never
+  // join the active tier however alive its transmitter record claims to be.
+  // It ages out on the re-entry window, like the re-entry it effectively is.
+  const sats = JSON.parse(read('satnogs-satellites.json'))
+  const tx = JSON.parse(read('satnogs-transmitters.json'))
+  const failed = (norad, decayed) => {
+    sats.push({
+      sat_id: 'FIXT' + norad,
+      norad_cat_id: norad,
+      norad_follow_id: null,
+      name: 'FAILED-' + norad,
+      names: '',
+      status: 'launch failed',
+      decayed,
+      launched: decayed,
+    })
+    tx.push({
+      uuid: 'TXFAILED' + norad,
+      description: 'beacon',
+      alive: true,
+      type: 'Transmitter',
+      mode: 'CW',
+      service: 'Amateur',
+      downlink_low: 435_100_000,
+      norad_cat_id: norad,
+      sat_id: 'FIXT' + norad,
+    })
+  }
+  failed(99291, '2026-07-01T00:00:00Z') // a month before the fixture clock
+  failed(99292, '2023-01-09T00:00:00Z') // Stork 6's own date — long gone
+
+  const { birds } = deriveAmateurCatalog(sats, tx, NOW)
+  const recent = birds.find((b) => b.norad === 99291)
+  assert.ok(recent, 'a recent launch failure keeps its row, so a starred bird says what happened')
+  assert.equal(recent.status, 'launch failed')
+  assert.equal(recent.active, false, 'it never reached orbit — no elements, ever')
+  assert.ok(!birds.some((b) => b.norad === 99292), 'a 2023 launch failure is history')
+
+  const { manifest } = build({ satellites: JSON.stringify(sats), transmitters: JSON.stringify(tx) })
+  const row = manifest.catalog.find((b) => b.norad === 99291)
+  assert.equal(row.status, 'launch failed')
+  assert.equal(row.src, undefined, 'listed without elements')
+
+  // The gate itself still refuses a value nobody has classified.
+  sats.push({ ...sats.at(-1), sat_id: 'FIXTX', norad_cat_id: 99293, status: 'operational' })
+  assert.match(
+    refuse(() => build({ satellites: JSON.stringify(sats), transmitters: JSON.stringify(tx) })).message,
+    /status vocabulary moved: "operational" ×1/,
+  )
+})
+
 test('a placeholder NORAD resolves to its follow id and appears exactly once', () => {
   // Marina: SatNOGS carries 98293 with norad_follow_id 69920; Celestrak
   // catalogues her as 69920. Joining on norad_cat_id alone doubles the bird.

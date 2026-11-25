@@ -5029,6 +5029,8 @@ export const ZH_HANT: PartialCatalog = {
   "sat.health.dead.title": "SatNOGS 報告該星已靜默。其過境仍按真實軌道根數計算；不預期能通聯。",
   "sat.health.reentered.label": "已再入",
   "sat.health.reentered.title": "SatNOGS 報告該星已再入 — 它已不存在。顯示的過境是按最後一次存檔軌道根數模擬的。",
+  "sat.health.launchFailed.label": "發射失敗",
+  "sat.health.launchFailed.title": "SatNOGS 報告該星在發射時遺失 — 從未入軌，無可通聯。",
   "sat.health.preLaunch.label": "發射前",
   "sat.health.preLaunch.title": "SatNOGS 有該星記錄但尚未部署 — 發射前無可通聯。",
   "sat.health.unknown.title": "SatNOGS 報告該星狀態為「{{status}}」。",

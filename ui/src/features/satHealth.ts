@@ -6,7 +6,7 @@
 // per surface from two fields that mean different things:
 //
 //  - `status` is SatNOGS's orbital verdict (alive | dead | re-entered |
-//    future). It is ABSENT whenever the serving snapshot has no catalog (a
+//    launch failed | future). It is ABSENT whenever the serving snapshot has no catalog (a
 //    schema-1 manifest, the Celestrak fallback leg) — absent means NOT ASKED,
 //    and a chip drawn from it would be an invention, not a report.
 //  - `amateur` is the mirror catalog's "carries at least one LIVE amateur
@@ -71,6 +71,15 @@ export function satBirdHealth(
       return {
         label: t('sat.health.reentered.label'),
         title: t('sat.health.reentered.title'),
+        tone: 'dead',
+      }
+    // SatNOGS' word (since 2026-11) for a bird lost on the way up. It never
+    // reached orbit, so it reads as gone exactly like a re-entry — never as
+    // the `stale` "cannot say" an unseen word would get.
+    case 'launch failed':
+      return {
+        label: t('sat.health.launchFailed.label'),
+        title: t('sat.health.launchFailed.title'),
         tone: 'dead',
       }
     case 'future':

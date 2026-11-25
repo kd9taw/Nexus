@@ -5372,6 +5372,8 @@ export const RU: PartialCatalog = {
   "sat.health.dead.title": "По данным SatNOGS, этот спутник молчит. Его пролёты по-прежнему рассчитываются по реальным элементам, но провести связь через него не ожидается.",
   "sat.health.reentered.label": "сошёл с орбиты",
   "sat.health.reentered.title": "По данным SatNOGS, этот спутник сошёл с орбиты — его больше нет. Показанные пролёты смоделированы по последним сохранённым элементам.",
+  "sat.health.launchFailed.label": "сбой запуска",
+  "sat.health.launchFailed.title": "По данным SatNOGS, этот спутник потерян при запуске — он так и не вышел на орбиту, работать нечего.",
   "sat.health.preLaunch.label": "до запуска",
   "sat.health.preLaunch.title": "Спутник есть в базе SatNOGS, но ещё не выведен на орбиту — работать нечего, пока он не запущен.",
   "sat.health.unknown.title": "SatNOGS сообщает статус этого спутника: «{{status}}».",
