@@ -93,6 +93,16 @@ describe('rollPassesToBirds — the volume law', () => {
     expect(rows.map((r) => r.name)).toEqual(['MYSTERY-1'])
   })
 
+  it('a bird whose launch failed sinks out exactly as a dead one does', () => {
+    // SatNOGS' 2026-11 status for a bird lost on the way up; the mirror
+    // lists it for a season, and it is never something to work.
+    const v = view(
+      [bird('LOST-1', 99005, { status: 'launch failed', amateur: true }), bird('SO-50', 27607)],
+      [pass('LOST-1', 99005, 60), pass('SO-50', 27607, 40)],
+    )
+    expect(rollPassesToBirds(v, NOW, noFav).map((r) => r.name)).toEqual(['SO-50'])
+  })
+
   it('amateur:false is believed ONLY beside a present status (the satHealth rule, on the wire shape the backend actually emits)', () => {
     // The wire contract (SatBird.amateur's own doc): the bool is serialized
     // unconditionally and is false-with-absent-status for every bird the

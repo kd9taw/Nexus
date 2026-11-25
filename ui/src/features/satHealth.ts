@@ -51,6 +51,16 @@ export function isInOrbitStatus(status?: string | null): boolean {
 }
 
 /**
+ * Whether SatNOGS says the bird is gone and not coming back: `dead` (older
+ * catalogs), `re-entered`, or `launch failed` (since 2026-11, a bird lost on
+ * the way up). The same set satBirdHealth marks with the dead tone; every
+ * surface that sinks or flags a gone bird asks here.
+ */
+export function isGoneStatus(status?: string | null): status is string {
+  return status === 'dead' || status === 're-entered' || status === 'launch failed'
+}
+
+/**
  * The mark for a bird that HAS a row in the view (elements exist, the
  * position is real). `null` = nothing to report — either it is alive and
  * transmitting, or nobody has told us anything about it.

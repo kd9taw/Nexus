@@ -20,6 +20,7 @@
 //    silently never fire, the worst failure available in this section.
 import type { SatPass, SatView } from '../types'
 import { WORKABLE_EL_DEG } from './satSeed'
+import { isGoneStatus } from './satHealth'
 
 /** THE VOLUME LAW (stated where the rollup lives, per the design ruling):
  * the discovery band is ONE ROW PER BIRD, keyed on NORAD — never one row per
@@ -118,7 +119,7 @@ function classTier(birdType: string | null): number {
 
 /** Geometry-only pass quality — passScore's shape minus its status terms.
  * The status terms are dropped deliberately: on this surface status is the
- * bundled catalog's, which reads 'in orbit' for every admitted bird (a constant
+ * bundled catalog's, which reads a live-bird status for every admitted bird (a constant
  * buys no ranking), and the live SatNOGS overlay is favorites-only. */
 function geomScore(p: SatPass): number {
   const durMin = (p.losUnix - p.aosUnix) / 60
@@ -186,7 +187,7 @@ export function passAdmission(
     if ((noradsByName.get(p.name.toUpperCase())?.size ?? 0) > 1) return false
     const meta = metaFor(p)
     const status = meta?.status ?? p.status ?? null
-    if (status === 'dead' || status === 're-entered' || status === 'future') return false
+    if (isGoneStatus(status) || status === 'future') return false
     // `amateur` is a real answer ONLY beside a present status (SatBird's own
     // doc: catalog_marks returns (None, false) for every bird it was never
     // ASKED about, and the bool rides the wire unconditionally). Believe

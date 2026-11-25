@@ -7,7 +7,7 @@
 // facts, and guessing either one is how a re-entered bird kept its ★ with no
 // mark anywhere.
 import { describe, it, expect } from 'vitest'
-import { isInOrbitStatus, satBirdHealth, satExcludedHealth } from './satHealth'
+import { isGoneStatus, isInOrbitStatus, satBirdHealth, satExcludedHealth } from './satHealth'
 
 describe('satBirdHealth (a bird that HAS a row — elements exist)', () => {
   it('an alive bird with a live amateur transmitter is unmarked', () => {
@@ -68,6 +68,16 @@ describe('satBirdHealth (a bird that HAS a row — elements exist)', () => {
     expect(satBirdHealth('in orbit', true)).toBeNull()
     expect(satBirdHealth('in orbit', undefined)).toBeNull()
     expect(satBirdHealth('in orbit', false)).toEqual(satBirdHealth('alive', false))
+  })
+
+  it('isGoneStatus is the not-coming-back set satBirdHealth marks gone', () => {
+    for (const s of ['dead', 're-entered', 'launch failed']) {
+      expect(isGoneStatus(s), s).toBe(true)
+      expect(satBirdHealth(s, true)?.tone, s).toBe('dead')
+    }
+    for (const s of ['in orbit', 'alive', 'future', '', null, undefined]) {
+      expect(isGoneStatus(s), String(s)).toBe(false)
+    }
   })
 
   it('isInOrbitStatus knows both spellings and nothing else', () => {

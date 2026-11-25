@@ -172,4 +172,20 @@ describe('a post-rename "in orbit" bird reads as alive on every surface', () => 
     expect(chip.classList.contains('alive')).toBe(true)
     expect(chip.classList.contains('dead')).toBe(false)
   })
+
+  it('a ★ bird whose launch failed gets the dead chip and says so, like a re-entry', async () => {
+    localStorage.setItem('nexus.sats.chasing', JSON.stringify(['LOST-1']))
+    api.getSatellites.mockImplementation(() =>
+      Promise.resolve(mkView([bird('LOST-1', 99005, { status: null })], [pass('LOST-1', 99005, 40, 10)])),
+    )
+    api.getSatPassNeeds.mockImplementation(() =>
+      Promise.resolve([pass('LOST-1', 99005, 40, 10, { status: 'launch failed' })]),
+    )
+    const { container } = render(<SatellitesView />)
+    await waitFor(() => expect(container.querySelector('.sats-sched .sat-chip')).toBeTruthy())
+    const chip = container.querySelector('.sats-sched .sat-chip')!
+    expect(chip.classList.contains('dead')).toBe(true)
+    expect(chip.textContent).toBe('launch failed')
+    await waitFor(() => expect(stripText(container)).toMatch(/LAUNCH FAILED/))
+  })
 })
