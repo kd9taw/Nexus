@@ -1084,6 +1084,15 @@ impl TciScene {
         }
     }
 
+    /// How many times the scene's client wrote the over's drive (`drive:`).
+    fn drive_writes(&self) -> usize {
+        self.sim
+            .commands_from(0)
+            .iter()
+            .filter(|c| c.starts_with("drive:"))
+            .count()
+    }
+
     /// The client's transmit route.
     fn route(&self) -> Arc<crate::tci::audio::TciTx> {
         self.daemon().tx().expect("the transmit route").clone()
@@ -1707,6 +1716,102 @@ fn tune_is_the_sdr_programs_own_carrier() {
     assert!(
         s.card.played.lock().unwrap().is_empty(),
         "a tone was played"
+    );
+    s.engine().set_tune(false);
+    s.run_until("the release never ended the carrier", |s| {
+        s.sent(0, "tune:0,false") >= 1
+    });
+}
+
+/// ⭐ THE OPERATOR'S TUNE POWER REACHES THE SDR PROGRAM'S CARRIER (#564): with Tune power at 10%,
+/// the loop writes `tune_drive:0,10` before `tune:0,true`, where the program's own tune drive was
+/// 80, and never writes the over's `drive`. Held to the duty-cycle ceiling in force (Phone capped
+/// at 5%: the carrier goes out at 5) and to the level the operator commands (3%: at 3).
+#[test]
+fn the_operators_tune_power_is_the_sdr_programs_tune_drive_held_to_the_ceiling() {
+    let cases: [(&str, Setup, &str); 3] = [
+        (
+            "Tune power alone",
+            |e| {
+                phone(e);
+                let mut s = e.settings().clone();
+                s.tune_power_pct = Some(10);
+                e.apply_settings(s);
+            },
+            "tune_drive:0,10",
+        ),
+        (
+            "under a 5% Phone ceiling",
+            |e| {
+                phone(e);
+                let mut s = e.settings().clone();
+                s.tune_power_pct = Some(10);
+                s.max_power_phone = Some(0.05);
+                e.apply_settings(s);
+            },
+            "tune_drive:0,5",
+        ),
+        (
+            "with 3% commanded",
+            |e| {
+                phone(e);
+                let mut s = e.settings().clone();
+                s.tune_power_pct = Some(10);
+                e.apply_settings(s);
+                e.set_rf_power(0.03);
+            },
+            "tune_drive:0,3",
+        ),
+    ];
+    for (what, setup, written) in cases {
+        let mut s = TciScene::new([], waits(), setup);
+        s.sim.operator("tune_drive:0,80;");
+        assert!(
+            s.daemon()
+                .session()
+                .wait_until(WAIT, |snap| snap.model.trx(trx0()).tune_drive.known()
+                    == Some(&80)),
+            "{what}: premise: the program's own tune drive is 80"
+        );
+        s.run(300);
+        let drives_before = s.drive_writes();
+        s.engine().set_tune(true);
+        s.run_until(&format!("{what}: the tune never keyed"), |s| {
+            !s.keys().is_empty()
+        });
+        let commands = s.sim.commands_from(0);
+        let drive_at = commands.iter().position(|c| c == written);
+        let key_at = commands.iter().position(|c| c == "tune:0,true");
+        assert!(
+            drive_at.is_some_and(|d| key_at.is_some_and(|k| d < k)),
+            "{what}: {written} was not written before the key: {commands:?}"
+        );
+        assert_eq!(
+            s.drive_writes(),
+            drives_before,
+            "{what}: the over's drive was written for the tune"
+        );
+        s.engine().set_tune(false);
+        s.run_until(
+            &format!("{what}: the release never ended the carrier"),
+            |s| s.sent(0, "tune:0,false") >= 1,
+        );
+    }
+}
+
+/// With no Tune power set, the SDR program's tune drive is its own, as before: nothing is written.
+#[test]
+fn with_no_tune_power_the_sdr_programs_tune_drive_is_left_alone() {
+    let mut s = TciScene::new([], waits(), phone);
+    s.run(300);
+    s.engine().set_tune(true);
+    s.run_until("the tune never keyed", |s| !s.keys().is_empty());
+    assert!(
+        !s.sim
+            .commands_from(0)
+            .iter()
+            .any(|c| c.starts_with("tune_drive:")),
+        "a tune drive was written"
     );
     s.engine().set_tune(false);
     s.run_until("the release never ended the carrier", |s| {

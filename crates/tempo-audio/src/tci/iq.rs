@@ -2468,7 +2468,7 @@ mod tests {
         let level = tempo_tcisim::synth::tone_level(&heard[1_000..], 12_000, 1_000.0);
         assert!(level > 0.01, "the carrier in the receive audio: {level}");
         let rows = d.pan.status().rows;
-        d.tune_on(5_000).expect("the tune carrier keys");
+        d.tune_on(5_000, None).expect("the tune carrier keys");
         tick_until(&d, &feed, true, "never keyed", || {
             sim.log().iter().any(|l| {
                 matches!(

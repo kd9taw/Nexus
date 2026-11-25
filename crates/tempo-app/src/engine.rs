@@ -14500,7 +14500,7 @@ impl Engine {
     ///
     /// ⚠️ NEEDS-BENCH: verified by unit test only. There is no rig on the dev box, so the
     /// commanded level has not been read back off real hardware.
-    fn active_power_ceiling(&self) -> f32 {
+    pub fn active_power_ceiling(&self) -> f32 {
         if self.sstv_sending || self.sstv_tx.is_some() {
             self.settings.rf_power_ceiling_high_duty()
         } else if self.am_in_force() {

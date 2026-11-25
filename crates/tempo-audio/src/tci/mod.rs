@@ -38,9 +38,11 @@
 //!   through is ended by the daemon, and the radio loop reads why ([`TciDaemon::take_halt`]).
 //! - **Stops are never gated**: `T 0`, the broker's disconnect fail-safe and teardown send them
 //!   whatever the session believes.
-//! - **Tune** is the SDR program's own carrier at its own tune drive (`tune:<trx>,true;`), started and
-//!   ended with typed calls ([`TciDaemon::tune_on`], [`TciDaemon::tune_off`]): rigctld has no verb for
-//!   a radio's tune carrier. The daemon ends it by itself past the hold it was given, whether or not
+//! - **Tune** is the SDR program's own carrier (`tune:<trx>,true;`), started and ended with typed
+//!   calls ([`TciDaemon::tune_on`], [`TciDaemon::tune_off`]): rigctld has no verb for a radio's tune
+//!   carrier. With the operator's Tune power set, its tune drive (`tune_drive:<trx>,<pct>;`) is
+//!   written first and must be reported back before the carrier keys; without it, the carrier is at
+//!   the program's own tune drive. The daemon ends it by itself past the hold it was given, whether or not
 //!   the radio loop runs.
 //!
 //! ## Teardown
@@ -102,7 +104,7 @@ use tempo_net::tci::session::{
     Config, ConnectError, Connection, End, Event, Halt, OurKey, Phase, Snapshot, StopOutcome,
     Streams,
 };
-use tempo_net::tci::wire::{Stop, Word};
+use tempo_net::tci::wire::{Command, Setting, Stop, Word};
 use tempo_net::tci::{Trx, MAX_TRX};
 
 use crate::rigctld_server::{serve_connection, RigBackend};
@@ -668,11 +670,38 @@ impl TciDaemon {
         true
     }
 
-    /// Start the SDR program's tune carrier, at its own tune drive, held at most `hold_ms` (the
-    /// radio loop's tune timeout, at most [`TUNE_HOLD_MAX_MS`]): the daemon ends it by itself at
-    /// that plus [`TUNE_MARGIN`], whether or not the loop runs. The words for the PTT line when it
-    /// does not key.
-    pub fn tune_on(&self, hold_ms: u64) -> Result<(), String> {
+    /// Start the SDR program's tune carrier, held at most `hold_ms` (the radio loop's tune timeout,
+    /// at most [`TUNE_HOLD_MAX_MS`]): the daemon ends it by itself at that plus [`TUNE_MARGIN`],
+    /// whether or not the loop runs. The words for the PTT line when it does not key.
+    ///
+    /// ⛔ AT THE TUNE DRIVE GIVEN, OR NOT AT ALL (#564). With `tune_drive` (the operator's Tune
+    /// power, already held to the power ceiling by the radio loop), `tune_drive:<trx>,<pct>;` goes
+    /// out first, and the carrier is keyed only once the server reports that level
+    /// ([`shim::READBACK_WAIT`]): a write it ignored (another client's hold) or reported late is a
+    /// refusal, never a carrier at a drive Nexus does not know. The write is also the ceiling the
+    /// session's admission holds the server's `tune_drive` to at the key. The over's `drive` is
+    /// not touched. Without it, the carrier goes out at the program's own tune drive.
+    pub fn tune_on(&self, hold_ms: u64, tune_drive: Option<u32>) -> Result<(), String> {
+        if let Some(level) = tune_drive {
+            let trx = self.trx;
+            let conn = self.conn();
+            if conn
+                .send(Command::Set(Setting::TuneDrive { trx, level }))
+                .is_err()
+            {
+                return Err("Tune not keyed: the connection to the SDR program is closed.".into());
+            }
+            let reported = |s: &Snapshot| s.model.trx(trx).tune_drive.known() == Some(&level);
+            conn.wait_until(shim::READBACK_WAIT, |s| {
+                s.phase == Phase::Closed || reported(s)
+            });
+            if !conn.read(reported) {
+                return Err(format!(
+                    "Tune not keyed: the SDR program did not take the tune drive Nexus set \
+                     ({level}%), so its carrier's level is not known."
+                ));
+            }
+        }
         let hold = Duration::from_millis(hold_ms.min(TUNE_HOLD_MAX_MS));
         match self.conn().key(TxStart::Tune) {
             Ok(()) => {

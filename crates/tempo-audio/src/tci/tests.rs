@@ -768,7 +768,7 @@ fn tune_is_the_sdr_programs_carrier_and_ends_by_itself_past_its_hold() {
         },
     );
     assert!(d.tunes_natively());
-    d.tune_on(300).expect("tune keyed");
+    d.tune_on(300, None).expect("tune keyed");
     wait_log(&sim, "the carrier", |log| {
         keys(log) == [(Keyer::Client(0), SimSource::Tune)]
     });
@@ -779,12 +779,75 @@ fn tune_is_the_sdr_programs_carrier_and_ends_by_itself_past_its_hold() {
         "the tune carrier outlasted its hold, so Nexus ended it"
     );
     wait_unkeyed(&d);
-    d.tune_on(60_000).expect("tune keyed");
+    d.tune_on(60_000, None).expect("tune keyed");
     wait_log(&sim, "the second carrier", |log| keys(log).len() == 2);
     assert!(d.tune_off());
     wait_log(&sim, "the second carrier ended", |log| unkeys(log) == 2);
     wait_unkeyed(&d);
     assert_eq!(d.take_halt(), None, "ended by the radio loop: no halt");
+}
+
+/// ⭐ TUNE GOES OUT AT THE TUNE DRIVE NEXUS WAS GIVEN (#564): `tune_drive:0,<pct>` first, the carrier
+/// only once the SDR program reports that level, and the over's `drive` never written. Left alone,
+/// the program tuned at its own tune drive (here 80) and an amplifier behind it tripped.
+#[test]
+fn tune_writes_the_tune_drive_first_and_keys_only_once_the_program_reports_it() {
+    let sim = esdr3([]);
+    let d = daemon(&sim);
+    sim.operator("tune_drive:0,80;");
+    assert!(
+        d.session()
+            .wait_until(WAIT, |s| s.model.trx(trx0()).tune_drive.known()
+                == Some(&80)),
+        "premise: the program's own tune drive is 80"
+    );
+    d.tune_on(60_000, Some(25)).expect("tune keyed");
+    wait_log(&sim, "the carrier", |log| {
+        keys(log) == [(Keyer::Client(0), SimSource::Tune)]
+    });
+    let log = sim.log();
+    let drive_at =
+        command_at(&log, 0, "tune_drive:0,25").expect("the tune drive was never written");
+    let key_at = command_at(&log, 0, "tune:0,true").expect("the carrier was never keyed");
+    assert!(drive_at < key_at, "the carrier was keyed before its drive");
+    assert_eq!(sim.radio().trx[0].tune_drive, 25, "the carrier's drive");
+    assert!(
+        !sim.commands_from(0).iter().any(|c| c.starts_with("drive:")),
+        "the over's drive was written"
+    );
+    assert!(d.tune_off());
+    wait_unkeyed(&d);
+}
+
+/// ⛔ A TUNE DRIVE THE SDR PROGRAM DOES NOT TAKE KEYS NO CARRIER (#564): never a tune at a drive
+/// Nexus does not know. Here another program holds `tune_drive` (the 200 ms hold, made long), so
+/// Nexus's write is ignored: the tune is refused in words that say so, and nothing keys.
+#[test]
+fn a_tune_drive_the_program_does_not_take_keys_no_carrier() {
+    let sim = esdr3([Fault::Hold200ms {
+        window: Duration::from_secs(5),
+    }]);
+    let d = daemon(&sim);
+    let mut other = Peer::connect(sim.addr(), WAIT).expect("another program connects");
+    other
+        .send_text("tune_drive:0,100;")
+        .expect("the other program's write");
+    assert!(
+        d.session()
+            .wait_until(WAIT, |s| s.model.trx(trx0()).tune_drive.known()
+                == Some(&100)),
+        "premise: the other program set the tune drive to 100"
+    );
+    let why = d.tune_on(60_000, Some(10)).expect_err("tuned at 100");
+    assert!(
+        why.contains("tune drive") && why.contains("10"),
+        "the refusal does not name the tune drive: {why}"
+    );
+    assert!(
+        d.session().read(|s| s.keyed.is_none()),
+        "a carrier was asked for"
+    );
+    assert!(keys(&sim.log()).is_empty(), "a carrier keyed");
 }
 
 // ── What the radio loop is told ─────────────────────────────────────────────────────────────
