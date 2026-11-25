@@ -950,6 +950,9 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
   }
   // AUDIO: the sound-card view alone, which never gives way to the radio's scope (`feed='audio'`).
   const audioOnlyView = rigScope && scopeView === 'audio'
+  // RF: the radio's scope only (`feed='rf'`), never the audio FFT in a gap between its sweeps (CW's
+  // twin `singleFeed` says why). Before a radio scope is seen, the rig scope read finds it.
+  const singleFeed = audioOnlyView ? 'audio' : rigScope && scopeView === 'rf' ? 'rf' : 'scope'
   const noteFeed = (source: string, loHz: number, hiHz: number) => {
     setScopeFeed({ source, loHz, hiHz })
     if (isRadioScopeSource(source) && !rigScope) setRigScopeOf({ radio: snap.activeRadioId })
@@ -3470,10 +3473,11 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
             </div>
           )}
           <PhoneScope
-            // The Audio view reads the audio only, so the radio's scope never replaces it; the feed
-            // is fixed for a scope's life, so the key remounts it when the view changes.
-            key={audioOnlyView ? 'audio' : 'scope'}
-            feed={audioOnlyView ? 'audio' : 'scope'}
+            // The Audio view reads the audio only and the RF view the radio's scope only, so neither
+            // gives way to the other; the feed is fixed for a scope's life, so the key remounts it
+            // when the view changes.
+            key={singleFeed}
+            feed={singleFeed}
             hideSmeter
             wheelSliders
             active={active}

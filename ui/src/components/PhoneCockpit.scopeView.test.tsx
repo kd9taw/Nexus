@@ -129,14 +129,17 @@ describe('the Phone scope on a radio with its own scope', () => {
     await mountRead({})
     expect(group()).toBeNull()
     radioScopeSeen()
-    expect(feeds()).toEqual(['scope'])
+    // RF reads the radio's scope only, so a gap between its sweeps never shows the audio FFT in its
+    // place (an IC-7300 through wfview sweeps more than a second apart, which the rig scope read
+    // gave way to every couple of seconds).
+    expect(feeds()).toEqual(['rf'])
     expect([...within(group()!).getAllByRole('button')].map((b) => b.textContent)).toEqual(['RF', 'Audio'])
     expect(viewChip('RF').getAttribute('aria-pressed')).toBe('true')
     // Phone's default span is still Band.
     expect(within(screen.getByRole('group', { name: 'Panadapter zoom' })).getByRole('button', { name: 'Band' }).getAttribute('aria-pressed')).toBe('true')
   })
 
-  it('the chip round trip: Audio reads the audio only, RF the rig scope, each kept for this window', async () => {
+  it("the chip round trip: Audio reads the audio only, RF the radio's scope only, each kept for this window", async () => {
     await mountRead({})
     radioScopeSeen()
     fireEvent.click(viewChip('Audio'))
@@ -144,7 +147,7 @@ describe('the Phone scope on a radio with its own scope', () => {
     expect(localStorage.getItem('nexus.phone.scopeView')).toBe('audio')
     expect(screen.getByRole('group', { name: 'Bandscope span' })).toBeTruthy()
     fireEvent.click(viewChip('RF'))
-    expect(feeds()).toEqual(['scope'])
+    expect(feeds()).toEqual(['rf'])
     expect(localStorage.getItem('nexus.phone.scopeView')).toBe('rf')
   })
 
@@ -153,7 +156,7 @@ describe('the Phone scope on a radio with its own scope', () => {
       localStorage.setItem('nexus.phone.scopeView', bad)
       await mountRead({})
       radioScopeSeen()
-      expect(feeds(), `stored ${JSON.stringify(bad)}`).toEqual(['scope'])
+      expect(feeds(), `stored ${JSON.stringify(bad)}`).toEqual(['rf'])
       expect(viewChip('RF').getAttribute('aria-pressed')).toBe('true')
       cleanup()
     }
