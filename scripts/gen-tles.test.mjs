@@ -22,7 +22,9 @@ import {
   FIXTURE_LIMITS,
   PROD_LIMITS,
   GateError,
+  noradField,
   parse3le,
+  parseSatnogsTle,
 } from './gen-tles.mjs'
 import { scratchDir } from './scratch-dir.mjs'
 
@@ -717,6 +719,117 @@ test('a corrupt line drops its bird alone; wholesale corruption refuses the payl
     { ctAmateur: corrupt(ct, [14129, 25544, 27607, 44909, 43017, 7530, 43678, 39444]) },
     /integrity/,
   )
+})
+
+/// A real Alpha-5 element pair, as SatNOGS `/api/tle/` served it on
+/// 2026-11-24: TITANIA is catalog object 100900, which the five-column TLE
+/// field can only write as `A0900`.
+const TITANIA = {
+  tle0: '0 TITANIA',
+  tle1: '1 A0900U 26227T   26327.91052938  .00001328  00000-0  70231-4 0  9996',
+  tle2: '2 A0900  97.4374  36.4540 0000598  83.5532 276.5769 15.17176689  8062',
+  tle_source: 'Space-Track.org',
+  sat_id: 'XGKA-2142-1660-9388-0553',
+  norad_cat_id: 100900,
+}
+
+/// Rewrite a line's catalog field and re-sign its checksum, so a test can
+/// build the one defect it means to and no other.
+const resign = (line) => {
+  const body = line.slice(0, 68)
+  let sum = 0
+  for (const c of body) sum += c >= '0' && c <= '9' ? +c : c === '-' ? 1 : 0
+  return body + (sum % 10)
+}
+const withNorad = (line, field) => resign(line.slice(0, 2) + field + line.slice(7))
+
+test('an Alpha-5 catalog field decodes the way Space-Track defines it', () => {
+  // Space-Track's published examples, verbatim, plus the scheme's edges.
+  assert.equal(noradField('A0000'), 100000)
+  assert.equal(noradField('E8493'), 148493)
+  assert.equal(noradField('J2931'), 182931)
+  assert.equal(noradField('P4018'), 234018)
+  assert.equal(noradField('W1928'), 301928)
+  assert.equal(noradField('Z9999'), 339999)
+  assert.equal(noradField('H9999'), 179999, 'H is the last letter before the I gap')
+  assert.equal(noradField('N0000'), 220000, 'N is the last letter before the O gap')
+  // An ordinary five-digit field reads exactly as it always did.
+  assert.equal(noradField('25544'), 25544)
+  assert.equal(noradField('00005'), 5)
+  assert.equal(noradField('    5'), 5)
+  // I and O are not in the alphabet, nor are lower case or a letter elsewhere.
+  for (const bad of ['I0000', 'O0000', 'a0900', '1A345', 'A09 0', '', 'AB']) {
+    assert.equal(noradField(bad), null, bad)
+  }
+})
+
+test('an Alpha-5 element pair is a bird, keyed by its real catalog number', () => {
+  const { elements, rejected } = parseSatnogsTle(JSON.stringify([TITANIA]))
+  assert.deepEqual(rejected, [])
+  assert.equal(elements[0].norad, 100900)
+  assert.equal(elements[0].key, 100900)
+  const ct = parse3le([TITANIA.tle0, TITANIA.tle1, TITANIA.tle2].join('\n'), 'celestrak-satnogs')
+  assert.equal(ct.elements[0].norad, 100900, 'and the same from a 3LE feed')
+  // Parity: an ordinary pair still keys by its five digits.
+  const iss = read('celestrak-amateur.tle')
+    .split('\n')
+    .filter((l) => l.trim())
+  const i = iss.findIndex((l) => /^1 25544U/.test(l))
+  const plain = parse3le(iss.slice(i - 1, i + 2).join('\n'), 'celestrak-amateur')
+  assert.equal(plain.elements[0].norad, 25544)
+})
+
+test("a pair whose two lines name different objects is refused, Alpha-5 or not", () => {
+  // The client's SGP4 refuses such a pair outright, so publishing it would
+  // ship a bird that can never be drawn.
+  const split = { ...TITANIA, tle2: withNorad(TITANIA.tle2, 'A0901') }
+  assert.equal(parseSatnogsTle(JSON.stringify([split])).rejected.length, 1)
+  const plain = { ...TITANIA, tle1: withNorad(TITANIA.tle1, '25544'), tle2: withNorad(TITANIA.tle2, '25545') }
+  assert.equal(parseSatnogsTle(JSON.stringify([plain])).rejected.length, 1)
+  // …and a field outside the alphabet is no catalog number at all.
+  const bad = { ...TITANIA, tle1: withNorad(TITANIA.tle1, 'I0900'), tle2: withNorad(TITANIA.tle2, 'I0900') }
+  assert.equal(parseSatnogsTle(JSON.stringify([bad])).rejected.length, 1)
+})
+
+test('an Alpha-5 amateur bird is published with elements, end to end', () => {
+  const sats = JSON.parse(read('satnogs-satellites.json'))
+  const tx = JSON.parse(read('satnogs-transmitters.json'))
+  const tles = JSON.parse(read('satnogs-tle.json'))
+  sats.push({
+    sat_id: TITANIA.sat_id,
+    norad_cat_id: 100900,
+    norad_follow_id: null,
+    name: 'TITANIA',
+    names: '',
+    status: 'in orbit',
+    decayed: null,
+    launched: '2026-10-01T18:32:00Z',
+  })
+  tx.push({
+    uuid: 'TXTITANIA',
+    description: 'beacon',
+    alive: true,
+    type: 'Transmitter',
+    mode: 'CW',
+    service: 'Amateur',
+    downlink_low: 435_100_000,
+    norad_cat_id: 100900,
+    sat_id: TITANIA.sat_id,
+  })
+  // Re-dated to the fixture clock's eve (day 212 of 2026) and re-signed, so
+  // the freshness gates see it as the rest of the corpus does.
+  const dated = { ...TITANIA, tle1: resign(TITANIA.tle1.slice(0, 18) + '26212.00000000' + TITANIA.tle1.slice(32)) }
+  tles.push(dated)
+  const { manifest } = build({
+    satellites: JSON.stringify(sats),
+    transmitters: JSON.stringify(tx),
+    satnogsTle: JSON.stringify(tles),
+  })
+  const row = manifest.catalog.find((b) => b.norad === 100900)
+  assert.ok(row, 'TITANIA has its catalog row under 100900')
+  assert.ok(row.src, 'and carries elements')
+  const el = manifest.elements.find((e) => e.line1 === dated.tle1)
+  assert.ok(el, 'the Alpha-5 lines publish verbatim — the client decodes them')
 })
 
 test('a structurally surprising feed is a fault, not a short set', () => {

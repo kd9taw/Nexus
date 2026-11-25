@@ -95,7 +95,9 @@
 //      day one re-enters, requiring none cannot see the derivation breaking.
 //      SO-50 in particular is the canary for the band clause — SatNOGS calls
 //      every one of its transmitters `service: "Unknown"`.
-//   7. Every element line exactly 69 chars with a valid mod-10 checksum. A
+//   7. Every element line exactly 69 chars with a valid mod-10 checksum, and
+//      both lines naming the same catalog number (read through Alpha-5, see
+//      `noradField` — objects above 99999 carry a letter there). A
 //      failing line drops its BIRD; more than max(1, 2% of candidates)
 //      dropping means the payload is bad, not the birds, and refuses the run.
 //      The floor of one is deliberate: a single corrupt line in a 376-bird
@@ -505,16 +507,46 @@ export function epochUnix(line1) {
   return Date.UTC(year, 0, 1) / 1000 + (doy - 1) * 86400
 }
 
+/// ALPHA-5: the TLE catalog field (columns 3–7, both lines) → the catalog
+/// number, or `null` when the field is not one.
+///
+/// The field is five columns wide, and the catalog passed 99999. Space-Track's
+/// answer is Alpha-5 (space-track.org/documentation, "Alpha-5"): for objects
+/// 100000–339999 the FIRST character becomes a capital letter worth 10–33 ten-
+/// thousands, the letters I and O skipped so they never read as 1 and 0 —
+/// A=10 … H=17, J=18 … N=22, P=23 … Z=33. Its own examples: 100000 = A0000,
+/// 148493 = E8493, 182931 = J2931, 234018 = P4018, 301928 = W1928, 339999 =
+/// Z9999. Objects under 100000 are written exactly as before. The checksum is
+/// untouched by the scheme: a letter counts 0, as any non-digit always has.
+///
+/// This is not hypothetical. On 2026-11-24 SatNOGS `/api/tle/` served 76
+/// Space-Track element sets in this form (TITANIA, 100900, as `A0900`), and a
+/// field read as a plain number rejected all of them — more than the gate-7
+/// budget, so the whole run refused. The client decodes the same field the
+/// same way (propagation::sat::norad_id, and the sgp4 crate under it), so the
+/// lines publish verbatim and the catalog keys the bird by its real number.
+const ALPHA5 = 'ABCDEFGHJKLMNPQRSTUVWXYZ' // index + 10 = the leading value
+export function noradField(field) {
+  const f = field.trim()
+  if (/^\d{1,5}$/.test(f)) return Number(f)
+  if (!/^[A-Z]\d{4}$/.test(f)) return null
+  const lead = ALPHA5.indexOf(f[0])
+  return lead < 0 ? null : (lead + 10) * 10000 + Number(f.slice(1))
+}
+
 /// One candidate bird from an element source, with the two facts every later
-/// stage needs (its catalog number and its epoch) already extracted.
+/// stage needs (its catalog number and its epoch) already extracted. Both
+/// lines must name the SAME object: the client's SGP4 refuses a pair that
+/// does not, so such a pair is a bird that could never be drawn.
 function candidate(name, line1, line2, source) {
-  const norad = Number(line1.slice(2, 7).trim())
+  const norad = noradField(line1.slice(2, 7))
   const epoch = epochUnix(line1)
   const ok =
     checksumOk(line1) &&
     checksumOk(line2) &&
-    Number.isInteger(norad) &&
+    norad !== null &&
     norad > 0 &&
+    noradField(line2.slice(2, 7)) === norad &&
     epoch !== null
   return ok ? { name, line1, line2, norad, epoch, source } : null
 }

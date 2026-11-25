@@ -554,6 +554,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn an_alpha5_bird_passes_the_per_bird_gate_under_its_real_number() {
+        // TITANIA (catalog 100900) as SatNOGS served it on 2026-11-24. Its
+        // five-column field reads `A0900`; before Alpha-5 decoding this bird
+        // failed the NORAD clause and was dropped from every import and cache.
+        let text = "TITANIA\n\
+1 A0900U 26227T   26327.91052938  .00001328  00000-0  70231-4 0  9996\n\
+2 A0900  97.4374  36.4540 0000598  83.5532 276.5769 15.17176689  8062\n";
+        let tles = parse_tles(text);
+        assert_eq!(tles.len(), 1);
+        let now = sat::tle_epoch_unix(&tles[0].line1).unwrap() as i64 + 86_400;
+        assert!(tle_bird_ok(&tles[0], now));
+        assert_eq!(sat::norad_id(&tles[0].line1), Some(100_900));
+        // Parity: an ordinary five-digit bird is untouched.
+        let iss = parse_tles(FIXTURE);
+        assert_eq!(sat::norad_id(&iss[0].line1), Some(25_544));
+    }
+
     // Two real, published element sets (AIAA-2006-6753 verification vectors) in
     // Celestrak 3LE form, with `\r\n` and a trailing malformed pair to exercise
     // the tolerance paths.

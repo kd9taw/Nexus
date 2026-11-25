@@ -342,8 +342,28 @@ pub fn tle_age_days(line1: &str, now_unix: i64) -> Option<f64> {
 /// The NORAD catalog number from TLE line 1 (columns 3–7, i.e. `&line1[2..7]`
 /// trimmed). `None` if the line is too short or those columns aren't a number.
 /// This keys a bird's elements to its SatNOGS transmitter/status record.
+///
+/// ALPHA-5. The field is five columns wide and the catalog has passed 99999,
+/// so for objects 100000–339999 Space-Track writes the FIRST character as a
+/// capital letter worth 10–33 ten-thousands, skipping I and O (A=10 … H=17,
+/// J=18 … N=22, P=23 … Z=33; space-track.org/documentation, "Alpha-5"):
+/// TITANIA, 100900, is `A0900`. A plain digit field reads exactly as before.
+/// The sgp4 crate decodes the same scheme when it builds the propagator, so
+/// the number here and the one the math checks line 2 against always agree,
+/// and every caller keys the bird by the same id the mirror catalog uses.
 pub fn norad_id(line1: &str) -> Option<u32> {
-    line1.get(2..7)?.trim().parse().ok()
+    let field = line1.get(2..7)?.trim();
+    let mut chars = field.chars();
+    let lead = chars.next()?;
+    // 'A'..='Z' minus I and O, in order: index + 10 is the leading value.
+    const ALPHA5: &str = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+    match ALPHA5.find(lead) {
+        Some(i) if field.len() == 5 && chars.all(|c| c.is_ascii_digit()) => {
+            Some((i as u32 + 10) * 10_000 + field[1..].parse::<u32>().ok()?)
+        }
+        Some(_) => None,
+        None => field.parse().ok(),
+    }
 }
 
 /// Whether sgp4 can actually build a propagator from these lines — the
@@ -798,6 +818,51 @@ mod tests {
         assert_eq!(norad_id("1 00005U 58002B   00179.78495062"), Some(5));
         assert_eq!(norad_id("not a tle"), None);
         assert_eq!(norad_id("1 2"), None); // too short for columns 3–7
+    }
+
+    /// TITANIA (catalog 100900) as SatNOGS served it on 2026-11-24 — a real
+    /// Alpha-5 pair: the five-column field writes 100900 as `A0900`.
+    const TITANIA_L1: &str =
+        "1 A0900U 26227T   26327.91052938  .00001328  00000-0  70231-4 0  9996";
+    const TITANIA_L2: &str =
+        "2 A0900  97.4374  36.4540 0000598  83.5532 276.5769 15.17176689  8062";
+
+    #[test]
+    fn norad_id_decodes_alpha5_as_space_track_defines_it() {
+        assert_eq!(norad_id(TITANIA_L1), Some(100_900));
+        // Space-Track's own published examples, plus both edges of the I/O gaps.
+        for (field, want) in [
+            ("A0000", 100_000),
+            ("E8493", 148_493),
+            ("H9999", 179_999),
+            ("J2931", 182_931),
+            ("N0000", 220_000),
+            ("P4018", 234_018),
+            ("W1928", 301_928),
+            ("Z9999", 339_999),
+        ] {
+            assert_eq!(norad_id(&format!("1 {field}U")), Some(want), "{field}");
+        }
+        // I and O are not in the alphabet; a letter anywhere else is no number.
+        for bad in ["I0000", "O0000", "a0900", "1A345", "AA900"] {
+            assert_eq!(norad_id(&format!("1 {bad}U")), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn an_alpha5_bird_propagates() {
+        let titania = Tle {
+            name: "TITANIA".to_string(),
+            line1: TITANIA_L1.to_string(),
+            line2: TITANIA_L2.to_string(),
+        };
+        assert!(sgp4_constructible(&titania));
+        // An hour past its epoch (2026-11-23 21:51 UTC): a real sun-synchronous
+        // subpoint, inside the 97.4° inclination's latitude band.
+        let epoch = tle_epoch_unix(TITANIA_L1).unwrap() as i64;
+        let (lat, _lon, alt) = subpoint(&titania, epoch + 3600).unwrap();
+        assert!(lat.abs() <= 82.7, "lat {lat}");
+        assert!((450.0..=650.0).contains(&alt), "alt {alt} km");
     }
 
     #[test]
