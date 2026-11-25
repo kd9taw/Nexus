@@ -109,22 +109,25 @@ export function basisLine(v: BestTimesView): string | null {
     return b.base ? `${centre} ${t('bestTimes.basis.homeElsewhere', { base: b.base })}` : centre
   }
   if (b.kind === 'position') return t('bestTimes.basis.position')
+  // Both ends by name: a bare grid reads as either station's. `myGrid` is the grid the shack
+  // worked the answer from (an answer is never given without one).
   const grid = b.grid ?? ''
+  const mine = v.myGrid ?? ''
   switch (b.from) {
     case 'typed':
-      return t('bestTimes.basis.typed', { grid })
+      return t('bestTimes.basis.typed', { grid, mine })
     case 'logForm':
-      return t('bestTimes.basis.logForm', { grid })
+      return t('bestTimes.basis.logForm', { grid, mine })
     case 'heard':
-      return t('bestTimes.basis.heard', { grid })
+      return t('bestTimes.basis.heard', { grid, mine })
     case 'callbook':
-      return t('bestTimes.basis.callbook', { grid })
+      return t('bestTimes.basis.callbook', { grid, mine })
     case 'callbookBase':
-      return t('bestTimes.basis.callbookBase', { grid, base: b.base ?? v.call })
+      return t('bestTimes.basis.callbookBase', { grid, mine, base: b.base ?? v.call })
     case 'logged':
-      return t('bestTimes.basis.logged', { grid })
+      return t('bestTimes.basis.logged', { grid, mine })
     default:
-      return t('bestTimes.basis.typed', { grid })
+      return t('bestTimes.basis.typed', { grid, mine })
   }
 }
 

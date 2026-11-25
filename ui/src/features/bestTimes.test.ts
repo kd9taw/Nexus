@@ -53,6 +53,7 @@ function view(over: Partial<BestTimesView> = {}): BestTimesView {
     call: 'EA8ABC',
     entity: 'Canary Islands',
     basis: { kind: 'grid', from: 'heard', grid: 'IL18' },
+    myGrid: 'EN52',
     km: 5000,
     bearing: 105.6,
     answer: answer(),
@@ -111,13 +112,14 @@ describe('the states with no answer', () => {
 
 describe('the basis line', () => {
   it('names what the location rests on, and says Rough only for a country centre', () => {
-    expect(basisLine(view())).toBe('Worked out from grid IL18, sent on the air.')
+    // Both ends by name: a bare grid reads as either station's (FK52 was taken for the operator's own).
+    expect(basisLine(view())).toBe('From your grid EN52 to their grid IL18, sent on the air.')
     expect(basisLine(view({ basis: { kind: 'grid', from: 'logged', grid: 'IL18' } }))).toMatch(/from your log\. It may be old\.$/)
     expect(basisLine(view({ basis: { kind: 'grid', from: 'typed', grid: 'IL28' } }))).toMatch(/the grid you typed/)
     expect(basisLine(view({ basis: { kind: 'position', from: 'callbook' } }))).toMatch(/callbook's position/)
     // A stroked call the callbook answered from the home call's record.
     expect(basisLine(view({ call: 'W1AW/4', basis: { kind: 'grid', from: 'callbookBase', grid: 'FN31', base: 'W1AW' } }))).toBe(
-      "Worked out from grid FN31, the callbook's address for W1AW, the home call. They may be elsewhere.",
+      "From your grid EN52 to their grid FN31, the callbook's address for W1AW, the home call. They may be elsewhere.",
     )
     expect(basisLine(view({ call: 'EA8/DL1ABC', basis: { kind: 'entity', base: 'DL1ABC' } }))).toBe(
       "Worked out from the centre of Canary Islands. Rough. The callbook has only DL1ABC's home address, in another country, so it is not used.",
@@ -226,6 +228,11 @@ describe('in every language', () => {
         const lines = allLines(v)
         for (const l of lines) expect(l, `${locale}: ${l}`).not.toMatch(/%/)
         if (v.state === 'answer') expect(basisLine(v), locale).toBeTruthy()
+      }
+      for (const from of ['typed', 'logForm', 'heard', 'callbook', 'callbookBase', 'logged'] as const) {
+        const line = basisLine(view({ basis: { kind: 'grid', from, grid: 'IL18', base: 'W1AW' } }))
+        expect(line, `${locale} ${from}`).toContain('EN52')
+        expect(line, `${locale} ${from}`).toContain('IL18')
       }
     }
   })

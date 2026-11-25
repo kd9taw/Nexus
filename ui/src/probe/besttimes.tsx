@@ -30,7 +30,7 @@ surfaceSet('nexus.bestTimes.call', 'EC1DD')
 
 const now = Math.floor(Date.now() / 3_600_000) * 3600
 const ANSWER = {
-  state: 'answer', call: 'EC1DD', entity: 'Spain', basis: { kind: 'grid', from: 'callbook', grid: 'IN52TK' },
+  state: 'answer', call: 'EC1DD', entity: 'Spain', basis: { kind: 'grid', from: 'callbook', grid: 'IN52TK' }, myGrid: 'FN31',
   km: 1530.6, bearing: 227.4, engine: 'p533', power: { watts: 100, source: 'default', amplifier: false },
   answer: {
     engine: 'p533', mode: 'FT8', perMode: true,
