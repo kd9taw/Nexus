@@ -40,7 +40,7 @@ use crate::rig::tuning::{
     hamlib_mode_width, newcat_split_tx_write, passband_for, retune_passband, same_named_band,
 };
 use crate::rig::{FuncSet, PttMode, Rig, SerialLine};
-use crate::rigctld_proc::{spawn_rigctld, RigctldProc};
+use crate::rigctld_proc::RigctldProc;
 
 mod js8_lead;
 mod monitor_claims;
@@ -248,8 +248,21 @@ fn flex_client_unbenched(t: &Transport) -> Option<bool> {
 /// than resolved separately: the daemon needs BOTH (the address to talk on, the model to
 /// know which attenuator pads and preamps this rig has), and two independent lookups of the
 /// same transport are two things that can disagree.
+///
+/// The address is the operator's where they set one for this radio (`RadioProfile::civ_addr`,
+/// #528: a radio whose CI-V address was changed on its menu answers on nothing else), else the
+/// model's factory address.
 fn native_civ_addr(t: &Transport) -> Option<u8> {
-    native_civ_model(t).map(|m| m.default_civ_addr())
+    native_civ_model(t).map(|m| t.civ_addr.unwrap_or_else(|| m.default_civ_addr()))
+}
+
+/// The CI-V address to hand rigctld (`-c`) for this transport: the operator's (#528) on a model of
+/// Hamlib's Icom backend, else `None`, which leaves Hamlib on the model's own address as every
+/// release has. Gated on the backend because `civaddr` is the Icom backend's parameter; the
+/// Xiegus Hamlib drives as Icoms are in that backend, and are covered with them.
+fn hamlib_civ_addr(t: &Transport) -> Option<u8> {
+    t.civ_addr
+        .filter(|_| crate::rigmodels::hamlib_icom_backend(t.rig_model))
 }
 
 /// Does this transport key RTS/DTR on the SAME serial port rigctld uses for CAT?
@@ -471,7 +484,7 @@ fn spawn_cat_daemon(
         match crate::civ::broker::CivDaemon::start(
             &t.serial_port,
             t.baud,
-            model.default_civ_addr(),
+            t.civ_addr.unwrap_or_else(|| model.default_civ_addr()),
             t.rigctld_port,
             t.icom_data_mode,
             Some(model),
@@ -500,7 +513,7 @@ fn spawn_cat_daemon(
     }
     #[cfg(not(feature = "serial"))]
     let _ = native_civ_addr(t); // native CI-V needs the serial feature; classic path below
-    spawn_rigctld(
+    crate::rigctld_proc::spawn_rigctld_at(
         t.rig_model,
         target,
         t.baud,
@@ -508,6 +521,7 @@ fn spawn_cat_daemon(
         network,
         keying_facts(t, ptt_line),
         t.control_lines,
+        hamlib_civ_addr(t),
     )
     .map(|p| (CatDaemon::Spawned(p), native_fallback))
 }
@@ -2223,6 +2237,10 @@ pub struct RadioConfig {
     /// The operator's Icom DATA-mode choice (D1/D2/D3) for this radio. 1 = today's
     /// behaviour; see `RadioProfile::icom_data_mode`.
     pub icom_data_mode: u8,
+    /// The radio's CI-V address where the operator set one (#528), already read through
+    /// `tempo_app::settings::civ_addr_override`; `None` = the model's own. See
+    /// `RadioProfile::civ_addr`.
+    pub civ_addr: Option<u8>,
     /// The active radio's "Transmit audio source (CAT PTT)" — `"front"` (today's `T 1`) or
     /// `"rear"`; see `RadioProfile::tx_audio_source` and [`cat_ptt_mode`].
     pub tx_audio_source: String,
@@ -2323,6 +2341,7 @@ impl Default for RadioConfig {
             ptt_method: "vox".to_string(),
             radio_label: String::new(),
             icom_data_mode: 1,
+            civ_addr: None,
             tx_audio_source: tempo_app::settings::TX_AUDIO_FRONT.to_string(),
             rig_model: 0,
             cat_rts_keys_ptt: false,
@@ -3352,6 +3371,7 @@ impl Transport {
         Self {
             radio_label: LogLabel(radio_label_named(&p.name, &p.rig_model_name, p.rig_model)),
             icom_data_mode: p.icom_data_mode,
+            civ_addr: tempo_app::settings::civ_addr_override(&p.civ_addr),
             // A monitor never streams its scope; an ADOPTED one carries its own radio's choice.
             scope_to_audio: tempo_app::settings::native_scope_is_audio(&p.native_scope),
             // A monitor never keys, but an ADOPTED one does (`set_ptt_mode(ptt_mode_for(…))`),
@@ -21181,6 +21201,11 @@ struct Transport {
     /// daemon at construction. Part of transport IDENTITY on purpose: changing it must
     /// relaunch the daemon, because the value is applied when the backend is built.
     icom_data_mode: u8,
+    /// The CI-V address the operator set for this radio (`RadioProfile::civ_addr`, read through
+    /// `civ_addr_override`); `None` = the model's own. Read by [`native_civ_addr`] for Nexus's own
+    /// daemon and by [`hamlib_civ_addr`] for rigctld. Compared in [`Transport::rig_differs`]: the
+    /// daemon talks on it from launch, so a change relaunches it.
+    civ_addr: Option<u8>,
     /// The operator's waterfall source for this radio is the sound card's audio
     /// (`RadioProfile::native_scope`): the Icom scope stream stays off and its rows stay out of the
     /// waterfall. NOT part of transport identity (`rig_differs` does not compare it): choosing it
@@ -21218,6 +21243,7 @@ impl Transport {
     fn from_cfg(c: &RadioConfig) -> Self {
         Self {
             icom_data_mode: c.icom_data_mode,
+            civ_addr: c.civ_addr,
             // Not in the startup seed: the first settings tick reads it, before any scope enable.
             scope_to_audio: false,
             tx_audio_source: c.tx_audio_source.clone(),
@@ -21298,6 +21324,7 @@ impl Transport {
     fn from_station(s: &Settings, serving: Option<u16>) -> Self {
         let mut t = Self {
             icom_data_mode: s.icom_data_mode,
+            civ_addr: tempo_app::settings::civ_addr_override(&s.civ_addr),
             scope_to_audio: tempo_app::settings::native_scope_is_audio(&s.native_scope),
             tx_audio_source: s.tx_audio_source.clone(),
             radio_label: LogLabel(
@@ -21405,6 +21432,8 @@ impl Transport {
             || self.omnirig_slot != o.omnirig_slot
             || self.rigctld_port != o.rigctld_port
             || self.icom_native_cat != o.icom_native_cat
+            // The radio's CI-V address (#528): both daemons are launched talking on it.
+            || self.civ_addr != o.civ_addr
             // The Flex client's opt-in and the radio address it connects to, compared only where
             // the client is in play: an address edit on a radio NOT opted in restarts nothing, as
             // before the client existed.
@@ -33944,6 +33973,60 @@ mod tests {
         ));
     }
 
+    /// #528: a radio whose CI-V address was changed on its menu answers on nothing else. Blank
+    /// keeps the model's own address on both daemons, as every release has; an address set in
+    /// Settings reaches Nexus's own CI-V daemon and rigctld's `-c`; one Settings would refuse
+    /// talks on the default; and a change relaunches the daemon that is talking on the old one.
+    #[test]
+    fn the_operators_civ_address_reaches_both_daemons_and_blank_keeps_the_default() {
+        let mut s = Settings {
+            rig_model: 3073, // IC-7300
+            rig_conn: "serial".into(),
+            serial_port: "/dev/ttyUSB0".into(),
+            icom_native_cat: true,
+            ..Settings::default()
+        };
+        // Blank: the model's own (0x94) on the native daemon, nothing extra for rigctld.
+        let t = Transport::from_settings(&s);
+        assert_eq!(native_civ_addr(&t), Some(0x94));
+        assert_eq!(hamlib_civ_addr(&t), None);
+        assert!(crate::rigctld_proc::civ_addr_args(hamlib_civ_addr(&t)).is_empty());
+
+        // Set: the native daemon talks on it, and rigctld is launched with `-c` in decimal.
+        s.civ_addr = "0x96".into();
+        let set = Transport::from_settings(&s);
+        assert_eq!(native_civ_addr(&set), Some(0x96));
+        assert_eq!(hamlib_civ_addr(&set), Some(0x96));
+        assert_eq!(
+            crate::rigctld_proc::civ_addr_args(hamlib_civ_addr(&set)),
+            vec!["-c".to_string(), "150".to_string()]
+        );
+        assert!(set.rig_differs(&t), "a new address relaunches the daemon");
+        // From a radio's own profile too (a monitor, or one adopted on a switch).
+        let prof = tempo_app::settings::RadioProfile {
+            rig_model: 3073,
+            civ_addr: "A2h".into(),
+            ..Default::default()
+        };
+        assert_eq!(Transport::from_profile(&prof).civ_addr, Some(0xA2));
+
+        // An address Settings refuses (out of range, or decimal) talks on the default.
+        for bad in ["E0", "148", "zz"] {
+            s.civ_addr = bad.into();
+            let t = Transport::from_settings(&s);
+            assert_eq!(native_civ_addr(&t), Some(0x94), "{bad}");
+            assert_eq!(hamlib_civ_addr(&t), None, "{bad}");
+        }
+
+        // Not a Hamlib Icom: rigctld is never handed `-c`, whatever the profile carries.
+        s.civ_addr = "0x96".into();
+        s.rig_model = 1035; // FT-991
+        assert_eq!(hamlib_civ_addr(&Transport::from_settings(&s)), None);
+        // An Icom marine radio is a different Hamlib backend (30xxx) with no `civaddr`.
+        s.rig_model = 30001;
+        assert_eq!(hamlib_civ_addr(&Transport::from_settings(&s)), None);
+    }
+
     /// Changing the OmniRig slot is a TRANSPORT change: it re-points CAT at a different radio
     /// inside OmniRig, so the shim has to be restarted. A `rig_differs` that missed it would
     /// leave RIG 2 being driven by a shim still bound to RIG 1 — silently.
@@ -44888,6 +44971,7 @@ mod tests {
         Transport {
             radio_label: LogLabel(radio_label("", 1035)),
             icom_data_mode: 1,
+            civ_addr: None,
             scope_to_audio: false,
             tx_audio_source: tempo_app::settings::TX_AUDIO_FRONT.to_string(),
             ptt_method: "cat".to_string(),

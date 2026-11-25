@@ -354,6 +354,14 @@ pub fn hamlib_atu_start_tune_reaches(model: u32) -> bool {
     !matches!(model / 1000, ICOM_BACKEND | KENWOOD_BACKEND)
 }
 
+/// Is `model` one of Hamlib's Icom backend (`rigs/icom/*`, model numbers 3000–3999: every Icom
+/// and the Xiegus Hamlib drives as Icoms)? That backend is the one with a `civaddr` parameter,
+/// which rigctld's `-c` sets (verified on rigctld 4.6.5: `-c 150` on 3073 shows `civaddr` Value
+/// 150 in `--show-conf`). Icom marine radios are a different backend (30xxx) and are not.
+pub fn hamlib_icom_backend(model: u32) -> bool {
+    model / 1000 == 3
+}
+
 /// The `U TUNER <n>` value that STARTS this radio's tune-up: [`crate::rig::ATU_START_TUNE`]
 /// for every model but the Yaesu FT-710, whose start is 3.
 ///

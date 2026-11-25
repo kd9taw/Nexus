@@ -2001,6 +2001,31 @@ pub fn spawn_rigctld(
     keying: KeyingFacts,
     want: ControlLines,
 ) -> std::io::Result<RigctldProc> {
+    spawn_rigctld_at(model, addr, baud, tcp_port, network, keying, want, None)
+}
+
+/// rigctld's `-c` for a radio whose CI-V address the operator set (#528), appended to
+/// [`rigctld_args`]'s launch; `None` adds nothing, so Hamlib keeps the model's own address. Decimal,
+/// as rigctld's help asks (`-c, --civaddr=ID  set CI-V address, decimal`). The caller decides
+/// whether the model has a CI-V address to set (`service::hamlib_civ_addr`).
+pub fn civ_addr_args(civ_addr: Option<u8>) -> Vec<String> {
+    civ_addr
+        .map(|a| vec!["-c".to_string(), a.to_string()])
+        .unwrap_or_default()
+}
+
+/// [`spawn_rigctld`] talking to the radio on `civ_addr` (see [`civ_addr_args`]).
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_rigctld_at(
+    model: u32,
+    addr: &str,
+    baud: u32,
+    tcp_port: u16,
+    network: bool,
+    keying: KeyingFacts,
+    want: ControlLines,
+    civ_addr: Option<u8>,
+) -> std::io::Result<RigctldProc> {
     let ptt_line = keying.ptt_line;
     // A virtual port is opened by the node it was classified as, never by a name that could be
     // repointed at a real tty between the check and rigctld's open
@@ -2041,7 +2066,8 @@ pub fn spawn_rigctld(
         resolve_lines(settable, want, deliberate)
     };
     let opened = virtual_node.as_deref().unwrap_or(addr);
-    let args = rigctld_args(model, opened, baud, tcp_port, network, ptt_line, lines);
+    let mut args = rigctld_args(model, opened, baud, tcp_port, network, ptt_line, lines);
+    args.extend(civ_addr_args(civ_addr));
     let bin = resolve_rigctld();
     // Say so, so a flash can be dated. Operator report 2026-08-19: "moving to cw, I saw an ultra
     // quick flash of what looked like a terminal screen". A line per spawn turns a flash into a

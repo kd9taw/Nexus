@@ -56,6 +56,8 @@ export interface RigFormFacts {
   /** The TCI connection's server address and port. */
   tciHost?: string
   tciPort?: number
+  /** The radio's CI-V address as typed (#528); blank = the model's own. */
+  civAddr?: string
   /** Chosen sound-card device NAMES, for the same-radio check. Absent = nothing chosen yet. */
   audioIn?: string
   audioOut?: string
@@ -85,6 +87,12 @@ export function checkRigForm(
   icomLanPasswordSaved?: boolean | null,
 ): RigCheck[] {
   const out: RigCheck[] = []
+  // A CI-V address that is not one (#528): refused, since the radio would answer on nothing Nexus
+  // asks at. Only where the field is offered: a value left from an Icom set-up on a radio that has
+  // no CI-V is never read (the engine gates on the model too), so it blocks nothing.
+  if (civAddrFieldShown(form.rigModel, form.rigConn) && parseCivAddr(form.civAddr ?? '') === 'bad') {
+    out.push({ level: 'error', message: t('settings.radio.check.civAddr') })
+  }
   // CAT keying on a radio Hamlib cannot key over CAT (`NO_CAT_PTT_MODELS`): `T 1` answers as if it
   // keyed and the radio stays on receive, so the station shows TX and nothing goes out. Decided
   // before the network return below because it is a fact about the MODEL, which rigctld drives over
@@ -448,4 +456,33 @@ export const MULTI_DATA_MODE_ICOMS: readonly number[] = [3078, 3092]
  */
 export function dataModePickerShown(rigModel: number): boolean {
   return MULTI_DATA_MODE_ICOMS.includes(rigModel)
+}
+
+/**
+ * Does Settings offer "CI-V address" (#528) for this radio? A model of Hamlib's Icom backend
+ * (3000–3999: every Icom, and the Xiegus Hamlib drives as Icoms; `hamlib_icom_backend` in
+ * crates/tempo-audio/src/rigmodels.rs), on a link where Nexus or rigctld opens the radio's own
+ * CI-V: not the Icom network connection (that session learns the address from the radio), not
+ * OmniRig (its rig file sets it) and not TCI (the SDR program drives the radio).
+ */
+export function civAddrFieldShown(rigModel: number, rigConn: string): boolean {
+  return Math.floor(rigModel / 1000) === 3 && rigConn !== 'icomlan' && rigConn !== 'omnirig' && rigConn !== 'tci'
+}
+
+/**
+ * Read the "CI-V address" text: `null` for blank (the model's own address), the address for one or
+ * two hex digits as the radio's menu shows them, with or without `0x` in front or `h` behind (`94`,
+ * `0x94`, `94h`), and `'bad'` for anything else: three digits (a decimal `148`), or an address
+ * outside 01–DF (`00` is the bus's broadcast, `E0` and up the controllers'). ⚠️ MIRRORS
+ * `parse_civ_addr` in crates/tempo-app/src/settings.rs, which talks on the default for a value
+ * this refuses; rigFormChecks.test.ts holds the same table of cases as that file's test.
+ */
+export function parseCivAddr(text: string): number | null | 'bad' {
+  let v = text.trim()
+  if (v === '') return null
+  if (v.startsWith('0x') || v.startsWith('0X')) v = v.slice(2)
+  if (v.endsWith('h') || v.endsWith('H')) v = v.slice(0, -1)
+  if (!/^[0-9a-fA-F]{1,2}$/.test(v)) return 'bad'
+  const addr = parseInt(v, 16)
+  return addr >= 0x01 && addr <= 0xdf ? addr : 'bad'
 }

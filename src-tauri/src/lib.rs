@@ -3111,6 +3111,15 @@ fn radio_config_for(
             .find(|r| r.id == settings.active_radio)
             .map(|r| r.icom_data_mode)
             .unwrap_or(settings.icom_data_mode),
+        // …and its CI-V address (#528), from the same profile, so the startup transport talks on
+        // the address every tick after it derives from settings (a mismatch relaunches the daemon).
+        civ_addr: tempo_app::settings::civ_addr_override(
+            settings
+                .radios
+                .iter()
+                .find(|r| r.id == settings.active_radio)
+                .map_or(settings.civ_addr.as_str(), |r| r.civ_addr.as_str()),
+        ),
         // …and its transmit audio source for CAT PTT (#381), from the same profile, so the
         // startup transport keys as the one every tick after it derives from settings.
         tx_audio_source: settings
@@ -32360,6 +32369,9 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
                         .unwrap_or("The rig")
                         .to_string(),
                     s.icom_native_cat,
+                    // The operator's CI-V address for this radio (#528): the address the daemon
+                    // talks on, so it is the one the sweep asks at.
+                    tempo_app::settings::civ_addr_override(&s.civ_addr),
                 )
             });
             ladder
@@ -32371,12 +32383,15 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
         if ok == Some(false) && !refused {
             // A sweep whose rungs could not hold RTS unkeyed on an RTS-keyed port is not run:
             // the probe's own failure stands, with the reason. Asked before the port is taken.
-            let sweep_refused = ladder.as_ref().and_then(|(_, _, rig_model, gate, _, _)| {
-                tempo_audio::baud_ladder::sweep_refusal(*rig_model, *gate)
-            });
+            let sweep_refused = ladder
+                .as_ref()
+                .and_then(|(_, _, rig_model, gate, _, _, _)| {
+                    tempo_audio::baud_ladder::sweep_refusal(*rig_model, *gate)
+                });
             if let Some(why) = sweep_refused {
                 detail = format!("{detail} {why}");
-            } else if let Some((port, baud, rig_model, gate, model_name, native)) = ladder {
+            } else if let Some((port, baud, rig_model, gate, model_name, native, civ_set)) = ladder
+            {
                 // Ask the loop to release the serial port (our own daemon holds it even
                 // when the rig is mute), wait for the ack, then probe. Always release —
                 // the loop rebuilds CAT at the configured settings either way, and the
@@ -32411,17 +32426,20 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
                     let report = tauri::async_runtime::spawn_blocking(move || {
                         use tempo_audio::baud_ladder::{self as bl, LadderKind};
                         match bl::ladder_kind(rig_model) {
-                            LadderKind::Civ { addr } => bl::compose_ladder_message(
-                                &bl::run(&port, baud, addr, gate),
-                                &model_name,
-                                addr,
-                                native,
-                                bl::dual_com_ports(rig_model),
-                                // Platform as data (the rigctld_launch_failed_for
-                                // discipline): the no-answer walkthroughs talk Device
-                                // Manager on Windows and /dev/cu.* on a Mac.
-                                cfg!(target_os = "macos"),
-                            ),
+                            LadderKind::Civ { addr } => {
+                                let addr = civ_set.unwrap_or(addr);
+                                bl::compose_ladder_message(
+                                    &bl::run(&port, baud, addr, gate),
+                                    &model_name,
+                                    addr,
+                                    native,
+                                    bl::dual_com_ports(rig_model),
+                                    // Platform as data (the rigctld_launch_failed_for
+                                    // discipline): the no-answer walkthroughs talk Device
+                                    // Manager on Windows and /dev/cu.* on a Mac.
+                                    cfg!(target_os = "macos"),
+                                )
+                            }
                             LadderKind::Hamlib { caps } => bl::compose_hamlib_ladder_message(
                                 &bl::run_hamlib(&port, baud, rig_model, gate, &caps),
                                 &model_name,

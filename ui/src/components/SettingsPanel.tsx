@@ -14,7 +14,7 @@ import { confirmDialog } from '../confirm'
 import { Js8FrequencySettings } from './Js8FrequencySettings'
 import { DraftNumberInput } from './DraftNumberInput'
 import { JtdxDecoderFields } from './JtdxDecoderFields'
-import { checkRigForm, blocks, netRigctlSerialPort, dataModePickerShown, APRS_DATA_FM_MODELS, ICOM_LAN_MODELS, NATIVE_CIV_MODELS, NO_CAT_PTT_TRANSCEIVERS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
+import { checkRigForm, blocks, netRigctlSerialPort, dataModePickerShown, APRS_DATA_FM_MODELS, ICOM_LAN_MODELS, NATIVE_CIV_MODELS, NO_CAT_PTT_TRANSCEIVERS, nativeCivBlockedReason, civAddrFieldShown, parseCivAddr, type RigCheck } from '../rigFormChecks'
 import {
   confirmSatUplink,
   clearDataFolder,
@@ -1043,6 +1043,8 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     // DATA1. `ampModel`/`ampPort` were absent and Rust does NOT default them, so Save failed
     // outright with `missing field ampModel`.
     icomDataMode: s.icomDataMode ?? 1,
+    // Per radio, and no serde default on the Rust patch: dropped here, the Save fails loudly.
+    civAddr: s.civAddr ?? '',
     // ⚠️ PER-RADIO, and Rust carries no serde default on the PATCH (only on the stored profile, so
     // an old file loads as Front/Mic). Dropping it here would fail the Save loudly rather than
     // quietly put a Rear/Data radio (#381) back on its microphone.
@@ -7382,6 +7384,26 @@ export function SettingsPanel({
                     </span>
                   </label>
                 )}
+
+              {/* #528: the radio's CI-V address, for a radio whose address was changed on its menu
+                  (it answers on nothing else). Blank is the model's own. Offered where Nexus's
+                  CI-V daemon or rigctld opens the radio's CI-V (`civAddrFieldShown`); a value that
+                  is not an address refuses the Save (`checkRigForm`). */}
+              {civAddrFieldShown(form.rigModel, form.rigConn) && (
+                <label className="settings-field">
+                  <span className="settings-label">{t('settings.rigControl.civAddr.label')}</span>
+                  <input
+                    className="settings-input"
+                    type="text"
+                    value={form.civAddr ?? ''}
+                    onChange={(e) => update('civAddr', e.target.value)}
+                    aria-invalid={parseCivAddr(form.civAddr ?? '') === 'bad'}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <span className="settings-hint">{t('settings.rigControl.civAddr.hint')}</span>
+                </label>
+              )}
 
               {/* WHICH Icom data mode. Only for the radios that have more than one (see
                   dataModePickerShown), and only through Nexus's own CI-V engine (the native
