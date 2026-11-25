@@ -131,6 +131,7 @@ import { useViewportClass } from '../useViewport'
 // laid over the World view's land (Natural Earth's hillshade, public domain). See basemap.ts.
 import {
   basemapAt,
+  equirectCopies,
   onBasemapLoaded,
   paintEquirect,
   paintProjected,
@@ -2086,11 +2087,19 @@ export function MapView({
           states: layers.states.visible ? layers.states.opacity : 0,
         }
         if (kind === 'world') {
-          const [tx, ty] = proj.translate()
+          // The flat map is turned to the operator's longitude, so the stored world is drawn in a copy
+          // each side of the seam, each clipped to its own columns.
           const relief = layers.relief.visible ? reliefRef.current : null
-          paintEquirect(ctx, ppd, tx, ty, paint, relief
-            ? (c) => paintRelief(c, relief, tx - 180 * ppd, ty - 90 * ppd, tx + 180 * ppd, ty + 90 * ppd, w, h, reliefAlphaFor(ppd) * layers.relief.opacity)
-            : undefined)
+          for (const { tx, ty, clipX0, clipX1, region } of equirectCopies(proj, w, h)) {
+            ctx.save()
+            ctx.beginPath()
+            ctx.rect(clipX0, 0, clipX1 - clipX0, h)
+            ctx.clip()
+            paintEquirect(ctx, ppd, tx, ty, { ...paint, region }, relief
+              ? (c) => paintRelief(c, relief, tx - 180 * ppd, ty - 90 * ppd, tx + 180 * ppd, ty + 90 * ppd, w, h, reliefAlphaFor(ppd) * layers.relief.opacity)
+              : undefined)
+            ctx.restore()
+          }
         } else {
           paintProjected(ctx, proj, paint)
         }

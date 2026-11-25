@@ -22,7 +22,7 @@
 //   (https://aa.usno.navy.mil/api/moon/phases/date?date=2026-08-01&nump=12), fetched 2026-09-29:
 //   the UT of each new and full moon from August to October 2026.
 import { describe, it, expect } from 'vitest'
-import { moonAt, solarElevationDeg, subsolarPoint, sunAt } from './mapGeo'
+import { moonAt, solarElevationDeg, subsolarPoint, sunAt, terminator } from './mapGeo'
 
 const D = Math.PI / 180
 const norm180 = (deg: number) => ((deg + 540) % 360) - 180
@@ -306,5 +306,73 @@ describe('the moon: the Astronomical Almanac’s low-precision series against JP
       expect(day(t), `${kind} moon ${USNO_PHASES[i][1]}: the UT day`).toBe(day(want))
       expect(Math.abs(t - want) / 60_000, `${kind} moon ${USNO_PHASES[i][1]}: minutes off`).toBeLessThan(90)
     })
+  })
+})
+
+describe('the sun the operator saw: NOAA solar position, and the greyline standing on the same sun', () => {
+  // A second, independent reference: NOAA's Solar Calculator (the General Solar Position
+  // spreadsheet of the Global Monitoring Laboratory, after Meeus), written out here from its own
+  // formulas. Its declination and equation of time give where the sun is overhead: the longitude
+  // whose apparent solar time is noon, (720 − EoT − UT minutes) / 4. NOAA quotes it to about 0.01°.
+  function noaaSubsolar(ms: number): { lat: number; lon: number } {
+    const T = (ms / 86_400_000 + 2_440_587.5 - 2_451_545) / 36_525
+    const L0 = (((280.46646 + T * (36000.76983 + T * 0.0003032)) % 360) + 360) % 360
+    const M = 357.52911 + T * (35999.05029 - 0.0001537 * T)
+    const e = 0.016708634 - T * (0.000042037 + 0.0000001267 * T)
+    const C =
+      Math.sin(M * D) * (1.914602 - T * (0.004817 + 0.000014 * T)) +
+      Math.sin(2 * M * D) * (0.019993 - 0.000101 * T) +
+      Math.sin(3 * M * D) * 0.000289
+    const omega = 125.04 - 1934.136 * T
+    const lambda = L0 + C - 0.00569 - 0.00478 * Math.sin(omega * D)
+    const eps0 = 23 + (26 + (21.448 - T * (46.815 + T * (0.00059 - T * 0.001813))) / 60) / 60
+    const eps = eps0 + 0.00256 * Math.cos(omega * D)
+    const dec = Math.asin(Math.sin(eps * D) * Math.sin(lambda * D)) / D
+    const y = Math.tan((eps / 2) * D) ** 2
+    const eot =
+      (4 / D) *
+      (y * Math.sin(2 * L0 * D) -
+        2 * e * Math.sin(M * D) +
+        4 * e * y * Math.sin(M * D) * Math.cos(2 * L0 * D) -
+        0.5 * y * y * Math.sin(4 * L0 * D) -
+        1.25 * e * e * Math.sin(2 * M * D))
+    const utMin = (((ms / 60_000) % 1440) + 1440) % 1440
+    return { lat: dec, lon: norm180((720 - eot - utMin) / 4) }
+  }
+
+  const MOMENTS = [
+    // The operator's report: the sun over southern Brazil at 15:11 UTC on 2026-11-25.
+    '2026-11-25T15:11Z',
+    '2026-03-20T14:46Z', // the March equinox
+    '2026-06-21T08:25Z', // the June solstice
+    '2026-09-23T00:05Z', // the September equinox
+    '2026-12-21T20:50Z', // the December solstice
+    '2027-02-11T03:30Z', // the equation of time near its most negative
+    '2026-11-03T18:00Z', // and near its most positive
+  ]
+
+  it.each(MOMENTS)('at %s the sun marker stands where NOAA puts the sun (within 0.05°)', (ut) => {
+    const ms = Date.parse(ut)
+    const ours = subsolarPoint(ms)
+    const ref = noaaSubsolar(ms)
+    expect(separation(ours, ref)).toBeLessThan(0.05)
+  })
+
+  it('at 15:11 UTC on 2026-11-25 that is over southern Brazil: about 21° S, 51° W', () => {
+    const ss = subsolarPoint(Date.parse('2026-11-25T15:11Z'))
+    expect(ss.lat).toBeGreaterThan(-21.5)
+    expect(ss.lat).toBeLessThan(-20.5)
+    expect(ss.lon).toBeGreaterThan(-52)
+    expect(ss.lon).toBeLessThan(-50)
+  })
+
+  it.each(MOMENTS)('at %s the greyline is the horizon of that same sun', (ut) => {
+    const ms = Date.parse(ut)
+    const term = terminator(ms)
+    expect(separation(term.subsolar, noaaSubsolar(ms))).toBeLessThan(0.05)
+    // Every point of the day/night line is 90° from NOAA's sun: the sun on its horizon there.
+    const ring = (term.line as unknown as { coordinates: number[][][] }).coordinates[0]
+    expect(ring.length).toBeGreaterThan(20)
+    for (const [lon, lat] of ring) expect(Math.abs(separation({ lat, lon }, noaaSubsolar(ms)) - 90)).toBeLessThan(0.1)
   })
 })

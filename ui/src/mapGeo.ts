@@ -159,7 +159,9 @@ export function makeProjection(
   }
 
   if (kind === 'world') {
-    const p = geoEquirectangular().fitSize([width, height], { type: 'Sphere' })
+    // Turned so the operator's longitude is the middle column (the seam moves to their antimeridian;
+    // latitude is never tilted). The base map follows through basemap.equirectCopies.
+    const p = geoEquirectangular().rotate([-c.lon, 0]).fitSize([width, height], { type: 'Sphere' })
     if (zoom !== 1 || panX || panY) {
       const s0 = p.scale()
       const [tx, ty] = p.translate()

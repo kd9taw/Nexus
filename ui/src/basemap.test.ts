@@ -12,6 +12,7 @@ import {
   basemapAt,
   coarsestBasemap,
   decodeBasemap,
+  equirectCopies,
   loadBasemap,
   paintEquirect,
   paintProjected,
@@ -258,6 +259,44 @@ function recorder() {
   return { ctx: ctx as unknown as CanvasRenderingContext2D, log, segments: () => segments }
 }
 const INKS = { land: 'L', water: 'W', river: 'R', coast: 'C', state: 'S' }
+
+describe('the flat map turned to the operator (equirectCopies)', () => {
+  // A flat map centred on EN52 puts the seam at 91°E: the world's land, stored from -180 to 180, is
+  // drawn in two copies either side of it. Every column of the map belongs to exactly one copy, and
+  // inside its clip a copy puts each longitude where the projection does.
+  const W2 = 1600
+  const H2 = 800
+  for (const [name, at] of [['EN52', { lat: 42.5, lon: -89 }], ['QF56', { lat: -33.5, lon: 151 }], ['Greenwich', { lat: 51.5, lon: 0 }]] as const) {
+    it(`${name}: the copies tile the map, and each one agrees with the projection`, () => {
+      const proj = makeProjection('world', at, W2, H2)
+      const k = pxPerDegree(proj)
+      const copies = equirectCopies(proj, W2, H2)
+      expect(copies.length).toBe(at.lon === 0 ? 1 : 2)
+      const spans = copies.map((c) => [c.clipX0, c.clipX1]).sort((a, b) => a[0] - b[0])
+      expect(spans[0][0]).toBeCloseTo(0, 6)
+      expect(spans[spans.length - 1][1]).toBeCloseTo(W2, 6)
+      for (let i = 1; i < spans.length; i++) expect(spans[i][0]).toBeCloseTo(spans[i - 1][1], 6)
+      for (const c of copies) {
+        expect(c.region.kind).toBe('rect')
+        if (c.region.kind !== 'rect') continue
+        for (const lon of [c.region.west + 0.5, (c.region.west + c.region.east) / 2, c.region.east - 0.5]) {
+          const x = c.tx + k * lon
+          expect(x).toBeGreaterThanOrEqual(c.clipX0 - 1e-6)
+          expect(x).toBeLessThanOrEqual(c.clipX1 + 1e-6)
+          expect(proj([lon, 10])![0]).toBeCloseTo(x, 4)
+        }
+      }
+    })
+  }
+
+  it('zoomed in on the station, only the copy in view is drawn, cut to what is on screen', () => {
+    const proj = makeProjection('world', { lat: 42.5, lon: -89 }, W2, H2, { zoom: 6, rotate: null, panX: 0, panY: 0 })
+    const copies = equirectCopies(proj, W2, H2)
+    expect(copies.length).toBe(1)
+    const r = copies[0].region
+    expect(r.kind === 'rect' && r.west > -125 && r.east < -50 && r.north < 90).toBe(true)
+  })
+})
 
 describe('the painters', () => {
   it('equirectangular: land, then the relief, then lakes, then the lines with the coast on top', () => {

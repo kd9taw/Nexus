@@ -22,6 +22,27 @@ const W = 800
 const H = 800
 const EN52 = gridToLatLon('EN52')! // ~ (42.5, -89)
 
+describe('every map opens centred on the operator', () => {
+  // The flat map too: the operator's longitude is the middle column, the world still whole (the
+  // seam moves to the antimeridian of the station), and the equator stays the middle row.
+  it.each([
+    ['EN52', EN52],
+    ['QF56 (Sydney)', gridToLatLon('QF56')!],
+    ['JO62 (Berlin)', gridToLatLon('JO62')!],
+  ])('the flat map puts %s in the middle column', (_g, at) => {
+    const proj = makeProjection('world', at, 1600, 800)
+    const c = project(proj, at)!
+    expect(c[0]).toBeCloseTo(800, 0)
+    expect(project(proj, { lat: 0, lon: at.lon })![1]).toBeCloseTo(400, 0)
+  })
+
+  it.each([['globe'], ['aeqd']] as const)('the %s puts the operator at the centre', (kind) => {
+    const c = project(makeProjection(kind, EN52, W, H), EN52)!
+    expect(c[0]).toBeCloseTo(W / 2, 0)
+    expect(c[1]).toBeCloseTo(H / 2, 0)
+  })
+})
+
 describe('mapGeo (AEQD beam map)', () => {
   it('centers the operator grid at the screen center', () => {
     const proj = makeProjection('aeqd', EN52, W, H)
