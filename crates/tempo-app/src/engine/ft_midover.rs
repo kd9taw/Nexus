@@ -132,7 +132,11 @@ impl Engine {
             Some(owed) => Some(owed.to_text()),
             None => match station.outgoing_rv() {
                 Some((m, _)) => Some(m.to_text()),
-                None if station.signed_off_with_73 && station.done() => Some(self.tx6()),
+                None if (station.signed_off_with_73 || station.closed_by_dual_frame)
+                    && station.done() =>
+                {
+                    Some(self.tx6())
+                }
                 None => None,
             },
         }
