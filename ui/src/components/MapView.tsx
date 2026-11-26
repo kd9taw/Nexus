@@ -102,6 +102,7 @@ import {
   subsolarPoint,
   moonAt,
   inView,
+  maidenheadLabels,
   flareRScale,
   flareClass,
   type Projection,
@@ -2184,36 +2185,10 @@ export function MapView({
         ctx.fillStyle = cssVar('--text-faint')
         ctx.textAlign = 'center'
         ctx.textBaseline = 'middle'
-        for (let fi = 0; fi < 18; fi++) {
-          for (let fj = 0; fj < 18; fj++) {
-            const clon = -180 + fi * 20 + 10
-            const clat = -90 + fj * 10 + 5
-            const pc = placePoint(kind, proj, { lat: clat, lon: clon })
-            if (!pc || pc[0] < -40 || pc[0] > w + 40 || pc[1] < -40 || pc[1] > h + 40) continue
-            // Field width in px via a 2° probe at the field center.
-            const probe = project(proj, { lat: clat, lon: clon + 2 })
-            const sqW = probe ? Math.hypot(probe[0] - pc[0], probe[1] - pc[1]) : 0
-            const fieldW = sqW * 10
-            if (fieldW < 70) continue
-            const field = String.fromCharCode(65 + fi) + String.fromCharCode(65 + fj)
-            if (fieldW < 420) {
-              ctx.font = `600 ${Math.min(22, 10 + fieldW / 40)}px ${cssVar('--font-mono') || 'monospace'}`
-              ctx.fillText(field, pc[0], pc[1])
-            } else {
-              // Zoomed in: label the 10×10 squares of this field instead.
-              ctx.font = `500 11px ${cssVar('--font-mono') || 'monospace'}`
-              for (let di = 0; di < 10; di++) {
-                for (let dj = 0; dj < 10; dj++) {
-                  const p = placePoint(kind, proj, {
-                    lat: -90 + fj * 10 + dj + 0.5,
-                    lon: -180 + fi * 20 + di * 2 + 1,
-                  })
-                  if (!p || p[0] < 0 || p[0] > w || p[1] < 0 || p[1] > h) continue
-                  ctx.fillText(`${field}${di}${dj}`, p[0], p[1])
-                }
-              }
-            }
-          }
+        const mono = cssVar('--font-mono') || 'monospace'
+        for (const l of maidenheadLabels(kind, proj, w, h)) {
+          ctx.font = l.square ? `500 11px ${mono}` : `600 ${Math.min(22, 10 + l.fieldW / 40)}px ${mono}`
+          ctx.fillText(l.text, l.x, l.y)
         }
         ctx.globalAlpha = 1
       }

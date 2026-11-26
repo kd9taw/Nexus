@@ -15,12 +15,83 @@ import {
   flareClass,
   flareRecoveryMin,
   flareField,
+  maidenheadLabels,
+  viewCentredOn,
 } from './mapGeo'
 import { gridToLatLon, haversineKm } from './grid'
 
 const W = 800
 const H = 800
 const EN52 = gridToLatLon('EN52')! // ~ (42.5, -89)
+
+describe('Maidenhead labels on the flat map turned to the operator', () => {
+  // The flat map's seam is the operator's antimeridian (91° E for EN52), so it runs through fields
+  // and squares. A field there must still be measured as the 20° it is on screen (a probe across the
+  // seam once measured EN52's 80–100° E column at 15911 px and wrote 100 square labels in each field
+  // of it at world zoom), and each label must be written inside its own cell, on a side of the seam
+  // that is on screen.
+  const FW = 1600
+  const FH = 800
+  /** Is (x, y) inside the Maidenhead cell named `text` (a field or a 4-character square)? */
+  function inOwnCell(proj: ReturnType<typeof makeProjection>, text: string, x: number, y: number): boolean {
+    const ll = proj.invert!([x, y])!
+    let west = -180 + (text.charCodeAt(0) - 65) * 20
+    let south = -90 + (text.charCodeAt(1) - 65) * 10
+    let dw = 20
+    let dh = 10
+    if (text.length === 4) {
+      west += Number(text[2]) * 2
+      south += Number(text[3])
+      dw = 2
+      dh = 1
+    }
+    const off = (((ll[0] - west) % 360) + 360) % 360
+    return off <= dw + 1e-6 && ll[1] >= south - 1e-6 && ll[1] <= south + dh + 1e-6
+  }
+  // EN52 (seam 91° E, through field NL), and grids by the antimeridian whose seam runs past
+  // Greenwich (AA09, RR73), with Greenwich and Sydney besides.
+  const GRIDS = ['EN52', 'AA09', 'RR73', 'IO91', 'QF56']
+
+  it.each(GRIDS)("%s, world zoom: one label per field, each the field's true width, in its own field", (g) => {
+    const proj = makeProjection('world', gridToLatLon(g)!, FW, FH)
+    const k = (proj.scale() * Math.PI) / 180
+    const labels = maidenheadLabels('world', proj, FW, FH)
+    expect(labels.length).toBeGreaterThan(100)
+    expect(labels.filter((l) => l.square)).toEqual([])
+    const counts = new Map<string, number>()
+    for (const l of labels) {
+      counts.set(l.text, (counts.get(l.text) ?? 0) + 1)
+      expect(l.fieldW).toBeCloseTo(20 * k, 6)
+      expect(inOwnCell(proj, l.text, l.x, l.y)).toBe(true)
+    }
+    expect(Math.max(...counts.values())).toBe(1)
+  })
+
+  it.each([
+    ['EN52', 95, 'NL'], // the 91–100° E part of field NL, at the map's left edge
+    ['EN52', 86, 'NL'], // its 80–91° E part, at the right edge
+    ['AA09', 1.5, 'JM'], // seam at 1° E: the east side of the 0–2° E squares
+    ['AA09', 0.5, 'JM'], // and their west side
+  ] as const)('%s zoomed in at %s° E: the squares of field %s on screen are written, each in its own square', (g, lon, field) => {
+    const me = gridToLatLon(g)!
+    const view = viewCentredOn('world', me, { lat: 30, lon }, FW, FH, { zoom: 6, rotate: null, panX: 0, panY: 0 })
+    const proj = makeProjection('world', me, FW, FH, view)
+    const labels = maidenheadLabels('world', proj, FW, FH)
+    expect(labels.length).toBeGreaterThan(0)
+    for (const l of labels) {
+      expect(l.square).toBe(true)
+      expect(l.x).toBeGreaterThanOrEqual(0)
+      expect(l.x).toBeLessThanOrEqual(FW)
+      expect(inOwnCell(proj, l.text, l.x, l.y)).toBe(true)
+    }
+    expect(labels.some((l) => l.text.startsWith(field))).toBe(true)
+  })
+
+  it.each([['globe', 1], ['aeqd', 3]] as const)('the %s (zoom %s) still labels the operator\'s field', (kind, zoom) => {
+    const proj = makeProjection(kind, EN52, W, H, { zoom, rotate: null, panX: 0, panY: 0 })
+    expect(maidenheadLabels(kind, proj, W, H).some((l) => l.text === 'EN')).toBe(true)
+  })
+})
 
 describe('every map opens centred on the operator', () => {
   // The flat map too: the operator's longitude is the middle column, the world still whole (the

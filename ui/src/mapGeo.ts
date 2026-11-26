@@ -218,6 +218,77 @@ export function inView(kind: Projection, proj: GeoProjection, ll: LatLon): boole
   return geoDistance([ll.lon, ll.lat], [-lambda, -phi]) < Math.PI / 2
 }
 
+/** One Maidenhead label the map writes (`maidenheadLabels`). */
+export interface GridLabel {
+  text: string
+  x: number
+  y: number
+  /** True for a 4-character square, written once its field is large on screen; false for a field. */
+  square: boolean
+  /** The field's width on screen, px: a field label's type grows with it. */
+  fieldW: number
+}
+
+/** The Maidenhead labels for a `kind` map drawn with `proj` on a `w` × `h` canvas: the 2-character
+ *  FIELD where a field spans enough pixels to read (70 px), densifying to its 4-character squares
+ *  only inside fields large on screen (420 px) — bounded work, nothing at low zoom.
+ *
+ *  The flat map is turned to the operator, so its seam (their antimeridian) runs through a column of
+ *  fields and, for a 4-character grid, through the middle of a square. Its scale is the same
+ *  everywhere, so a field there is measured by that scale, never by a probe that could land on the
+ *  far side of the seam. A cell the seam cuts is written in the wider of its parts with its middle
+ *  on screen (both, when they are equal), so a view that shows only the narrow part still names it. */
+export function maidenheadLabels(kind: Projection, proj: GeoProjection, w: number, h: number): GridLabel[] {
+  const place = (ll: LatLon) => (inView(kind, proj, ll) ? project(proj, ll) : null)
+  const seam = kind === 'world' ? 180 - proj.rotate()[0] : null
+  /** Where the cell `west`…`west + span` at `lat` is written: inside `pad` px of the canvas. */
+  const spots = (west: number, span: number, lat: number, pad: number): [number, number][] => {
+    let parts: [number, number][] = [[west, west + span]]
+    if (seam != null) {
+      const s = west + ((((seam - west) % 360) + 360) % 360)
+      if (s > west && s < west + span) parts = [[west, s], [s, west + span]]
+    }
+    const shown = parts
+      .map(([a, b]) => ({ span: b - a, p: place({ lat, lon: (a + b) / 2 }) }))
+      .filter(({ p }) => p && p[0] >= -pad && p[0] <= w + pad && p[1] >= -pad && p[1] <= h + pad)
+    const widest = Math.max(...shown.map((s) => s.span))
+    return shown.filter((s) => s.span === widest).map((s) => s.p!)
+  }
+  const out: GridLabel[] = []
+  for (let fi = 0; fi < 18; fi++) {
+    for (let fj = 0; fj < 18; fj++) {
+      const west = -180 + fi * 20
+      const clon = west + 10
+      const clat = -90 + fj * 10 + 5
+      const at = spots(west, 20, clat, 40)
+      if (at.length === 0) continue
+      let fieldW: number
+      if (kind === 'world') fieldW = (20 * proj.scale() * Math.PI) / 180
+      else {
+        // Field width in px via a 2° probe at the field center.
+        const pc = at[0]
+        const probe = project(proj, { lat: clat, lon: clon + 2 })
+        fieldW = probe ? Math.hypot(probe[0] - pc[0], probe[1] - pc[1]) * 10 : 0
+      }
+      if (fieldW < 70) continue
+      const field = String.fromCharCode(65 + fi) + String.fromCharCode(65 + fj)
+      if (fieldW < 420) {
+        for (const [x, y] of at) out.push({ text: field, x, y, square: false, fieldW })
+        continue
+      }
+      // Zoomed in: label the 10×10 squares of this field instead.
+      for (let di = 0; di < 10; di++) {
+        for (let dj = 0; dj < 10; dj++) {
+          for (const [x, y] of spots(west + di * 2, 2, -90 + fj * 10 + dj + 0.5, 0)) {
+            out.push({ text: `${field}${di}${dj}`, x, y, square: true, fieldW })
+          }
+        }
+      }
+    }
+  }
+  return out
+}
+
 /** A range-ring (great-circle circle) of `km` around `center` as a GeoJSON polygon. */
 export function rangeRing(center: LatLon, km: number): GeoPermissibleObjects {
   return geoCircle()
