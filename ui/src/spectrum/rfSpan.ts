@@ -248,6 +248,19 @@ export function loadScopeView(cockpit: 'phone' | 'cw'): ScopeView {
   return PHONE_SCOPE_VIEWS.find((id) => id === v) ?? 'rf'
 }
 
+/** Whether this window's view for `cockpit` is one the operator PICKED (a stored view the cockpit
+ *  offers), rather than the default `loadScopeView` opens on when nothing usable is stored. Phone's
+ *  RF holds the radio's scope only when picked; its default RF gives way to the audio view when the
+ *  radio's scope stops. */
+export function scopeViewPicked(cockpit: 'phone' | 'cw'): boolean {
+  if (cockpit === 'cw') {
+    const v = surfaceGet(CW_SCOPE_VIEW_KEY)
+    return CW_SCOPE_VIEWS.some((id) => id === v)
+  }
+  const v = surfaceGet(PHONE_SCOPE_VIEW_KEY)
+  return PHONE_SCOPE_VIEWS.some((id) => id === v)
+}
+
 /** Keep `view` as this window's for `cockpit`. Never touches another window's record. */
 export function saveScopeView(cockpit: 'phone' | 'cw', view: ScopeView): void {
   if (cockpit === 'phone') surfaceSet(PHONE_SCOPE_VIEW_KEY, view)

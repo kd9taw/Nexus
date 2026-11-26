@@ -2998,7 +2998,7 @@ export const IT: PartialCatalog = {
   "scope.rf.none": "Nessun dato dello scope dalla radio",
   "scope.view.aria": "Cosa mostra lo scope",
   "scope.view.rf.label": "RF",
-  "scope.view.rf.title": "Lo scope della radio: la banda attorno alla tua frequenza di dial",
+  "scope.view.rf.title": "Lo scope della radio: la banda attorno alla tua frequenza di dial. Una volta scelta, se il suo scope smette di arrivare, questa vista mostra «Nessun dato dello scope dalla radio» invece di passare all’audio",
   "scope.view.audio.label": "Audio",
   "scope.view.audio.title": "L'audio della scheda audio: ciò che passa dal filtro della radio, in dettaglio fine",
   "scope.view.both.label": "Entrambi",

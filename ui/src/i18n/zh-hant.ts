@@ -2918,7 +2918,7 @@ export const ZH_HANT: PartialCatalog = {
   "scope.rf.none": "電台無頻譜資料",
   "scope.view.aria": "頻譜顯示內容",
   "scope.view.rf.label": "RF",
-  "scope.view.rf.title": "電台自己的頻譜：你所調頻率周圍的波段",
+  "scope.view.rf.title": "電台自己的頻譜：你所調頻率周圍的波段。選定後，電台頻譜不再送達時，此檢視顯示「電台無頻譜資料」，而不會切換到音訊",
   "scope.view.audio.label": "音訊",
   "scope.view.audio.title": "音效卡音訊：經過電台濾波器的訊號，細節清楚",
   "scope.view.both.label": "兩者",

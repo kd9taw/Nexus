@@ -733,6 +733,13 @@ export function CwCockpit({
   // AUDIO: the audio view alone. Otherwise the one rig scope, as on a radio without a scope.
   const stacked = rigScope && scopeView === 'both'
   const audioOnlyView = rigScope && scopeView === 'audio'
+  // RF: the radio's scope ONLY (`feed='rf'`), as Both's radio pane reads it. The rig scope read
+  // ('scope') gives way to the audio FFT once the last sweep is a second old, and a radio whose
+  // sweeps arrive further apart than that (an IC-7300 through wfview's virtual port) flipped the RF
+  // view to Audio and back every couple of seconds. The RF read holds the last sweep for a few
+  // seconds and then says the radio's scope is not arriving, rather than drawing the audio. Before
+  // a radio scope is seen the view is the rig scope read, which is how the radio's scope is found.
+  const singleFeed = audioOnlyView ? 'audio' : rigScope && scopeView === 'rf' ? 'rf' : 'scope'
   const noteFeed = (source: string, loHz: number, hiHz: number) => {
     setScopeFeed({ source, loHz, hiHz })
     if (isRadioScopeSource(source) && !rigScope) setRigScopeOf({ radio: snap.activeRadioId })
@@ -2995,11 +3002,12 @@ export function CwCockpit({
         // CW-narrow view — 800 Hz CENTERED ON THE PITCH (cwScopeWindow) — unless a native RF
         // scope is streaming, in which case we show the real RF spectrum around the dial. The
         // dashed hairline is YOUR pitch, and it now sits mid-screen where a rig puts it. The
-        // Audio view reads the audio only (`feed`), so the radio's scope never replaces it; the
-        // feed is fixed for a scope's life, so the key remounts it when the view changes.
+        // Audio view reads the audio only and the RF view the radio's scope only (`singleFeed`), so
+        // neither gives way to the other; the feed is fixed for a scope's life, so the key remounts
+        // it when the view changes.
         <PhoneScope
-          key={audioOnlyView ? 'audio' : 'scope'}
-          feed={audioOnlyView ? 'audio' : 'scope'}
+          key={singleFeed}
+          feed={singleFeed}
           cockpit="cw"
           active={active}
           transmitting={snap.radio.transmitting}

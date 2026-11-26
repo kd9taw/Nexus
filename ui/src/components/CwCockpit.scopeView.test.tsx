@@ -239,7 +239,7 @@ describe('the CW scope on a radio with its own scope', () => {
     expect(screen.getByRole('group', { name: 'Audio scope span' })).toBeTruthy()
     expect(screen.queryByRole('group', { name: 'Panadapter zoom' })).toBeNull()
     fireEvent.click(viewChip('RF'))
-    expect(feeds()).toEqual(['scope'])
+    expect(feeds()).toEqual(['rf'])
     expect(localStorage.getItem('nexus.cw.scopeView')).toBe('rf')
     fireEvent.click(viewChip('Both'))
     expect(feeds()).toEqual(['rf', 'audio'])
@@ -253,6 +253,26 @@ describe('the CW scope on a radio with its own scope', () => {
     radioScopeSeen()
     expect(feeds()).toEqual(['audio'])
     expect(viewChip('Audio').getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('RF reads the radio scope ONLY: a gap between its sweeps never turns the view into the audio one', async () => {
+    // An IC-7300 through wfview's virtual port sweeps more than a second apart. The rig scope read
+    // ('scope') gives way to the audio FFT once the last sweep is a second old, so the RF view
+    // flipped to Audio and back every couple of seconds. The RF view the operator picked reads the
+    // radio's scope only, holding the last sweep and saying so when none comes, as Both's radio pane does.
+    await renderCw()
+    radioScopeSeen()
+    fireEvent.click(viewChip('RF'))
+    expect(feeds()).toEqual(['rf'])
+    act(() => (propsOf('rf').onFeed as Report)('civ', 14_025_000, 14_075_000))
+    expect([propsOf('rf').viewLoHz, propsOf('rf').viewHiHz]).toEqual([-25_000, 25_000])
+    // Stored RF opens on the radio scope's own read once that scope is seen (the rig scope before).
+    cleanup()
+    localStorage.setItem('nexus.cw.scopeView', 'rf')
+    await renderCw()
+    expect(feeds()).toEqual(['scope'])
+    radioScopeSeen()
+    expect(feeds()).toEqual(['rf'])
   })
 
   it('validates the stored view on load: a word it does not offer opens on Both', async () => {
@@ -424,7 +444,7 @@ describe('the CW scope on a radio with its own scope', () => {
     expect(document.querySelector('.ph-scope-panel > .ph-span[aria-label="Panadapter zoom"]')).toBeNull()
     // The single views are not compact.
     fireEvent.click(viewChip('RF'))
-    expect(propsOf('scope').compact).toBeFalsy()
+    expect(propsOf('rf').compact).toBeFalsy()
   })
 
   it("the slow hint reads the station's SPEED report when there is one", async () => {

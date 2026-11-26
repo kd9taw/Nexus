@@ -2916,7 +2916,7 @@ export const ZH: PartialCatalog = {
   "scope.rf.none": "电台无频谱数据",
   "scope.view.aria": "频谱显示内容",
   "scope.view.rf.label": "RF",
-  "scope.view.rf.title": "电台自己的频谱：你所调频率周围的波段",
+  "scope.view.rf.title": "电台自己的频谱：你所调频率周围的波段。选定后，电台频谱不再送达时，此视图显示“电台无频谱数据”，而不会切换到音频",
   "scope.view.audio.label": "音频",
   "scope.view.audio.title": "声卡音频：经过电台滤波器的信号，细节清晰",
   "scope.view.both.label": "两者",

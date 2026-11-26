@@ -10050,7 +10050,7 @@ export const DE: PartialCatalog = {
   "scope.rf.none": "Keine Scope-Daten vom Funkgerät",
   "scope.view.aria": "Was der Scope zeigt",
   "scope.view.rf.label": "HF",
-  "scope.view.rf.title": "Der Scope des Funkgeräts selbst: das Band um Ihre Frequenz",
+  "scope.view.rf.title": "Der Scope des Funkgeräts selbst: das Band um Ihre Frequenz. Einmal gewählt: Kommt sein Scope nicht mehr an, zeigt diese Ansicht „Keine Scope-Daten vom Funkgerät“, statt zum Audio zu wechseln",
   "scope.view.audio.label": "Audio",
   "scope.view.audio.title": "Das Audio der Soundkarte: was durch das Filter des Funkgeräts kam, in feinem Detail",
   "scope.view.both.label": "Beide",
