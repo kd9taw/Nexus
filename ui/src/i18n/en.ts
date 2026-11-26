@@ -10723,7 +10723,7 @@ export const EN = {
   'settings.logLine.legend': 'Log line',
   'settings.logLine.qsyWipe.label': 'Wipe an unlogged call when I QSY',
   'settings.logLine.qsyWipe.aria': 'Set an unlogged contact aside when the dial moves off its frequency',
-  'settings.logLine.qsyWipe.hint': 'On the Phone, CW, RTTY, PSK, JTTY and JS8 screens a band change always sets an unlogged contact in the log line aside, with Restore. On: moving the dial more than 3 kHz on phone, or more than 1 kHz on CW and the digital modes, does too. Never while you transmit. Alt+W or Ctrl+W wipes the line by hand.',
+  'settings.logLine.qsyWipe.hint': 'On the Phone, CW, RTTY, PSK, JTTY and JS8 screens a band change always sets an unlogged contact in the log line aside, with Restore. On: moving the dial more than 3 kHz on phone, or more than 1 kHz on CW and the digital modes, does too, there and on the Contest screen and in the contest logger window. Never while you transmit. Alt+W or Ctrl+W wipes the line by hand.',
   'settings.logbookHistory.legend': 'Deleted contacts',
   'settings.callbook.legend': 'Callbook lookups',
 

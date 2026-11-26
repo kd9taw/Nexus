@@ -6762,7 +6762,7 @@ export const JA: PartialCatalog = {
   "settings.logLine.legend": "ログ行",
   "settings.logLine.qsyWipe.label": "QSY したら未記録のコールサインを消去",
   "settings.logLine.qsyWipe.aria": "ダイヤルが周波数から離れたら未記録の交信を退避する",
-  "settings.logLine.qsyWipe.hint": "Phone、CW、RTTY、PSK、JTTY、JS8 の画面では、バンドを変更すると、ログ行の未記録の交信は常に退避され、元に戻すことができます。オン: 音声で 3 kHz、CW とデジタルモードで 1 kHz を超えてダイヤルを動かした場合も退避します。送信中は行いません。Alt+W または Ctrl+W で手動でログ行を消去できます。",
+  "settings.logLine.qsyWipe.hint": "Phone、CW、RTTY、PSK、JTTY、JS8 の画面では、バンドを変更すると、ログ行の未記録の交信は常に退避され、元に戻すことができます。オン: 音声で 3 kHz、CW とデジタルモードで 1 kHz を超えてダイヤルを動かした場合も、これらの画面とコンテスト画面、コンテストロガーウィンドウで退避します。送信中は行いません。Alt+W または Ctrl+W で手動でログ行を消去できます。",
   "settings.logbookHistory.legend": "削除した交信",
   "settings.callbook.legend": "コールブック検索",
   "settings.b4.legend": "交信済み（B4）と重複",

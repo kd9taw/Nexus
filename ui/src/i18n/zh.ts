@@ -9581,7 +9581,7 @@ export const ZH: PartialCatalog = {
   "settings.logLine.legend": "日志行",
   "settings.logLine.qsyWipe.label": "QSY 时清除未记录的呼号",
   "settings.logLine.qsyWipe.aria": "当调谐离开其频率时暂存未记录的通联",
-  "settings.logLine.qsyWipe.hint": "在 Phone、CW、RTTY、PSK、JTTY 和 JS8 页面上，换波段总会暂存日志行中未记录的通联，并可恢复。开启：话音调谐超过 3 kHz，或 CW 和数字模式调谐超过 1 kHz 时也会暂存。发射期间从不执行。Alt+W 或 Ctrl+W 可手动清除日志行。",
+  "settings.logLine.qsyWipe.hint": "在 Phone、CW、RTTY、PSK、JTTY 和 JS8 页面上，换波段总会暂存日志行中未记录的通联，并可恢复。开启：话音调谐超过 3 kHz，或 CW 和数字模式调谐超过 1 kHz 时也会暂存，在这些页面以及比赛页面和比赛记录窗口中均如此。发射期间从不执行。Alt+W 或 Ctrl+W 可手动清除日志行。",
   "settings.logbookHistory.legend": "已删除的联络",
   "settings.callbook.legend": "呼号簿查询",
   "settings.antennaGain.title": "天线增益（高级）",

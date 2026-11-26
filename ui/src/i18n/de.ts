@@ -1190,7 +1190,7 @@ export const DE: PartialCatalog = {
   "settings.logLine.legend": "Logzeile",
   "settings.logLine.qsyWipe.label": "Ungeloggtes Rufzeichen beim QSY löschen",
   "settings.logLine.qsyWipe.aria": "Ein ungeloggtes QSO beiseitelegen, wenn die Frequenz verlassen wird",
-  "settings.logLine.qsyWipe.hint": "Auf den Seiten Phone, CW, RTTY, PSK, JTTY und JS8 legt ein Bandwechsel ein ungeloggtes QSO in der Logzeile immer beiseite, mit Wiederherstellen. Ein: Auch wenn Sie die Frequenz um mehr als 3 kHz in Fonie oder mehr als 1 kHz in CW und den digitalen Betriebsarten verstellen. Nie während Sie senden. Alt+W oder Strg+W leert die Zeile von Hand.",
+  "settings.logLine.qsyWipe.hint": "Auf den Seiten Phone, CW, RTTY, PSK, JTTY und JS8 legt ein Bandwechsel ein ungeloggtes QSO in der Logzeile immer beiseite, mit Wiederherstellen. Ein: Auch wenn Sie die Frequenz um mehr als 3 kHz in Fonie oder mehr als 1 kHz in CW und den digitalen Betriebsarten verstellen, dort und auf der Contest-Seite sowie im Contest-Logger-Fenster. Nie während Sie senden. Alt+W oder Strg+W leert die Zeile von Hand.",
   "settings.logbookHistory.legend": "Gelöschte QSOs",
   "settings.callbook.legend": "Callbook-Abfragen",
   "settings.b4.legend": "Schon gearbeitet (B4) & Dupes",

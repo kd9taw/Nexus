@@ -7328,7 +7328,7 @@ export const ES: PartialCatalog = {
   "settings.logLine.legend": "Línea de registro",
   "settings.logLine.qsyWipe.label": "Borrar un indicativo sin registrar al hacer QSY",
   "settings.logLine.qsyWipe.aria": "Apartar un contacto sin registrar cuando el dial sale de su frecuencia",
-  "settings.logLine.qsyWipe.hint": "En las pantallas Phone, CW, RTTY, PSK, JTTY y JS8 un cambio de banda siempre aparta el contacto sin registrar de la línea de registro, con Restaurar. Activado: también al mover el dial más de 3 kHz en fonía, o más de 1 kHz en CW y en los modos digitales. Nunca mientras transmite. Alt+W o Ctrl+W borran la línea a mano.",
+  "settings.logLine.qsyWipe.hint": "En las pantallas Phone, CW, RTTY, PSK, JTTY y JS8 un cambio de banda siempre aparta el contacto sin registrar de la línea de registro, con Restaurar. Activado: también al mover el dial más de 3 kHz en fonía, o más de 1 kHz en CW y en los modos digitales, allí y en la pantalla Contest y en la ventana del registrador de concursos. Nunca mientras transmite. Alt+W o Ctrl+W borran la línea a mano.",
   "settings.logbookHistory.legend": "Contactos borrados",
   "settings.callbook.legend": "Consultas de callbook",
   "settings.b4.legend": "Trabajado antes (B4) y duplicados",

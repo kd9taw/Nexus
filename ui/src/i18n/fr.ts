@@ -7328,7 +7328,7 @@ export const FR: PartialCatalog = {
   "settings.logLine.legend": "Ligne du log",
   "settings.logLine.qsyWipe.label": "Effacer un indicatif non journalisé quand je fais QSY",
   "settings.logLine.qsyWipe.aria": "Mettre de côté un contact non journalisé quand le VFO quitte sa fréquence",
-  "settings.logLine.qsyWipe.hint": "Sur les écrans Phone, CW, RTTY, PSK, JTTY et JS8, un changement de bande met toujours de côté le contact non journalisé de la ligne du log, avec Rétablir. Activé : déplacer le VFO de plus de 3 kHz en phonie, ou de plus de 1 kHz en CW et dans les modes numériques, le fait aussi. Jamais pendant que vous émettez. Alt+W ou Ctrl+W efface la ligne à la main.",
+  "settings.logLine.qsyWipe.hint": "Sur les écrans Phone, CW, RTTY, PSK, JTTY et JS8, un changement de bande met toujours de côté le contact non journalisé de la ligne du log, avec Rétablir. Activé : déplacer le VFO de plus de 3 kHz en phonie, ou de plus de 1 kHz en CW et dans les modes numériques, le fait aussi, là et sur l’écran Contest et dans la fenêtre du logger de concours. Jamais pendant que vous émettez. Alt+W ou Ctrl+W efface la ligne à la main.",
   "settings.logbookHistory.legend": "Contacts supprimés",
   "settings.callbook.legend": "Recherches dans l'annuaire",
   "settings.b4.legend": "Déjà contacté (B4) et doublons",

@@ -10019,7 +10019,7 @@ export const IT: PartialCatalog = {
   "settings.logLine.legend": "Riga di log",
   "settings.logLine.qsyWipe.label": "Cancella un nominativo non registrato quando faccio QSY",
   "settings.logLine.qsyWipe.aria": "Metti da parte un collegamento non registrato quando la sintonia lascia la sua frequenza",
-  "settings.logLine.qsyWipe.hint": "Nelle schermate Phone, CW, RTTY, PSK, JTTY e JS8 un cambio di banda mette sempre da parte il collegamento non registrato nella riga di log, con Ripristina. Attivo: lo fa anche spostare la sintonia di oltre 3 kHz in fonia, o di oltre 1 kHz in CW e nei modi digitali. Mai mentre trasmetti. Alt+W o Ctrl+W cancellano la riga a mano.",
+  "settings.logLine.qsyWipe.hint": "Nelle schermate Phone, CW, RTTY, PSK, JTTY e JS8 un cambio di banda mette sempre da parte il collegamento non registrato nella riga di log, con Ripristina. Attivo: lo fa anche spostare la sintonia di oltre 3 kHz in fonia, o di oltre 1 kHz in CW e nei modi digitali, lì e nella schermata Contest e nella finestra del logger da contest. Mai mentre trasmetti. Alt+W o Ctrl+W cancellano la riga a mano.",
   "settings.logbookHistory.legend": "Collegamenti eliminati",
   "settings.callbook.legend": "Ricerche nel callbook",
   "settings.antennaGain.title": "Guadagno d'antenna (avanzato)",

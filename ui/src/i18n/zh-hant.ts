@@ -9583,7 +9583,7 @@ export const ZH_HANT: PartialCatalog = {
   "settings.logLine.legend": "日誌行",
   "settings.logLine.qsyWipe.label": "QSY 時清除未記錄的呼號",
   "settings.logLine.qsyWipe.aria": "當調諧離開其頻率時暫存未記錄的通聯",
-  "settings.logLine.qsyWipe.hint": "在 Phone、CW、RTTY、PSK、JTTY 和 JS8 頁面上，換波段總會暫存日誌行中未記錄的通聯，並可恢復。開啟：話音調諧超過 3 kHz，或 CW 和數位模式調諧超過 1 kHz 時也會暫存。發射期間從不執行。Alt+W 或 Ctrl+W 可手動清除日誌行。",
+  "settings.logLine.qsyWipe.hint": "在 Phone、CW、RTTY、PSK、JTTY 和 JS8 頁面上，換波段總會暫存日誌行中未記錄的通聯，並可恢復。開啟：話音調諧超過 3 kHz，或 CW 和數位模式調諧超過 1 kHz 時也會暫存，在這些頁面以及比賽頁面和比賽記錄視窗中均如此。發射期間從不執行。Alt+W 或 Ctrl+W 可手動清除日誌行。",
   "settings.logbookHistory.legend": "已刪除的聯絡",
   "settings.callbook.legend": "呼號簿查詢",
   "settings.antennaGain.title": "天線增益（進階）",

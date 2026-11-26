@@ -1966,8 +1966,11 @@ spin out and back does nothing). Restore puts the line back to log on the freque
 it was made on; a contest contact logs on the frequency the radio is on, as every
 contest contact does. It never acts while you transmit, and a dial reading taken
 during an over is ignored: a radio in split reads back its transmit frequency while
-keyed. If you transmit on the new frequency, the contact belongs there. A contact being logged or edited, or typed for another
-radio, is left alone, and the Satellites and FT screens are never touched (a
+keyed. If you transmit on the new frequency, the contact belongs there. The same
+applies to the Contest screen's log line and the contest logger window (a band
+change leaves their line as it is, as before; the logger window leaves it alone
+while it shows a satellite pass). A contact being logged or edited, or typed for
+another radio, is left alone, and the Satellites and FT screens are never touched (a
 satellite's dial follows Doppler; an FT contact is sequenced). N1MM Logger+ has the
 same idea as "QSYing wipes the call & spots QSO in bandmap". To wipe the
 line by hand, press **Alt+W** or **Ctrl+W** on any screen with a log line; a second

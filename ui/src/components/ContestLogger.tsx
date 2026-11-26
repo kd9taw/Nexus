@@ -420,6 +420,9 @@ export function ContestLargeEntry({
             fdMode={m.fdMode}
             fdSubmode={m.fdSubmode}
             sharedEntry={sharedEntry}
+            // The QSY wipe, if the operator turned it on, as on the cockpits' strips — never while the
+            // logger window says a satellite pass's transponder is held (the dial follows Doppler).
+            offerQsyWipe={satellite == null}
             noCreditChip={
               <NoCreditChip fdActive={fdActive} ruleset={fdRuleset} activeMode={stationMode(section, snap.link.tier, keyboardMode)} />
             }

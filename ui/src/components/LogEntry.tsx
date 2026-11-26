@@ -530,6 +530,13 @@ interface Props {
    */
   clearCallOnBandChange?: boolean
   /**
+   * The QSY wipe ("Wipe an unlogged call when I QSY") on a strip that does NOT clear on a band change:
+   * the Contest screen's large log line and the logger window's (`ContestLargeEntry`, operator yes).
+   * A strip with `clearCallOnBandChange` offers it already. Never while the line is a satellite
+   * pass's: its dial follows Doppler.
+   */
+  offerQsyWipe?: boolean
+  /**
    * CW AND PHONE (#438): the rag-chew Start control beside the call, while a call is in the line.
    * The contact's start (TIME_ON) is when its call was entered; a long contact whose call went in
    * early — a rag-chew, a net check-in that turned into a QSO — is restarted at now by one press.
@@ -583,6 +590,7 @@ export function LogEntry({
   draft,
   onResumeContest,
   clearCallOnBandChange = false,
+  offerQsyWipe = false,
   startButton = false,
 }: Props) {
   const remoteMode = remote != null
@@ -1627,8 +1635,9 @@ export function LogEntry({
   // `qsyWipeHz` from there — 3 kHz on phone, a voice's width, and 1 kHz on CW and the digital modes,
   // where a station 1 kHz away is another station — that HOLDS for `QSY_HOLD_MS` sets it aside as a
   // band change does, with Restore. A band change is the effect's above. Only on a strip that
-  // clears on a band change (never Satellites, whose dial follows Doppler); the FT screens have no
-  // such line, their contact being sequenced.
+  // clears on a band change, or that offers this alone (`offerQsyWipe`: the Contest screen and the
+  // logger window) — never Satellites, whose dial follows Doppler; the FT screens have no such
+  // line, their contact being sequenced.
   //
   // ⛔ A DIAL READ DURING AN OVER IS NOT WHERE THE CONTACT IS. A keyed rig in split reads back its
   // TX VFO, and the rig's own PTT (`rigKeyed`) is polled only about once a second, so an over keyed
@@ -1657,7 +1666,7 @@ export function LogEntry({
       if (qsyTimer.current) clearTimeout(qsyTimer.current)
       qsyTimer.current = setTimeout(() => { qsyTimer.current = null; setQsyRecheck((n) => n + 1) }, QSY_HOLD_MS + 50)
     }
-    if (!qsyWipe || !clearCallOnBandChange || remoteMode || !lineHasContent(currentLine())) {
+    if (!qsyWipe || !(clearCallOnBandChange || offerQsyWipe) || remoteMode || !lineHasContent(currentLine())) {
       qsyAnchor.current = null
       qsyAwaySince.current = null
       qsyOnAirAt.current = null
