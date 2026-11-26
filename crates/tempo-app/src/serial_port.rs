@@ -90,6 +90,12 @@ impl PortIdentity {
     ///   shared by unrelated devices, so a serial that short is not one;
     /// - a factory default every chip of a run carries: Silicon Labs' `0001` on generic CP210x
     ///   cables (and any other zeros-and-a-digit value), and the `A50285BI` of cloned FTDI chips.
+    ///
+    /// What this cannot see: two cables whose serial numbers were rewritten to the SAME value
+    /// that is not on this list (a reseller's batch programmed alike). They read as one device.
+    /// At launch that is two candidates, so ambiguous and not followed, while both are plugged in;
+    /// with only the other one present it would be followed. The radio loop's follow also refuses
+    /// any port present while CAT worked, so a cable that sat beside the radio is still refused.
     fn serial_key(&self) -> Option<&str> {
         let s = self.serial.trim();
         let significant = s.trim_start_matches('0');
