@@ -219,7 +219,9 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       // switches on: an operator looking for it asks how to get CW or the tuner through the client.
       'flex cw', 'cwx', 'flex tune', 'flex atu',
       // #417: the waterfall source, under what the operator sees — a coarse Icom scope waterfall.
-      'waterfall source', 'audio waterfall', 'icom scope', 'scope resolution'],
+      'waterfall source', 'audio waterfall', 'icom scope', 'scope resolution',
+      // #528: the CI-V address, under the radio menu's own words and the symptom of a changed one.
+      'ci-v address', 'civ address', 'civaddr', 'transceiver address', 'icom address', '0x94'],
   },
   {
     id: 'audio',

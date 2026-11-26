@@ -1168,22 +1168,23 @@ pub fn compose_ladder_message(
              install)."
         ),
         CivFamily::Icom => format!(
-            "Also check: the radio is on; the rig menu CI-V Address is at its default \
-             ({civ_addr:02X}h); and if no COM ports appear at all, install Icom's USB driver."
+            "Also check: the radio is on; the rig menu CI-V Address is the {civ_addr:02X}h \
+             Nexus asked at (the model's default, or the address set in Settings ▸ Radio ▸ Rig \
+             & CAT ▸ Advanced); and if no COM ports appear at all, install Icom's USB driver."
         ),
         // The address is still worth naming — a bus set to a different address is silent in
         // exactly this way — but WHERE it is set is the radio's manual, not ours to guess.
         _ if mac => format!(
-            "Also check that the radio is on. Nexus asked at CI-V address {civ_addr:02X}h, the \
-             default Hamlib publishes for this model — a radio answering at a different address \
-             stays silent. If no cu.* port appears at all, confirm the rig shows up in System \
+            "Also check that the radio is on. Nexus asked at CI-V address {civ_addr:02X}h (the \
+             default Hamlib publishes for this model, or the address set in Settings ▸ Radio ▸ \
+             Rig & CAT ▸ Advanced) — a radio answering at a different address stays silent. If no cu.* port appears at all, confirm the rig shows up in System \
              Information » USB and check Detect for a driver hint: macOS ships the Silicon Labs \
              and FTDI drivers in-kernel, but a WCH bridge can still want one on older macOS."
         ),
         _ => format!(
-            "Also check that the radio is on. Nexus asked at CI-V address {civ_addr:02X}h, the \
-             default Hamlib publishes for this model — a radio answering at a different address \
-             stays silent. If no COM ports appear at all, install the USB-serial driver for the \
+            "Also check that the radio is on. Nexus asked at CI-V address {civ_addr:02X}h (the \
+             default Hamlib publishes for this model, or the address set in Settings ▸ Radio ▸ \
+             Rig & CAT ▸ Advanced) — a radio answering at a different address stays silent. If no COM ports appear at all, install the USB-serial driver for the \
              rig's bridge chip — Detect names the chip and links its driver."
         ),
     };

@@ -569,6 +569,57 @@ pub fn rig_conn_is_omnirig(rig_conn: &str) -> bool {
     rig_conn.eq_ignore_ascii_case("omnirig")
 }
 
+/// The lowest and highest CI-V address a radio can be set to (#528). `00` is the bus's broadcast
+/// address and `E0`–`FF` are the controllers' (`E0` is the one Nexus, Hamlib and every logger talk
+/// as), so neither end can be a radio's.
+pub const CIV_ADDR_MIN: u8 = 0x01;
+pub const CIV_ADDR_MAX: u8 = 0xDF;
+
+/// What [`parse_civ_addr`] refuses: text that is not a radio's CI-V address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotACivAddr;
+
+/// Read the operator's "CI-V address" text ([`RadioProfile::civ_addr`]): `Ok(None)` for blank,
+/// which is the model's own address; `Ok(Some(addr))` for one or two hex digits as the radio's
+/// menu shows them, with or without a `0x` in front or an `h` behind (`94`, `0x94`, `94h`);
+/// `Err(NotACivAddr)` for anything else, a decimal `148` included (three digits is not an address a
+/// radio's menu shows) and an address outside [`CIV_ADDR_MIN`]..=[`CIV_ADDR_MAX`].
+///
+/// ⚠️ MIRRORED in the UI as `parseCivAddr` (ui/src/rigFormChecks.ts), which refuses the Save on
+/// `Err`; the UI's test reads this file's table of cases (`CIV_ADDR_CASES`) and holds it to them.
+/// The text is trimmed as JavaScript's `trim()` trims it (a byte-order mark goes, U+0085 stays),
+/// so the two agree on pasted text too.
+pub fn parse_civ_addr(text: &str) -> Result<Option<u8>, NotACivAddr> {
+    let t = tempo_core::logbook::query::js_trim(text);
+    if t.is_empty() {
+        return Ok(None);
+    }
+    let t = t
+        .strip_prefix("0x")
+        .or_else(|| t.strip_prefix("0X"))
+        .unwrap_or(t);
+    let t = t
+        .strip_suffix('h')
+        .or_else(|| t.strip_suffix('H'))
+        .unwrap_or(t);
+    if t.is_empty() || t.len() > 2 || !t.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(NotACivAddr);
+    }
+    let addr = u8::from_str_radix(t, 16).map_err(|_| NotACivAddr)?;
+    if (CIV_ADDR_MIN..=CIV_ADDR_MAX).contains(&addr) {
+        Ok(Some(addr))
+    } else {
+        Err(NotACivAddr)
+    }
+}
+
+/// The CI-V address to talk to this radio on in place of the model's own, or `None` for the
+/// model's own: blank, and also anything [`parse_civ_addr`] refuses. A value the UI would not
+/// have saved (a hand-edited settings file) talks on the default rather than on a guess.
+pub fn civ_addr_override(text: &str) -> Option<u8> {
+    parse_civ_addr(text).ok().flatten()
+}
+
 /// Could Nexus's OWN CI-V daemon ever serve a radio wired like this — i.e. is
 /// "turn on Native CI-V" a cure that EXISTS for it?
 ///
@@ -2304,6 +2355,10 @@ pub struct Settings {
     /// [`RadioProfile::icom_data_mode`]). 1 is today's behaviour.
     #[serde(default = "one")]
     pub icom_data_mode: u8,
+    /// The active radio's CI-V address override (flat mirror — see [`RadioProfile::civ_addr`]).
+    /// Blank is today's behaviour.
+    #[serde(default)]
+    pub civ_addr: String,
     /// The active radio's waterfall source (flat mirror — see [`RadioProfile::native_scope`]).
     /// `"auto"` is today's behaviour.
     #[serde(default = "default_native_scope")]
@@ -5601,6 +5656,19 @@ pub struct RadioProfile {
     /// otherwise, and 2/3 want a real radio in front of someone before they are called working.
     #[serde(default = "one")]
     pub icom_data_mode: u8,
+    /// The radio's CI-V address, when the operator changed it on the radio (#528): hex as the
+    /// radio's menu shows it, `94`, `0x94` or `94h`. Blank (the default) talks on the model's
+    /// factory address (`IcomModel::default_civ_addr`, or Hamlib's own for the model), as every
+    /// release has. Read only through [`civ_addr_override`], which refuses anything that is not
+    /// a radio's address, so a bad value falls back to the default rather than to a guess.
+    ///
+    /// Used by Nexus's own CI-V daemon and handed to Hamlib's rigctld (`-c`) for an Icom-backend
+    /// model. Not by the Icom network connection: that session learns the radio's address from
+    /// the radio itself.
+    ///
+    /// ⚠️ NEEDS BENCH: a radio set to a non-default address has not been tried here.
+    #[serde(default)]
+    pub civ_addr: String,
     /// "Transmit audio source (CAT PTT)" (#381, WSJT-X's choice): which input the radio transmits
     /// when Nexus keys it over CAT. `"front"` (the default) keys `T 1` exactly as every release
     /// has. `"rear"` keys `T 3`, Hamlib's `RIG_PTT_ON_DATA`, which a mic/data driver sends as a
@@ -5924,6 +5992,9 @@ pub struct RadioProfilePatch {
     /// written before the field existed still deserializes as today's behaviour.
     #[serde(default = "one")]
     pub icom_data_mode: u8,
+    /// See `RadioProfile::civ_addr`. No `#[serde(default)]`, for `rated_watts`'s reason: a UI
+    /// that forgot to send it would clear the operator's address on every Save, in silence.
+    pub civ_addr: String,
     /// See `RadioProfile::tx_audio_source` — "front" / "rear".
     ///
     /// ⚠️ NO `#[serde(default)]`, for `rated_watts`'s reason: a UI that forgot to send it would
@@ -6111,6 +6182,7 @@ impl RadioProfilePatch {
         p.rigctld_port = self.rigctld_port;
         p.icom_native_cat = self.icom_native_cat;
         p.icom_data_mode = self.icom_data_mode;
+        p.civ_addr = self.civ_addr;
         p.tx_audio_source = self.tx_audio_source;
         p.data_modes_plain_ssb = self.data_modes_plain_ssb || plain_ssb_by_model;
         p.sstv_hold_data_submode = self.sstv_hold_data_submode;
@@ -6340,6 +6412,7 @@ impl Default for RadioProfile {
             rigctld_port: 4534,
             icom_native_cat: false,
             icom_data_mode: 1,
+            civ_addr: String::new(),
             tx_audio_source: default_tx_audio_source(),
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
@@ -7382,6 +7455,7 @@ impl Default for Settings {
             split_detect_enabled: false,
             yaesu_rf_scope: false,
             icom_data_mode: 1,
+            civ_addr: String::new(),
             native_scope: default_native_scope(),
             tx_audio_source: default_tx_audio_source(),
             data_modes_plain_ssb: false,
@@ -7902,6 +7976,7 @@ impl Settings {
             rigctld_port: self.rigctld_port,
             icom_native_cat: self.icom_native_cat,
             icom_data_mode: self.icom_data_mode,
+            civ_addr: self.civ_addr.clone(),
             tx_audio_source: self.tx_audio_source.clone(),
             data_modes_plain_ssb: self.data_modes_plain_ssb,
             sstv_hold_data_submode: self.sstv_hold_data_submode,
@@ -8476,6 +8551,7 @@ impl Settings {
         // mode selects which audio input the rig transmits from, so the wrong one is wrong
         // TX audio routing on the radio you just switched to.
         self.icom_data_mode = p.icom_data_mode;
+        self.civ_addr = p.civ_addr;
         self.native_scope = p.native_scope;
         self.tx_audio_source = p.tx_audio_source;
         self.yaesu_rf_scope = p.yaesu_rf_scope;
@@ -8539,6 +8615,7 @@ impl Settings {
             rigctld_port,
             icom_native_cat,
             icom_data_mode,
+            civ_addr,
             native_scope,
             tx_audio_source,
             yaesu_rf_scope,
@@ -8590,6 +8667,7 @@ impl Settings {
             self.rigctld_port,
             self.icom_native_cat,
             self.icom_data_mode,
+            self.civ_addr.clone(),
             self.native_scope.clone(),
             self.tx_audio_source.clone(),
             self.yaesu_rf_scope,
@@ -8642,6 +8720,7 @@ impl Settings {
             p.rigctld_port = rigctld_port;
             p.icom_native_cat = icom_native_cat;
             p.icom_data_mode = icom_data_mode;
+            p.civ_addr = civ_addr;
             p.native_scope = native_scope;
             p.tx_audio_source = tx_audio_source;
             p.yaesu_rf_scope = yaesu_rf_scope;
@@ -9822,6 +9901,74 @@ mod tests {
     #![allow(clippy::field_reassign_with_default)]
     use super::*;
 
+    /// The CI-V address cases, shared with the UI's `parseCivAddr` test (rigFormChecks.test.ts
+    /// holds the same table): blank is the model's own address, a radio's menu value in any of
+    /// the three spellings is taken, and nothing else is.
+    pub(crate) const CIV_ADDR_CASES: &[(&str, Result<Option<u8>, NotACivAddr>)] = &[
+        ("", Ok(None)),
+        ("   ", Ok(None)),
+        ("94", Ok(Some(0x94))),
+        ("0x94", Ok(Some(0x94))),
+        ("0X94", Ok(Some(0x94))),
+        ("94h", Ok(Some(0x94))),
+        (" b6 ", Ok(Some(0xB6))),
+        // A byte-order mark pasted in front is trimmed as the UI's `trim()` trims it; U+0085 is
+        // not trimmed by either side, so it stays and refuses.
+        ("\u{FEFF}94", Ok(Some(0x94))),
+        ("\u{85}94", Err(NotACivAddr)),
+        ("1", Ok(Some(0x01))),
+        ("DF", Ok(Some(0xDF))),
+        ("00", Err(NotACivAddr)),
+        ("E0", Err(NotACivAddr)),
+        ("0xFF", Err(NotACivAddr)),
+        ("148", Err(NotACivAddr)),
+        ("0x", Err(NotACivAddr)),
+        ("h", Err(NotACivAddr)),
+        ("9G", Err(NotACivAddr)),
+        ("0x0094", Err(NotACivAddr)),
+        ("-1", Err(NotACivAddr)),
+    ];
+
+    #[test]
+    fn a_civ_address_is_read_as_the_radio_menu_shows_it_and_nothing_else_is_taken() {
+        for (text, want) in CIV_ADDR_CASES {
+            assert_eq!(parse_civ_addr(text), *want, "{text:?}");
+            assert_eq!(civ_addr_override(text), want.ok().flatten(), "{text:?}");
+        }
+    }
+
+    /// A radio's address set in Settings reaches its profile and back to the flat mirror, so the
+    /// radio switched to talks on its own address, and a blank one stays blank.
+    #[test]
+    fn the_civ_address_is_per_radio_and_survives_the_active_switch() {
+        let mut s = Settings::default();
+        s.ensure_radio_profiles();
+        let first = s.active_radio;
+        s.civ_addr = "0x96".into();
+        s.sync_active_from_flat();
+        let second = s.add_radio_profile();
+        s.active_radio = second;
+        s.sync_flat_from_active();
+        assert_eq!(
+            s.civ_addr, "",
+            "a new radio starts on its model's own address"
+        );
+        s.active_radio = first;
+        s.sync_flat_from_active();
+        assert_eq!(s.civ_addr, "0x96");
+        let mut patch = patch_of(s.radios.iter().find(|p| p.id == second).unwrap());
+        patch.civ_addr = "A2".into();
+        patch.apply_to(s.radios.iter_mut().find(|p| p.id == second).unwrap());
+        assert_eq!(
+            s.radios.iter().find(|p| p.id == second).unwrap().civ_addr,
+            "A2"
+        );
+        assert_eq!(
+            s.civ_addr, "0x96",
+            "editing another radio leaves the active one's alone"
+        );
+    }
+
     /// #165: when another program holds the sharing port, the broker moves, and it must not move
     /// onto a port this station's own daemons or the operator's NET rigctl address will want.
     #[test]
@@ -10320,6 +10467,7 @@ mod tests {
             rigctld_port: 4533,
             icom_native_cat: true,
             icom_data_mode: 2,
+            civ_addr: String::new(),
             tx_audio_source: "rear".into(),
             data_modes_plain_ssb: true,
             sstv_hold_data_submode: true,
@@ -10819,6 +10967,7 @@ mod tests {
             rigctld_port: 0,
             icom_native_cat: false,
             icom_data_mode: 3,
+            civ_addr: String::new(),
             tx_audio_source: "rear".into(),
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
@@ -10988,6 +11137,7 @@ mod tests {
             rigctld_port: 0,
             icom_native_cat: false,
             icom_data_mode: 1,
+            civ_addr: String::new(),
             tx_audio_source: "front".into(),
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
@@ -11086,7 +11236,7 @@ mod tests {
             "ratedWatts": 100,
             "rigConn": "serial", "rigAddr": "", "omnirigSlot": 0, "rigctldPort": 4533,
             "icomNativeCat": false, "dataModesPlainSsb": false, "sstvHoldDataSubmode": false,
-            "txAudioSource": "front",
+            "txAudioSource": "front", "civAddr": "",
             "audioIn": "USB Audio Device", "audioOut": "USB Audio Device",
             "txLevel": 0.9, "rxGain": 1.0,
             "rotatorModel": 0, "rotatorPort": "", "rotatorBaud": 9600, "rotatorHost": "",
@@ -11344,6 +11494,7 @@ mod tests {
             rigctld_port: p.rigctld_port,
             icom_native_cat: p.icom_native_cat,
             icom_data_mode: 1,
+            civ_addr: p.civ_addr.clone(),
             tx_audio_source: p.tx_audio_source.clone(),
             data_modes_plain_ssb: p.data_modes_plain_ssb,
             sstv_hold_data_submode: p.sstv_hold_data_submode,

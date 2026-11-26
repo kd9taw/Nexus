@@ -5694,6 +5694,9 @@ export interface Settings {
   icomNativeCat: boolean
   /** Which Icom DATA mode to select for digital (1|2|3). 1 = today's behaviour. */
   icomDataMode: number
+  /** The radio's CI-V address where it was changed on the radio (#528), hex as typed (`94`,
+   * `0x94`); '' = the model's own address (`parse_civ_addr` / `parseCivAddr`). */
+  civAddr: string
   /** This radio's waterfall source where Nexus streams an Icom's own scope: 'auto' (the default,
    * the radio's scope) or 'audio' (the sound card's audio waterfall; the scope stream stops and
    * CI-V keeps serving CAT). Per radio (flat mirror of `RadioProfile.nativeScope`); absent = 'auto'. */
@@ -6652,6 +6655,9 @@ export interface RadioProfile {
   icomNativeCat: boolean
   /** Which Icom DATA mode to select for digital (1|2|3). 1 = today's behaviour. */
   icomDataMode: number
+  /** The radio's CI-V address where it was changed on the radio (#528), hex as typed (`94`,
+   * `0x94`); '' = the model's own address (`parse_civ_addr` / `parseCivAddr`). */
+  civAddr: string
   /** "Transmit audio source (CAT PTT)" (#381): 'front' keys as every release has (`T 1`, the MIC
    * input on most radios), 'rear' keys the DATA input (`T 3`). Offered only for CAT PTT on a radio
    * whose Hamlib driver has mic/data PTT (`getPttMicDataRigModels`). Per radio; absent = 'front'. */

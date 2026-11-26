@@ -4078,6 +4078,10 @@ export interface RadioProfilePatch {
    * on every edit of the rig form. A default on the backend hides drift instead of catching it,
    * which is why the guard below now reads this interface directly. */
   icomDataMode: number
+  /** THIS radio's CI-V address where it was changed on the radio (#528), as typed: '' = the
+   * model's own. No serde default on the Rust patch, so a form that dropped it fails the Save
+   * loudly rather than quietly clearing the address. */
+  civAddr: string
   /** "Transmit audio source (CAT PTT)" for THIS radio (#381): 'front' keys as every release has
    * (`T 1`), 'rear' keys the DATA input (`T 3`). Rust defaults it for an old settings file but NOT
    * on the patch, so a form that dropped it would fail the Save loudly rather than quietly put a

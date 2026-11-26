@@ -8297,6 +8297,8 @@ export const EN = {
     'PTT is set to CAT but the rig model is None/VOX — pick your rig model, or choose a different PTT method.',
   'settings.radio.check.noCatPtt':
     "Hamlib can't key this radio over CAT, so PTT on CAT won't put it in transmit. Choose VOX if your interface keys the radio on audio, or Serial RTS or DTR if it keys on a serial line.",
+  'settings.radio.check.civAddr':
+    "The CI-V address must be one or two hex digits from 01 to DF, as the radio's menu shows it (such as 94 or 0x94), or blank for the model's default.",
 
   // ── Settings ▸ the panel shell (chrome, tab rail, Save) ─────────────────────────────
   // The frame every Settings tab renders inside. `{{id}}` is the build stamp — an identifier,
@@ -8973,6 +8975,9 @@ export const EN = {
     "Set the radio's menu 077 FM PKT PORT SELECT to USB, or beacons go out silent. With this on, APRS puts this radio in DATA-FM instead of plain FM; repeater voice stays plain FM. Off, APRS uses plain FM, as it always has.",
   'settings.rigControl.aprsDataFm.hintIcom':
     "Set the radio's DATA MOD input to USB (SET ▸ Connectors ▸ MOD Input ▸ DATA MOD), or beacons go out silent. With this on, APRS puts this radio in FM-D (FM with DATA on) instead of plain FM; repeater voice stays plain FM. Off, APRS uses plain FM, as it always has.",
+  'settings.rigControl.civAddr.label': "CI-V address",
+  'settings.rigControl.civAddr.hint':
+    "Only if you changed the CI-V Address in the radio's menu (on an Icom: SET ▸ Connectors ▸ CI-V ▸ CI-V Address). Type the same address here, in hex as the radio shows it, such as 94 or 0x94. Leave blank for the model's default, which is right for almost every radio. Used by Native CI-V and by Hamlib. Save to apply.",
   'settings.rigControl.icomNative.label': 'Native Icom CI-V (early access)',
   'settings.rigControl.icomNative.hint':
     'Nexus drives this Icom\'s CI-V directly instead of launching rigctld — unlocking the rig\'s real spectrum scope in the waterfall ("CI-V RF") and instant dial tracking. The scope needs <b>115200 baud, set the same on BOTH the radio and Nexus</b>: (1) on the rig, Menu ▸ SET ▸ Connectors ▸ CI-V ▸ "CI-V USB Baud Rate" = <b>115200</b>; (2) on the rig, same menu, "CI-V USB Port" = "Unlink from [REMOTE]"; (3) the <b>Baud</b> field above = <b>115200</b> to match. Below that the rig refuses to stream the scope (CAT still works; the panadapter just stays off). Save to apply; turn off any time to return to the classic Hamlib path.',
