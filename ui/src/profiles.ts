@@ -108,6 +108,8 @@ const NEVER_IMPORT: readonly string[] = [
   // profile carries the club's master-log address), and so does the WSJT-X UDP API (`wsjtxUdp`),
   // a feed other programs listen to rather than a push to one logger.
   'dxkeeperHost',
+  // #529: the TCP ADIF output's host is its on/off too, for the same reasons.
+  'adifTcpHost',
   // The leave for other computers to send the WSJT-X requests that can arm TX. A profile carries
   // the feed (`wsjtxUdp`), but this is never loaded with one: a profile from a file must not be
   // able to turn it on, and one saved before it was turned on must not quietly turn it off.

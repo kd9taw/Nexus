@@ -33,6 +33,7 @@ describe('Settings ▸ Logbook', () => {
       'integrations-feeds',
       'antenna-gain',
       'dxkeeper',
+      'adif-tcp',
       'n3fjp',
       'n1mm',
       'confirmations',

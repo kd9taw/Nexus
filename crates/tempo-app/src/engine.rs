@@ -2079,6 +2079,13 @@ pub const MAIN_SUB_HAMLIB_REFUSAL: &str =
 /// the measurement and fails if this moves.
 const ZERO_RF_POWER: f32 = 0.005;
 
+/// #529: the most contacts the TCP ADIF output holds for a logger that is not there, as HRD's
+/// queue: past it the oldest goes.
+pub const ADIF_TCP_QUEUE_MAX: usize = 256;
+
+/// #529: how long the TCP ADIF output waits after its logger was not there before it tries again.
+pub const ADIF_TCP_RETRY_SECS: u64 = 30;
+
 /// How long a rig's own report of its split may be trusted before the gate stops granting on it.
 ///
 /// The heavy poll refreshes well inside this, and while a key Nexus applies (its own or another
@@ -4756,6 +4763,20 @@ pub struct Engine {
     /// Last HRD datagram outcome: `Some(true)` delivered, `Some(false)` HRD not reachable
     /// (queued), `None` nothing sent yet. Drives the cockpit's HRD link indicator.
     hrd_link_up: Option<bool>,
+    /// #529: contacts awaiting the TCP ADIF output (JTDX's feed to a logger). Queued as HRD's
+    /// are, for the same reason: the logger may be closed when the contact is logged. The shell's
+    /// upload worker drains it ([`Self::take_adif_tcp_pending`]) off the lock and reports back;
+    /// a logger that is not there leaves the contacts queued (bounded) for a later try.
+    adif_tcp_pending: std::collections::VecDeque<QsoRecord>,
+    /// A purge since the TCP ADIF drain last took its queue ([`Self::adif_tcp_cancelled`]).
+    adif_tcp_purged_since_take: bool,
+    /// Last TCP ADIF outcome: `Some(true)` the logger took the connection, `Some(false)` no
+    /// logger there (queued), `None` nothing sent yet. Settings ▸ Services shows it.
+    adif_tcp_link_up: Option<bool>,
+    /// No TCP ADIF send before this (unix seconds): after the logger was not there, the drain
+    /// waits [`ADIF_TCP_RETRY_SECS`] so a host that never answers costs the upload worker one
+    /// connect timeout per wait, not one per tick.
+    adif_tcp_retry_at: u64,
     /// The last ingest's decodes as they were ON AIR (pre hound-split/rewrite)
     /// — what UDP consumers receive. Identical to `last_decodes` outside Hound.
     last_wire_decodes: Vec<modes::Decode>,
@@ -8090,6 +8111,10 @@ impl Engine {
             hrd_pending: std::collections::VecDeque::new(),
             hrd_purged_since_take: false,
             hrd_link_up: None,
+            adif_tcp_pending: std::collections::VecDeque::new(),
+            adif_tcp_purged_since_take: false,
+            adif_tcp_link_up: None,
+            adif_tcp_retry_at: 0,
             cq_dir: None,
             cq_typed: None,
             last_wire_decodes: Vec::new(),
@@ -20152,6 +20177,7 @@ impl Engine {
         // In the log: JTTY's Log QSO prompt for this station is answered.
         self.jtty_contact_logged(&rec.call);
         self.push_to_hrd(&rec);
+        self.push_to_adif_tcp(&rec);
         self.push_to_n1mm(&rec);
         // ...and to the WSJT-X UDP sink, which is the one a logger actually logs from. The
         // N1MM push above is a `<contactinfo>` broadcast that N1MM itself never reads inbound
@@ -20342,12 +20368,14 @@ impl Engine {
     pub fn settle_gone_rows(&mut self) {
         let (ids, all) = self.station.take_rows_gone();
         self.hrd_purged_since_take |= all;
+        self.adif_tcp_purged_since_take |= all;
         if !all && ids.is_empty() {
             return;
         }
         let ids: std::collections::HashSet<_> = ids.into_iter().collect();
         let gone = |rec: &QsoRecord| all || rec.id.is_some_and(|id| ids.contains(&id));
         self.hrd_pending.retain(|rec| !gone(rec));
+        self.adif_tcp_pending.retain(|rec| !gone(rec));
         self.held_forget(gone);
     }
 
@@ -20611,6 +20639,72 @@ impl Engine {
         }
         while self.hrd_pending.len() > 256 {
             self.hrd_pending.pop_front();
+        }
+    }
+
+    /// #529: queue a logged contact for the TCP ADIF output, when it is on (a host is set). Bounded
+    /// as HRD's queue is: past [`ADIF_TCP_QUEUE_MAX`] the oldest goes.
+    fn push_to_adif_tcp(&mut self, rec: &QsoRecord) {
+        if self.adif_tcp_target().is_none() {
+            return;
+        }
+        self.adif_tcp_pending.push_back(rec.clone());
+        while self.adif_tcp_pending.len() > ADIF_TCP_QUEUE_MAX {
+            self.adif_tcp_pending.pop_front();
+        }
+    }
+
+    /// The TCP ADIF output's logger (host, port), `None` when the output is off.
+    pub fn adif_tcp_target(&self) -> Option<(String, u16)> {
+        let host = self.settings.adif_tcp_host.trim();
+        (!host.is_empty() && self.settings.adif_tcp_port != 0)
+            .then(|| (host.to_string(), self.settings.adif_tcp_port))
+    }
+
+    /// The record the TCP ADIF output sends: the one HRD Logbook gets ([`Self::hrd_datagram`]),
+    /// as it goes to the operator's own logger on their own network: their own record, with the
+    /// station's call and grid where the record has none.
+    pub fn adif_tcp_record(&self, rec: &QsoRecord) -> String {
+        self.hrd_datagram(rec)
+    }
+
+    /// Take the queued contacts for the TCP ADIF output to send, when a send is due at
+    /// `now_unix` (none while waiting after the logger was not there, [`ADIF_TCP_RETRY_SECS`]).
+    /// The shell sends each off the lock and reports back ([`Self::note_adif_tcp_sent`],
+    /// [`Self::adif_tcp_unreachable`]).
+    pub fn take_adif_tcp_pending(&mut self, now_unix: u64) -> Vec<QsoRecord> {
+        if now_unix < self.adif_tcp_retry_at {
+            return Vec::new();
+        }
+        self.adif_tcp_purged_since_take = false;
+        self.adif_tcp_pending.drain(..).collect()
+    }
+
+    /// Whether `rec`, taken by the TCP ADIF drain, has since left the log: it is not sent, or put
+    /// back. As [`Self::hrd_cancelled`].
+    pub fn adif_tcp_cancelled(&self, rec: &QsoRecord) -> bool {
+        self.adif_tcp_purged_since_take || self.station.deleted(rec)
+    }
+
+    /// The logger took a connection: the link is up.
+    pub fn note_adif_tcp_sent(&mut self) {
+        self.adif_tcp_link_up = Some(true);
+    }
+
+    /// No logger was there and the drain stopped: `unsent` is the contact that failed and every one
+    /// after it the drain took, in the order they were logged. They go back ahead of anything
+    /// logged since (a contact deleted meanwhile is left out), bounded, and the next try waits
+    /// [`ADIF_TCP_RETRY_SECS`] from `now_unix`.
+    pub fn adif_tcp_unreachable(&mut self, unsent: Vec<QsoRecord>, now_unix: u64) {
+        self.adif_tcp_link_up = Some(false);
+        self.adif_tcp_retry_at = now_unix + ADIF_TCP_RETRY_SECS;
+        for rec in unsent.into_iter().rev() {
+            if !self.adif_tcp_cancelled(&rec) {
+                self.adif_tcp_pending.push_front(rec);
+            }
+        }
+        while self.adif_tcp_pending.len() > ADIF_TCP_QUEUE_MAX {
+            self.adif_tcp_pending.pop_front();
         }
     }
 
@@ -33708,6 +33802,9 @@ contact yourself."
             .then_some(self.hrd_link_up)
             .flatten();
         s.radio.hrd_queued = self.hrd_pending.len() as u32;
+        // TCP ADIF output (#529): only while it is on.
+        s.radio.adif_tcp_link_up = self.adif_tcp_target().and(self.adif_tcp_link_up);
+        s.radio.adif_tcp_queued = self.adif_tcp_pending.len() as u32;
         s.radio.tx_watchdog = self.tx_watchdog;
         s.radio.slot_key_refused = self.slot_key_refused.clone();
         s.radio.slot_unkey_failed = self.slot_unkey_failed.clone();
@@ -57802,6 +57899,87 @@ mod tests {
             e.snapshot().radio.hrd_link_up,
             None,
             "no HRD indicator when the operator isn't using HRD"
+        );
+    }
+
+    /// #529: the TCP ADIF output is off until a host is set, and an upgrade queues nothing.
+    #[test]
+    fn the_tcp_adif_output_is_off_by_default() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        assert_eq!(e.settings.adif_tcp_host, "");
+        assert_eq!(e.settings.adif_tcp_port, 52001, "JTDX's default port");
+        e.log_qso(e.qso_record("W9XYZ".into(), None, None));
+        assert!(
+            e.take_adif_tcp_pending(0).is_empty(),
+            "nothing queued while off"
+        );
+        assert_eq!(e.snapshot().radio.adif_tcp_link_up, None);
+        assert_eq!(e.snapshot().radio.adif_tcp_queued, 0);
+    }
+
+    /// #529: each logged contact is queued for the logger; one that is not there leaves them all
+    /// queued, in order, and the next try waits, so logging never waits on a dead host.
+    #[test]
+    fn the_tcp_adif_output_queues_and_holds_contacts_until_the_logger_is_there() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.adif_tcp_host = " 127.0.0.1 ".into();
+        assert_eq!(e.adif_tcp_target(), Some(("127.0.0.1".to_string(), 52001)));
+        for call in ["W9XYZ", "K1ABC"] {
+            let rec = e.qso_record(call.into(), None, None);
+            e.log_qso(rec);
+        }
+        let taken = e.take_adif_tcp_pending(1_000);
+        assert_eq!(
+            taken.iter().map(|r| r.call.as_str()).collect::<Vec<_>>(),
+            ["W9XYZ", "K1ABC"]
+        );
+        assert!(
+            e.adif_tcp_record(&taken[0]).contains("STATION_CALLSIGN"),
+            "the record carries the station's call"
+        );
+        // A third is logged while the drain is out; the logger is not there.
+        e.log_qso(e.qso_record("N0CALL".into(), None, None));
+        e.adif_tcp_unreachable(taken, 1_000);
+        assert_eq!(e.snapshot().radio.adif_tcp_link_up, Some(false));
+        assert_eq!(e.snapshot().radio.adif_tcp_queued, 3);
+        assert!(
+            e.take_adif_tcp_pending(1_000 + ADIF_TCP_RETRY_SECS - 1)
+                .is_empty(),
+            "the next try waits"
+        );
+        let again = e.take_adif_tcp_pending(1_000 + ADIF_TCP_RETRY_SECS);
+        assert_eq!(
+            again.iter().map(|r| r.call.as_str()).collect::<Vec<_>>(),
+            ["W9XYZ", "K1ABC", "N0CALL"],
+            "in the order they were logged"
+        );
+        e.note_adif_tcp_sent();
+        assert_eq!(e.snapshot().radio.adif_tcp_link_up, Some(true));
+        assert_eq!(e.snapshot().radio.adif_tcp_queued, 0);
+        // Turned off: no status.
+        e.settings.adif_tcp_host = String::new();
+        assert_eq!(e.snapshot().radio.adif_tcp_link_up, None);
+    }
+
+    /// #529: a logger away for a long time holds the newest [`ADIF_TCP_QUEUE_MAX`] contacts.
+    #[test]
+    fn the_tcp_adif_queue_is_bounded() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.adif_tcp_host = "127.0.0.1".into();
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        for _ in 0..ADIF_TCP_QUEUE_MAX + 5 {
+            e.push_to_adif_tcp(&rec);
+        }
+        assert_eq!(
+            e.snapshot().radio.adif_tcp_queued as usize,
+            ADIF_TCP_QUEUE_MAX
+        );
+        let taken = e.take_adif_tcp_pending(0);
+        e.push_to_adif_tcp(&rec);
+        e.adif_tcp_unreachable(taken, 0);
+        assert_eq!(
+            e.snapshot().radio.adif_tcp_queued as usize,
+            ADIF_TCP_QUEUE_MAX
         );
     }
 

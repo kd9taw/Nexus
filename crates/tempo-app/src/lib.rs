@@ -297,6 +297,8 @@ impl AppState {
                 rig_keyed: false,
                 hrd_link_up: None,
                 hrd_queued: 0,
+                adif_tcp_link_up: None,
+                adif_tcp_queued: 0,
                 amp: None,
                 // The engine builds these from its receiver model on every snapshot.
                 receivers: None,

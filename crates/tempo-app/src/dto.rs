@@ -1852,6 +1852,15 @@ pub struct RadioStatus {
     /// QSOs queued for HRD because it was unreachable — 0 when caught up.
     #[serde(default)]
     pub hrd_queued: u32,
+    /// #529 TCP ADIF output's link: `Some(true)` the last contact reached the logger,
+    /// `Some(false)` no logger there (contacts queued), `None` the output is off or nothing was
+    /// sent yet. Left out of the snapshot while `None`, so a station without the output sends
+    /// exactly what it did before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adif_tcp_link_up: Option<bool>,
+    /// Contacts queued for the TCP ADIF output because its logger was not there; left out while 0.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub adif_tcp_queued: u32,
     /// The amplifier on THIS radio's amp port, when one is configured.
     ///
     /// THREE STATES, and the `Option` carries the first of them — the three the setting's own
@@ -5790,6 +5799,11 @@ pub struct WinlinkSession {
 /// Named here for the same reason `AMP_REASONS` is: a UI switch can be exhaustive, and a
 /// Rust-authored English sentence can never reach the screen untranslated.
 pub const WINLINK_OUTCOMES: [&str; 4] = ["complete", "stopped", "peerClosed", "io"];
+
+/// For `skip_serializing_if`: a count of nothing is left out.
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
+}
 
 #[cfg(test)]
 mod tests {

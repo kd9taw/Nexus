@@ -45509,6 +45509,59 @@ mod upload_record_tests {
             assert_eq!(crate::engine_lock(&engine).snapshot().radio.hrd_queued, 0);
         }
 
+        /// ⛔ #529: THE TCP ADIF OUTPUT'S LOGGER CLOSED WITH SEVERAL CONTACTS QUEUED. The drain stops
+        /// at the first contact nobody takes, and waits before it tries again; once a logger
+        /// listens, every contact reaches it, framed as JTDX frames it, in order, each once.
+        #[test]
+        fn tcp_adif_logger_closed_loses_none_and_sends_none_twice() {
+            let _one = one_at_a_time();
+            let port = free_port();
+            let engine = engine(free_port());
+            {
+                let mut e = crate::engine_lock(&engine);
+                let mut s = e.settings().clone();
+                s.adif_tcp_host = "127.0.0.1".into();
+                s.adif_tcp_port = port;
+                e.apply_settings(s);
+            }
+            for call in ["K1TCP", "K2TCP", "K3TCP"] {
+                log(&engine, call);
+            }
+            let queued = || crate::engine_lock(&engine).snapshot().radio.adif_tcp_queued;
+            crate::drain_adif_tcp(&engine, 1_000);
+            assert_eq!(queued(), 3, "all three still queued");
+            assert_eq!(
+                crate::engine_lock(&engine)
+                    .snapshot()
+                    .radio
+                    .adif_tcp_link_up,
+                Some(false)
+            );
+            let logger = listen(port);
+            crate::drain_adif_tcp(&engine, 1_001);
+            assert!(arrived(&logger).is_empty(), "the next try waits");
+            crate::drain_adif_tcp(&engine, 1_000 + tempo_app::engine::ADIF_TCP_RETRY_SECS);
+            let got = arrived(&logger);
+            assert_eq!(
+                calls(&got),
+                ["K1TCP", "K2TCP", "K3TCP"],
+                "each once, in order"
+            );
+            assert!(
+                got.iter()
+                    .all(|d| d.starts_with("<command:3>Log <parameters:") && d.ends_with("<EOR> ")),
+                "{got:?}"
+            );
+            assert_eq!(queued(), 0);
+            assert_eq!(
+                crate::engine_lock(&engine)
+                    .snapshot()
+                    .radio
+                    .adif_tcp_link_up,
+                Some(true)
+            );
+        }
+
         /// ⛔ BOTH AT ONCE: a purge, then HRD Logbook closed, then open. What the purge took never
         /// goes; every contact logged after it survives the failed sends and arrives once, in order.
         #[test]
@@ -47695,6 +47748,63 @@ fn drain_hrd(engine: &SharedEngine) {
         }
         eng.note_hrd_result(rec, true);
         conn_log("HRD", "ok", "QSO forwarded to HRD Logbook");
+    }
+}
+
+/// #529 TCP ADIF output drain: each queued contact goes to the logger as JTDX sends it
+/// (`tempo_net::adif_tcp`), off the lock, on the upload worker's tick beside HRD's. A logger that
+/// is not there stops the drain: the contacts go back, in order, and the next try waits
+/// (`Engine::adif_tcp_unreachable`), so a dead host costs one connect timeout per wait and never
+/// holds up logging. A logger that refuses a contact (`NAK`), or a send that broke after the
+/// connection was made, is said in the Connections log and not tried again: the logger may
+/// already have it.
+fn drain_adif_tcp(engine: &SharedEngine, now: u64) {
+    let (pending, target) = {
+        let mut eng = engine_lock_result(engine).unwrap_or_else(|e| e.into_inner());
+        (eng.take_adif_tcp_pending(now), eng.adif_tcp_target())
+    };
+    // Turned off with contacts queued: nothing is owed to a logger no longer named.
+    let Some((host, port)) = target else {
+        return;
+    };
+    let mut pending = pending.into_iter();
+    while let Some(rec) = pending.next() {
+        let record = {
+            let eng = engine_lock_result(engine).unwrap_or_else(|e| e.into_inner());
+            if eng.adif_tcp_cancelled(&rec) {
+                continue;
+            }
+            eng.adif_tcp_record(&rec)
+        };
+        match tempo_net::adif_tcp::send_qso(&host, port, &record) {
+            Err(tempo_net::adif_tcp::SendError::NotConnected(e)) => {
+                engine_lock_result(engine)
+                    .unwrap_or_else(|e| e.into_inner())
+                    .adif_tcp_unreachable(std::iter::once(rec).chain(pending).collect(), now);
+                conn_log("TCP ADIF", "error", format!("{e} — contacts queued"));
+                break;
+            }
+            Err(e) => {
+                engine_lock_result(engine)
+                    .unwrap_or_else(|e| e.into_inner())
+                    .note_adif_tcp_sent();
+                conn_log(
+                    "TCP ADIF",
+                    "error",
+                    format!("{} {}: {e}", rec.call, rec.band),
+                );
+            }
+            Ok(()) => {
+                engine_lock_result(engine)
+                    .unwrap_or_else(|e| e.into_inner())
+                    .note_adif_tcp_sent();
+                conn_log(
+                    "TCP ADIF",
+                    "ok",
+                    format!("{} sent to {host}:{port}", rec.call),
+                );
+            }
+        }
     }
 }
 
@@ -55352,6 +55462,7 @@ fn start_on_the_logbook(
             }
             dxkeeper_wait_tick(&push_engine, dxk.as_ref(), &mut dxk_wait, now_unix);
             drain_hrd(&push_engine);
+            drain_adif_tcp(&push_engine, u64::try_from(now_unix).unwrap_or(0));
         });
     }
 

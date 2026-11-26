@@ -13778,6 +13778,55 @@ export function SettingsPanel({
             </div>
           </fieldset>
 
+          <fieldset className="settings-section" id="settings-adif-tcp" {...fold('adif-tcp')}>
+            <legend>{t('settings.adifTcp.legend')}</legend>
+            <p className="settings-note">{t('settings.adifTcp.note')}</p>
+            <div className="settings-grid">
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.adifTcp.host.label')}</span>
+                <input
+                  className="settings-input"
+                  type="text"
+                  value={form.adifTcpHost ?? ''}
+                  placeholder={t('settings.adifTcp.host.placeholder')}
+                  onChange={(e) => update('adifTcpHost', e.target.value)}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                <span className="settings-hint">{t('settings.adifTcp.host.hint')}</span>
+                {(form.adifTcpHost ?? '').trim() !== '' && radio?.adifTcpLinkUp != null && (
+                  <span
+                    className={`settings-hint ${radio.adifTcpLinkUp ? 'ok' : 'warn'}`}
+                    role="status"
+                    style={{ color: radio.adifTcpLinkUp ? 'var(--state-good)' : 'var(--state-weak)' }}
+                  >
+                    {radio.adifTcpLinkUp
+                      ? t('settings.adifTcp.linkUp')
+                      : t('settings.adifTcp.linkDown', { queued: radio.adifTcpQueued ?? 0 })}
+                  </span>
+                )}
+              </label>
+
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.adifTcp.port.label')}</span>
+                <input
+                  className="settings-input"
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={65535}
+                  value={form.adifTcpPort ?? 52001}
+                  placeholder="52001"
+                  onChange={(e) => {
+                    const n = Number(e.target.value)
+                    updateNum('adifTcpPort', Number.isInteger(n) && n >= 1 && n <= 65535 ? n : 52001)
+                  }}
+                />
+                <span className="settings-hint">{t('settings.adifTcp.port.hint')}</span>
+              </label>
+            </div>
+          </fieldset>
+
           <fieldset className="settings-section" id="settings-n3fjp" {...fold('n3fjp')}>
             <legend>{t('settings.n3fjp.legend')}</legend>
             <p className="settings-note">

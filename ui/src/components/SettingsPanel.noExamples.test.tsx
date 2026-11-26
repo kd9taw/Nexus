@@ -206,6 +206,7 @@ describe('Settings: an empty box shows no made-up sample value', () => {
     // Services
     [t('settings.integrations.clusterSsid.label'), ''],
     [t('settings.dxkeeper.host.label'), 'empty = off'],
+    [t('settings.adifTcp.host.label'), 'empty = off'],
     [t('settings.n3fjp.host.label'), 'empty = off'],
     [t('settings.n1mm.addr.label'), 'empty = off'],
     [t('settings.confirmations.eqsl.qthNickname.label'), ''],
@@ -241,5 +242,6 @@ describe('Settings: an empty box shows no made-up sample value', () => {
     expect(box(t('settings.aprs.is.host.label'))).toBe('rotate.aprs2.net')
     expect(box('DXLab Base Port')).toBe('52000')
     expect(box(t('settings.n3fjp.port.label'))).toBe('1100')
+    expect(box(t('settings.adifTcp.port.label'))).toBe('52001')
   })
 })

@@ -618,6 +618,12 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     keywords: ['dxkeeper', 'dxlab', 'commander', 'logger'],
   },
   {
+    id: 'adif-tcp',
+    label: 'TCP ADIF output (JTDX-style)',
+    tab: 'services',
+    keywords: ['tcp', 'adif', 'jtdx', 'radioges', 'rg40', 'logger', 'log output', 'send to logger'],
+  },
+  {
     id: 'n3fjp',
     label: 'N3FJP Integration (club master log)',
     tab: 'services',

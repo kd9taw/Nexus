@@ -1978,6 +1978,11 @@ export interface RadioStatus {
   hrdLinkUp?: boolean | null
   /** QSOs queued for HRD because it was unreachable; 0 when caught up. */
   hrdQueued?: number
+  /** #529 TCP ADIF output's link: true = the logger took the last contact, false = no logger
+   *  there (contacts queued), null/absent = the output is off or nothing was sent yet. */
+  adifTcpLinkUp?: boolean | null
+  /** Contacts queued for the TCP ADIF output; 0 when caught up. */
+  adifTcpQueued?: number
   /** The amplifier on the ACTIVE radio's amp port. THREE STATES, and the absence carries
    * the first: undefined/null = no amplifier configured (render nothing at all);
    * `{linked:false}` = configured and not answering (stay on screen, every reading '—');
@@ -6206,6 +6211,10 @@ export interface Settings {
   /** DXLab BASE port as shown in DXKeeper's own config panel; it listens on base + 1. */
   dxkeeperBasePort?: number
   dxkeeperUploads?: boolean
+  /** #529 TCP ADIF output, as JTDX sends it to a logger. Empty host = off. */
+  adifTcpHost?: string
+  /** Its TCP port; JTDX's default is 52001. */
+  adifTcpPort?: number
   /** Field Day push uses the contest-correct ENTER sequence (N3FJP scores it) vs ADDDIRECT. Default on. */
   n3fjpUseEnter?: boolean
   /** Report this position's band to N3FJP (no CAT) for the club Network Status Display board. Default off. */

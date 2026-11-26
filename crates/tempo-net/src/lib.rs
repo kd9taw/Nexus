@@ -8,6 +8,8 @@
 //!   datagrams (WSJT-X's default sink is `127.0.0.1:2237`). Tempo emits
 //!   Heartbeat / Status / Decode / QSOLogged / Close, and parses the inbound
 //!   Reply / HaltTx / FreeText control datagrams.
+//! - [`adif_tcp`] — a logged contact as one ADIF record over TCP, the way JTDX sends it to a
+//!   logger (DXLab's `log` directive; RadioGes RG40 and others take it).
 //! - [`pskreporter`] — the IPFIX-like UDP spot upload to
 //!   `report.pskreporter.info:4739`, the same one WSJT-X uses to report heard
 //!   stations.
@@ -43,6 +45,7 @@
 //! datagram layouts are exhaustively unit-tested (build-bytes / loopback only —
 //! no test ever touches the real network).
 
+pub mod adif_tcp;
 pub mod aprsis;
 pub mod cluster;
 pub mod dxkeeper;

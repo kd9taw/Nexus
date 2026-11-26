@@ -2035,6 +2035,15 @@ pub struct Settings {
     /// services.
     #[serde(default)]
     pub dxkeeper_uploads: bool,
+    /// #529: TCP ADIF output, the way JTDX sends a logged contact to a logger
+    /// (`tempo_net::adif_tcp`): each logged contact goes, as one ADIF record, to the logger
+    /// listening on this host's TCP port. Empty host = off, the default: an upgrade never starts
+    /// sending contacts anywhere.
+    #[serde(default)]
+    pub adif_tcp_host: String,
+    /// Its TCP port. JTDX's default, 52001.
+    #[serde(default = "default_adif_tcp_port")]
+    pub adif_tcp_port: u16,
     /// N1MM+ contact broadcast: emit the native <contactinfo> XML datagram per
     /// FD QSO. Empty = off; "host:port" or "host" (default port 12060).
     #[serde(default)]
@@ -4644,6 +4653,12 @@ fn default_connect_web_port() -> u16 {
 
 fn default_fd_power() -> u32 {
     2
+}
+
+fn default_adif_tcp_port() -> u16 {
+    // JTDX's default (DXKeeper's port). Mirrors tempo_net::adif_tcp::DEFAULT_PORT, which this
+    // crate cannot name from a serde default without the dependency going the other way.
+    52001
 }
 
 fn default_dxkeeper_base_port() -> u16 {
@@ -7266,7 +7281,9 @@ impl Default for Settings {
             mygrid: String::new(),
             dxkeeper_host: String::new(), // empty = off
             dxkeeper_base_port: default_dxkeeper_base_port(),
-            dxkeeper_uploads: false, // Nexus owns the upload connectors
+            dxkeeper_uploads: false,      // Nexus owns the upload connectors
+            adif_tcp_host: String::new(), // empty = off
+            adif_tcp_port: default_adif_tcp_port(),
             op_name: String::new(),
             op_state: String::new(),
             // ON by default — the operator's explicit sign-off (2026-08-09): with the broker

@@ -440,7 +440,7 @@ describe('the Settings regroup — every section keeps its id and lands on one t
   it('puts each section on its new tab', () => {
     const tabOf = (id: string) => sectionById(id)?.tab
     expect(['satellite-doppler', 'orbital-elements'].map(tabOf)).toEqual(['satellites', 'satellites'])
-    for (const id of ['confirmations', 'connections', 'integrations-feeds', 'antenna-gain', 'dxkeeper', 'n3fjp', 'n1mm'])
+    for (const id of ['confirmations', 'connections', 'integrations-feeds', 'antenna-gain', 'dxkeeper', 'adif-tcp', 'n3fjp', 'n1mm'])
       expect(tabOf(id), id).toBe('services')
     for (const id of ['features', 'app-updates', 'start-at-sign-in', 'this-computer', 'performance', 'data-folder', 'configurations'])
       expect(tabOf(id), id).toBe('app')

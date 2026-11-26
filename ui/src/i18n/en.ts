@@ -10872,6 +10872,15 @@ export const EN = {
   'settings.dxkeeper.host.label': 'DXKeeper host',
   'settings.dxkeeper.host.placeholder': 'empty = off',
   'settings.dxkeeper.host.hint': 'Usually 127.0.0.1 — same PC. Leave blank to disable.',
+  'settings.adifTcp.legend': 'TCP ADIF output (JTDX-style)',
+  'settings.adifTcp.note': 'Sends each contact, as you log it, to a logger listening on a TCP port, the way JTDX does: one ADIF record per contact, with JTDX\'s Log command. Loggers made for JTDX\'s feed, such as RadioGes (RG40), take it. Off until a host is set.',
+  'settings.adifTcp.host.label': 'Logger host',
+  'settings.adifTcp.host.placeholder': 'empty = off',
+  'settings.adifTcp.host.hint': 'The computer the logger runs on: 127.0.0.1 for this one. Leave blank to turn the output off.',
+  'settings.adifTcp.port.label': 'Logger port',
+  'settings.adifTcp.port.hint': 'The port the logger listens on. JTDX\'s default is 52001.',
+  'settings.adifTcp.linkUp': '● Logger reachable — contacts are sent as you log them',
+  'settings.adifTcp.linkDown': '○ No logger answering — contacts waiting: {{queued}}. Nexus tries again every 30 seconds.',
   // `{{port}}` is base + 1, computed and interpolated invariantly.
   'settings.dxkeeper.basePort.hint':
     "The <em>Base Port</em> from DXKeeper's Network Service panel (default 52000). DXKeeper itself listens on <b>{{port}}</b> — Nexus adds the 1 for you.",
