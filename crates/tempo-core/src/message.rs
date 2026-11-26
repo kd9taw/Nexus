@@ -151,6 +151,58 @@ pub fn is_my_base_call(de: &str, mycall: &str) -> bool {
     unhash_call(de).eq_ignore_ascii_case(&base_call(mycall))
 }
 
+/// The station a DUAL frame rogers and the station that sent it: `(K1ABC, K5MGY)` for
+/// `K1ABC RR73; W9XYZ <K5MGY> -08`, the two-payload message a DXpedition Fox or an MSHV
+/// multi-answer station sends (`i3=0 n3=1`). The sender is message word 2, brackets dropped.
+/// `None` for anything else.
+///
+/// WSJT-X 3.0.2's shape, exactly: `DecodedText::messageWords` matches the decode, brackets
+/// removed, against `tokens_re` (`Decoder/decodedtext.cpp:14-46`), whose optional leading group
+/// `(?<dual>[A-Z0-9/]+)\sRR73;\s` is message word 1; the dual arm of `processMessage` then wants
+/// exactly five words (`widgets/mainwindow.cpp:9295-9296`), the whole match and the dual call
+/// plus word1 (a call or `...`), word2 (a call) and word3 (the report), with no word4 (a grid,
+/// `OOO` or an EU VHF exchange) after them. So a frame whose second-half sender is the unresolved
+/// `<...>` is not one (`...` is no word2).
+pub fn dual_frame_rr73(msg: &str) -> Option<(&str, &str)> {
+    let callish = |w: &str| {
+        !w.is_empty()
+            && w.chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '/')
+    };
+    let (to, rest) = msg.trim().split_once(" RR73; ")?;
+    if !callish(to) {
+        return None;
+    }
+    let words: Vec<&str> = rest
+        .split_whitespace()
+        .map(|w| w.trim_start_matches('<').trim_end_matches('>'))
+        .collect();
+    let [word1, word2, word3, tail @ ..] = words.as_slice() else {
+        return None;
+    };
+    let report = |w: &str| {
+        !w.is_empty()
+            && w.chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '-' || c == '+')
+    };
+    let word4 = |w: &str| {
+        let b = w.as_bytes();
+        let grid4 = b.len() == 4
+            && (b'A'..=b'R').contains(&b[0])
+            && (b'A'..=b'R').contains(&b[1])
+            && b[2].is_ascii_digit()
+            && b[3].is_ascii_digit()
+            && w != "RR73";
+        let eu_vhf = b.len() == 6 && b[0] == b'5' && b.iter().all(u8::is_ascii_digit);
+        w == "OOO" || grid4 || eu_vhf
+    };
+    ((callish(word1) || *word1 == "...")
+        && callish(word2)
+        && report(word3)
+        && !tail.first().is_some_and(|w| word4(w)))
+    .then_some((to, *word2))
+}
+
 /// A valid WSJT-X directed-CQ token: 1–4 letters ("DX", "NA", "POTA", "TEST")
 /// or exactly 3 digits (a kHz QSY like "CQ 040 …").
 pub fn is_cq_dir(s: &str) -> bool {
@@ -1696,5 +1748,42 @@ mod lookup_call_tests {
         assert_eq!(lookup_call("<PJ4/K1ABC>").as_deref(), Some("PJ4/K1ABC"));
         assert_eq!(lookup_call("<...>"), None);
         assert_eq!(lookup_call(""), None);
+    }
+}
+
+#[cfg(test)]
+mod dual_frame_tests {
+    use super::dual_frame_rr73;
+
+    /// The shape WSJT-X 3.0.2's dual arm reads (`tokens_re`, `Decoder/decodedtext.cpp:14-46`,
+    /// and five message words, `widgets/mainwindow.cpp:9295-9296`).
+    #[test]
+    fn the_dual_call_of_a_two_payload_frame() {
+        assert_eq!(
+            dual_frame_rr73("K1ABC RR73; W9XYZ <K5MGY> -08"),
+            Some(("K1ABC", "K5MGY"))
+        );
+        assert_eq!(
+            dual_frame_rr73("KD9TAW RR73; K1ABC <KH1/KH7Z> +03"),
+            Some(("KD9TAW", "KH1/KH7Z"))
+        );
+        assert_eq!(
+            dual_frame_rr73("K1ABC RR73; W9XYZ K5MGY -08"),
+            Some(("K1ABC", "K5MGY"))
+        );
+        // Not a dual frame.
+        for msg in [
+            "K1ABC W9XYZ RR73",
+            "K1ABC RR73",
+            "K1ABC RR73; W9XYZ",
+            "K1ABC RR73; W9XYZ <K5MGY>",
+            "K1ABC 73; W9XYZ <K5MGY> -08",
+            "CQ K5MGY EM12",
+        ] {
+            assert_eq!(dual_frame_rr73(msg), None, "{msg}");
+        }
+        // The unresolved hash is no word2, and a word4 makes six words.
+        assert_eq!(dual_frame_rr73("K1ABC RR73; W9XYZ <...> -08"), None);
+        assert_eq!(dual_frame_rr73("K1ABC RR73; W9XYZ K5MGY -08 EM12"), None);
     }
 }

@@ -134,6 +134,10 @@ pub struct Station {
     /// (`widgets/mainwindow.cpp:9216-9231`); the engine reads this to do the same with the rest
     /// of an over still on the air. Nothing is queued for a later over.
     pub signed_off_with_73: bool,
+    /// True when a DUAL frame's roger to us closed the QSO ([`Self::observe_dual_frames`]):
+    /// WSJT-X logs it, sends no 73 and selects Tx6, its CQ, for the rest of an over still on the
+    /// air (`widgets/mainwindow.cpp:9295-9306`), as after [`Self::signed_off_with_73`].
+    pub closed_by_dual_frame: bool,
     /// The call this station's latest over went out under ([`Self::after_tx`]): its call then.
     /// `None` until it keys. A contact is logged under it, so a call changed after that over, and
     /// taken up for the overs after it ([`Self::sign_as`]), does not relabel what the air carried.
@@ -192,6 +196,7 @@ impl Station {
             advanced_on_air: false,
             keyed_on_air: false,
             signed_off_with_73: false,
+            closed_by_dual_frame: false,
             keyed_as: None,
             transcript: Vec::new(),
         }
@@ -218,6 +223,7 @@ impl Station {
             advanced_on_air: false,
             keyed_on_air: false,
             signed_off_with_73: false,
+            closed_by_dual_frame: false,
             keyed_as: None,
             transcript: Vec::new(),
         }
@@ -428,6 +434,7 @@ impl Station {
             advanced_on_air: false,
             keyed_on_air: false,
             signed_off_with_73: false,
+            closed_by_dual_frame: false,
             keyed_as: None,
             transcript: vec![log_line],
         };
@@ -1348,6 +1355,77 @@ impl Station {
             // `start()` seed. See `completed_report_less`.
             self.advanced_on_air = true;
         }
+    }
+
+    /// Close the QSO on a DUAL frame from our PARTNER that rogers us, `MYCALL RR73; W9XYZ
+    /// <PARTNER> -08` ([`crate::message::dual_frame_rr73`]): an MSHV multi-answer station or a
+    /// Fox-style sender answering several callers in one transmission. `decodes` are whole frames,
+    /// before the engine splits a Fox multiplex into its halves. True when it closed the QSO.
+    ///
+    /// WSJT-X 3.0.2, `widgets/mainwindow.cpp:9295-9306`:
+    ///
+    /// ```text
+    /// else if (5 == message_words.size ()
+    ///          && m_baseCall == message_words.at (1)) {
+    ///   // dual Fox style message, possibly from MSHV
+    ///   if (m_config.prompt_to_log() || m_config.autoLog()) {
+    ///     logQSOTimer.start(0);
+    ///   }
+    ///   else {
+    ///     cease_auto_Tx_after_QSO ();
+    ///   }
+    ///   m_ntx=6;
+    ///   ui->txrb6->setChecked(true);
+    /// }
+    /// ```
+    ///
+    /// It logs the contact and sends NO 73, and so does this. It is reached only through
+    /// `auto_sequence` (:7542-7550, `|| message_words.at(1) == m_baseCall // <de-call> RR73;
+    /// ...`), whose gate is `!m_bCallingCQ && !m_sentFirst73`: in a QSO, not calling CQ, and
+    /// before our own first 73 or RR73 has gone out (`message_is_73`, :315-321; :8105-8106). Here
+    /// that is every in-QSO wait, and `Confirming` only while our closing over is still queued
+    /// (an RRR, or an RR73 not yet keyed; a keyed RR73 is cleared by [`Self::after_tx`]).
+    ///
+    /// ⛔ ONE DELIBERATE DIFFERENCE, the partner check (operator ruling). WSJT-X does not ask who
+    /// sent the frame: the first half names us and says RR73, and that is all it reads. Nexus
+    /// closes the QSO only when the frame's sender (message word 2, the call in brackets) is the
+    /// station we are working, so a bystander Fox's or MSHV station's frame that happens to roger
+    /// our call never closes a contact with someone else (#236). A frame from anyone else is
+    /// ignored, as before.
+    ///
+    /// Never as a Hound ([`Self::quiet_finish`]): a WSJT-X Hound does not run `auto_sequence` in
+    /// FT8 (:7430-7434), and the engine already gives a Hound QSO the Fox's half as its RR73.
+    pub fn observe_dual_frames(&mut self, decodes: &[Decode]) -> bool {
+        let waiting = match self.state {
+            State::AwaitReport | State::AwaitRoger | State::AwaitRr73 => true,
+            State::Confirming => self.pending.is_some(),
+            State::Listening | State::CallingCq | State::Done => false,
+        };
+        if !waiting || self.quiet_finish {
+            return false;
+        }
+        let Some(dx) = self.dxcall.clone() else {
+            return false;
+        };
+        let Some(d) = decodes.iter().find(|d| {
+            crate::message::dual_frame_rr73(&d.message).is_some_and(|(to, de)| {
+                crate::message::is_my_base_call(to, &self.mycall)
+                    && crate::message::same_call(de, &dx)
+            })
+        }) else {
+            return false;
+        };
+        self.pending = None;
+        self.state = State::Done;
+        self.closed_by_dual_frame = true;
+        self.rv_count = 0;
+        self.tx_count = 0;
+        self.advanced_on_air = true;
+        self.log(format!(
+            "got RR73 in a dual frame ({}) → QSO complete, no 73",
+            d.message
+        ));
+        true
     }
 }
 
@@ -2763,6 +2841,102 @@ mod start_context_tests {
             State::Done,
             "the QSO finishes instead of livelocking"
         );
+    }
+
+    const DUAL_TO_ME: &str = "KD9TAW RR73; K1ABC <W9XYZ> -12";
+
+    /// #530: WSJT-X's dual arm (`widgets/mainwindow.cpp:9295-9306`) closes a QSO at every wait
+    /// `auto_sequence` lets reach it (:7542-7550, `!m_bCallingCQ && !m_sentFirst73`): logged by
+    /// the engine, and no 73 queued.
+    #[test]
+    fn a_dual_frame_roger_closes_every_wait_without_a_73() {
+        let await_report = Station::answering(ME, MY_GRID, DX);
+        let mut await_rr73 = Station::answering(ME, MY_GRID, DX);
+        await_rr73.observe(&[dec("KD9TAW W9XYZ -12", -8)]);
+        let mut await_roger = Station::calling_cq(ME, MY_GRID);
+        await_roger.observe(&[dec("KD9TAW W9XYZ EN52", -8)]);
+        let mut rrr_queued = Station::calling_cq(ME, MY_GRID);
+        rrr_queued.confirm_with_rrr = true;
+        rrr_queued.observe(&[dec("KD9TAW W9XYZ EN52", -8)]);
+        rrr_queued.observe(&[dec("KD9TAW W9XYZ R-12", -8)]);
+        rrr_queued.after_tx();
+        let mut rr73_unkeyed = Station::calling_cq(ME, MY_GRID);
+        rr73_unkeyed.observe(&[dec("KD9TAW W9XYZ EN52", -8)]);
+        rr73_unkeyed.observe(&[dec("KD9TAW W9XYZ R-12", -8)]);
+        for (what, mut s, state) in [
+            ("AwaitReport", await_report, State::AwaitReport),
+            ("AwaitRr73", await_rr73, State::AwaitRr73),
+            ("AwaitRoger", await_roger, State::AwaitRoger),
+            ("our RRR on the air", rrr_queued, State::Confirming),
+            ("our RR73 not yet keyed", rr73_unkeyed, State::Confirming),
+        ] {
+            assert_eq!(s.state, state, "{what}: premise");
+            assert!(s.pending.is_some(), "{what}: premise");
+            assert!(s.observe_dual_frames(&[dec(DUAL_TO_ME, -10)]), "{what}");
+            assert_eq!(s.state, State::Done, "{what}");
+            assert_eq!(s.pending_text(), None, "{what}: no 73");
+            assert!(s.closed_by_dual_frame, "{what}");
+            assert!(s.advanced_on_air, "{what}");
+        }
+    }
+
+    /// …and nowhere else: not calling CQ, not listening, not once our RR73 is on the air (WSJT-X's
+    /// `m_sentFirst73`), not as a Hound (its own path), never for another call's dual frame, and,
+    /// by Nexus's deliberate partner check, never for a frame our partner did not send.
+    #[test]
+    fn a_dual_frame_roger_is_ignored_outside_a_wait_and_as_a_hound() {
+        let mut cq = Station::calling_cq(ME, MY_GRID);
+        assert!(!cq.observe_dual_frames(&[dec(DUAL_TO_ME, -10)]), "CQ");
+        assert_eq!(cq.state, State::CallingCq);
+        assert_eq!(cq.pending_text().as_deref(), Some("CQ KD9TAW EN61"));
+        let mut idle = Station::monitoring(ME, MY_GRID);
+        assert!(!idle.observe_dual_frames(&[dec(DUAL_TO_ME, -10)]), "idle");
+        assert_eq!(idle.state, State::Listening);
+        let mut rr73_sent = Station::calling_cq(ME, MY_GRID);
+        rr73_sent.observe(&[dec("KD9TAW W9XYZ EN52", -8)]);
+        rr73_sent.observe(&[dec("KD9TAW W9XYZ R-12", -8)]);
+        rr73_sent.after_tx();
+        assert_eq!(rr73_sent.pending, None, "premise: our RR73 is keyed");
+        assert!(!rr73_sent.observe_dual_frames(&[dec(DUAL_TO_ME, -10)]));
+        assert_eq!(rr73_sent.state, State::Confirming);
+        assert!(!rr73_sent.closed_by_dual_frame);
+        let mut hound = Station::answering(ME, MY_GRID, DX);
+        hound.quiet_finish = true;
+        hound.observe(&[dec("KD9TAW W9XYZ -12", -8)]);
+        let before = hound.pending_text();
+        assert!(!hound.observe_dual_frames(&[dec(DUAL_TO_ME, -10)]), "hound");
+        assert_eq!(hound.state, State::AwaitRr73);
+        assert_eq!(hound.pending_text(), before);
+        let mut other = Station::answering(ME, MY_GRID, DX);
+        other.observe(&[dec("KD9TAW W9XYZ -12", -8)]);
+        assert!(!other.observe_dual_frames(&[dec("K1ABC RR73; KD9TAW <W9XYZ> -12", -10)]));
+        assert_eq!(
+            other.state,
+            State::AwaitRr73,
+            "a dual frame rogering someone else"
+        );
+        // Nexus's partner check: a bystander's dual frame rogering us closes nothing (#236).
+        let mut bystander = Station::answering(ME, MY_GRID, DX);
+        bystander.observe(&[dec("KD9TAW W9XYZ -12", -8)]);
+        let before = bystander.pending_text();
+        assert!(!bystander.observe_dual_frames(&[dec("KD9TAW RR73; K1ABC <PJ4DX> -12", -10)]));
+        assert_eq!(
+            bystander.state,
+            State::AwaitRr73,
+            "a bystander's dual frame"
+        );
+        assert_eq!(bystander.pending_text(), before, "our R-report again");
+    }
+
+    /// WSJT-X compares the dual call with its BASE call (`m_baseCall`): working as KD9TAW/P, a
+    /// frame to KD9TAW closes the QSO.
+    #[test]
+    fn a_dual_frame_roger_reads_our_base_call() {
+        let mut s = Station::answering("KD9TAW/P", MY_GRID, DX);
+        s.observe(&[dec("KD9TAW/P W9XYZ -12", -8)]);
+        assert_eq!(s.state, State::AwaitRr73, "premise");
+        assert!(s.observe_dual_frames(&[dec(DUAL_TO_ME, -10)]));
+        assert_eq!(s.state, State::Done);
     }
 }
 

@@ -3927,10 +3927,27 @@ pub struct LogQsoPress {
 fn ft_contact_complete(station: &QsoStation, report_sent: Option<i32>) -> bool {
     let report_exchanged = station.rx_report.is_some() || report_sent.is_some();
     match station.state {
-        QsoState::Done => report_exchanged || station.report_impossible_exchange(),
+        // A dual frame's roger (#530) is the partner's on the air, never a seed: WSJT-X logs on
+        // it at any point of the QSO (`widgets/mainwindow.cpp:9295-9306`); Nexus takes it from
+        // the partner only.
+        QsoState::Done => {
+            report_exchanged || station.report_impossible_exchange() || station.closed_by_dual_frame
+        }
         QsoState::Confirming => station.tx_count >= 1,
         _ => false,
     }
+}
+
+/// This slot's DUAL frames (`K1ABC RR73; W9XYZ <K5MGY> -08`, [`tempo_core::message::dual_frame_rr73`]),
+/// whole, before `hound_split` takes them apart: the sequencer reads their first half's roger
+/// from the frame as WSJT-X does (`QsoStation::observe_dual_frames`). Never an error-unchecked
+/// decode, which moves no QSO ([`Engine::error_checked`]).
+fn dual_frames(decodes: &[modes::Decode]) -> Vec<modes::Decode> {
+    decodes
+        .iter()
+        .filter(|d| !d.unchecked && tempo_core::message::dual_frame_rr73(&d.message).is_some())
+        .cloned()
+        .collect()
 }
 
 /// Has our 73 gone on the air in a contact the operator opened by clicking the station's RR73
@@ -36361,6 +36378,7 @@ contact yourself."
         );
         let wire_copy: Option<Vec<modes::Decode>> =
             hound_active.then(|| self.error_checked(&decodes, slot).into_owned());
+        let dual_frames = dual_frames(&decodes);
         let decodes = self.hound_split(decodes);
         let n = decodes.len();
         // Tally IR-HARQ rescues (messages recovered by combining retransmissions).
@@ -36412,7 +36430,7 @@ contact yourself."
         if self.app.pending_count() != pend_before {
             self.persist_pending_msgs();
         }
-        self.observe_modes(&checked, slot);
+        self.observe_modes(&checked, slot, &dual_frames);
         // Coordinated QSY (any role): reassemble + act on directives from our
         // partner, and track that the partner is still being heard. The directive
         // also flows through the inbox above and shows in the band feed as plain
@@ -36505,7 +36523,9 @@ contact yourself."
         // sent and keying a premature 73 (a WSJT-X-cadence violation: no Tx5 without a real roger).
         // The DISPLAY split below still runs so a Fox stays readable; only the sequencer-feeding
         // fabrication is gated. A sender-LESS 2-token half cannot parse as a terminal (Rr73/Rrr/Bye73
-        // all need 3 tokens), so un-reattached it never advances the sequencer.
+        // all need 3 tokens), so un-reattached it never advances the sequencer. (The WHOLE frame's
+        // roger to us is read apart from this, from our partner only, with no 73 and no sender
+        // forged: `QsoStation::observe_dual_frames`, #530.)
         //
         // ⚠️ GATED ON THE CONTACT, NOT ON THE LIVE SETTING. `station.quiet_finish` is the marker
         // `call_station_ctx` stamps on TRUE Hound QSOs — the same one the QSY-to-the-Fox rule
@@ -36701,7 +36721,15 @@ contact yourself."
         kept
     }
 
-    fn observe_modes(&mut self, decodes: &[modes::Decode], slot: u64) {
+    ///
+    /// `dual_frames`: this slot's whole dual frames ([`dual_frames`]), which `hound_split` has
+    /// taken apart in `decodes`.
+    fn observe_modes(
+        &mut self,
+        decodes: &[modes::Decode],
+        slot: u64,
+        dual_frames: &[modes::Decode],
+    ) {
         self.ft_seq_moved = false;
         let period_s = self.active_slot_secs();
         // The completed contact to auto-log, gathered while `self.mode` is
@@ -36778,6 +36806,9 @@ contact yourself."
                 let next_before = station.outgoing();
                 let ntx_before = wsjtx_tx_number(station.pending.as_ref());
                 station.observe(observed);
+                // #530: our partner's dual frame rogering us closes an ordinary QSO with no 73,
+                // as in WSJT-X; a bystander's is ignored (see `QsoStation::observe_dual_frames`).
+                station.observe_dual_frames(dual_frames);
                 sequence_advanced = station.state != state_before;
                 self.ft_seq_moved = sequence_advanced || station.outgoing() != next_before;
                 // Quiet-finish (hound) completion sends NOTHING after the Fox's
@@ -36788,6 +36819,18 @@ contact yourself."
                 if sequence_advanced
                     && station.quiet_finish
                     && station.state == QsoState::Done
+                    && self.settings.disable_tx_after_73
+                {
+                    self.pending_tx_disable = true;
+                }
+                // The same for a dual frame's roger (#530), which sends nothing after it either:
+                // WSJT-X turns Enable Tx off on it (`cease_auto_Tx_after_QSO`, directly or from
+                // the log, `widgets/mainwindow.cpp:9298-9303`, :10530-10537). S&P only, as after
+                // our own 73: a CQ run returns to CQ.
+                if sequence_advanced
+                    && station.closed_by_dual_frame
+                    && station.state == QsoState::Done
+                    && !self.cq_running
                     && self.settings.disable_tx_after_73
                 {
                     self.pending_tx_disable = true;
@@ -37687,6 +37730,7 @@ contact yourself."
     #[cfg(any(test, feature = "test-util"))]
     pub(crate) fn ingest_decodes_for_test(&mut self, decodes: &[modes::Decode], slot: u64) {
         // Mirror the live path's Hound multi-payload split.
+        let dual_frames = dual_frames(decodes);
         let decodes: Vec<modes::Decode> = self.hound_split(decodes.to_vec());
         let decodes = &decodes[..];
         for d in decodes {
@@ -37703,7 +37747,7 @@ contact yourself."
         if self.app.pending_count() != pend_before {
             self.persist_pending_msgs();
         }
-        self.observe_modes(decodes, slot);
+        self.observe_modes(decodes, slot, &dual_frames);
         // Mirror the live `ingest` QSY hook so tests exercise the same path.
         if self.qsy_active() {
             let mycall = self.settings.mycall.clone();
@@ -55424,6 +55468,78 @@ mod tests {
             !e.stored_log().is_empty(),
             "the Fox's multiplexed RR73 logs"
         );
+    }
+
+    /// #530: our partner's MSHV multi-answer (or Fox-style) frame — "W9XYZ RR73; K1ABC <K5MGY>
+    /// -12" — carries our roger in its first half. In an ORDINARY QSO, Hound off, WSJT-X 3.0.2
+    /// logs the contact on it and sends no 73 (`widgets/mainwindow.cpp:9295-9306`, reached
+    /// through `auto_sequence`'s `message_words.at(1) == m_baseCall`, :7550). Nexus ignored it,
+    /// so the contact never closed and we kept sending our R-report. FT4 carries the same frame.
+    /// (Only from the partner, by Nexus's deliberate check; a bystander's is the #236 guards'.)
+    #[test]
+    fn an_ordinary_qso_completes_on_a_dual_frame_roger_without_a_73() {
+        for tier in [Tier::Ft8, Tier::Ft4] {
+            let mut e = Engine::new("W9XYZ", "EN37", 0);
+            e.set_tier(tier);
+            assert_eq!(
+                e.settings.special_op,
+                crate::settings::SpecialOp::None,
+                "control: an ordinary QSO, Hound off"
+            );
+            e.ingest_decodes_for_test(&[dec_at("CQ K5MGY EM12", -10, 1200.0)], 1);
+            let _ = e.call_station_ctx(
+                "K5MGY",
+                None,
+                Some("CQ K5MGY EM12"),
+                Some(-10),
+                Some(1200.0),
+            );
+            e.ingest_decodes_for_test(&[dec_at("W9XYZ K5MGY -08", -10, 1200.0)], 3);
+            let premise = e.snapshot().qso.and_then(|q| q.tx_now).unwrap_or_default();
+            assert!(
+                premise.contains("R-"),
+                "{tier:?} premise: our R-report is queued, got {premise:?}"
+            );
+            e.ingest_decodes_for_test(&[dec_at("W9XYZ RR73; K1ABC <K5MGY> -12", -10, 1200.0)], 5);
+            assert_eq!(e.stored_log().len(), 1, "{tier:?}: the contact is logged");
+            assert_eq!(
+                e.stored_log()[0].call,
+                "K5MGY",
+                "{tier:?}: with our partner"
+            );
+            let after = e.snapshot().qso.and_then(|q| q.tx_now);
+            assert_eq!(after, None, "{tier:?}: no 73 after a dual-frame roger");
+            assert!(
+                e.take_pending_tx_disable(),
+                "{tier:?}: Tx goes off after the contact, as after our 73"
+            );
+        }
+    }
+
+    /// #530's other side: the dual frame closes a contact only while one is waiting on the
+    /// partner. WSJT-X reaches its dual arm only through `auto_sequence` with `!m_bCallingCQ` and
+    /// `!m_sentFirst73` (`widgets/mainwindow.cpp:7542-7550`): calling CQ, or once our own RR73 is
+    /// on the air, it does nothing.
+    #[test]
+    fn a_dual_frame_roger_is_ignored_when_no_contact_waits_on_it() {
+        // Calling CQ.
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tier(Tier::Ft8);
+        e.start_cq(None).expect("premise: Call CQ");
+        e.ingest_decodes_for_test(&[dec_at("W9XYZ RR73; K1ABC <K5MGY> -12", -10, 1200.0)], 1);
+        assert!(e.stored_log().is_empty(), "calling CQ: nothing logged");
+        let q = e.snapshot().qso.expect("the run");
+        assert!(
+            q.tx_now.as_deref().is_some_and(|t| t.starts_with("CQ ")),
+            "calling CQ: still calling, got {:?}",
+            q.tx_now
+        );
+        // Not working anybody.
+        let mut m = Engine::new("W9XYZ", "EN37", 0);
+        m.set_tier(Tier::Ft8);
+        m.ingest_decodes_for_test(&[dec_at("W9XYZ RR73; K1ABC <K5MGY> -12", -10, 1200.0)], 1);
+        assert!(m.stored_log().is_empty(), "monitoring: nothing logged");
+        assert!(!m.take_pending_tx_disable(), "monitoring: nothing armed");
     }
 
     /// #236 REGRESSION GUARD (on-air, WSJT-X cadence). On an ORDINARY (non-Hound) FT8 QSO, a

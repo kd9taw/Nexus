@@ -1380,3 +1380,74 @@ fn the_wsjtx_status_reports_the_message_an_over_switched_to() {
         "a route that cannot replace its audio: the over goes out as keyed"
     );
 }
+
+/// W1AW, our partner, rogers us inside a dual frame (an MSHV multi-answer or Fox-style
+/// transmission answering several callers at once).
+const DUAL_FROM_PARTNER: &str = "KD9TAW RR73; K2DEF <W1AW> -08";
+
+/// #530: our partner's dual frame rogering us, folded while our report is on the air. WSJT-X 3.0.2's
+/// dual arm logs the contact and sets `m_ntx=6` (`widgets/mainwindow.cpp:9295-9306`, reached from
+/// `auto_sequence`, :7550), the over is regenerated (:9446) and Enable Tx goes off
+/// (`cease_auto_Tx_after_QSO`, :10518): the rest of the over is the CQ, and no 73 is ever sent.
+/// (Only from the partner: Nexus's deliberate check; a bystander's frame changes nothing, #236.)
+#[test]
+fn the_partners_dual_frame_during_our_report_switches_the_rest_to_the_cq_and_tx_goes_off() {
+    let mut e = station();
+    work(&mut e, "KD9TAW W1AW FN31", -10, 100);
+    assert_eq!(key(&mut e, 100).as_deref(), Some(TX2), "premise");
+    hear(&mut e, DUAL_FROM_PARTNER, -10, 100);
+    let mut route = Route::new(50_000);
+    assert_eq!(
+        route.switch(&mut e, 100, at(100, 2_000.0)),
+        switched(TX2, CQ)
+    );
+    assert!(e.take_pending_tx_disable(), "TX off after this over");
+    assert_eq!(key(&mut e, 102), None, "no 73, and no CQ after it");
+    assert_eq!(e.stored_log().len(), 1, "the contact is logged once");
+}
+
+/// #530 at ROGERS: our RRR is not a 73, so WSJT-X's `m_sentFirst73` is false and the partner's
+/// dual frame reaches the dual arm (:7542-7550, :9295-9306). The rest of our RRR becomes the CQ,
+/// Enable Tx goes off, and no 73 is sent.
+#[test]
+fn the_partners_dual_frame_during_our_rrr_switches_the_rest_to_the_cq_without_a_73() {
+    let mut e = rogering_with_rrr();
+    assert_eq!(key(&mut e, 102).as_deref(), Some(RRR), "premise");
+    hear(&mut e, DUAL_FROM_PARTNER, -10, 102);
+    assert_eq!(
+        Route::new(50_000).switch(&mut e, 102, at(102, 2_000.0)),
+        switched(RRR, CQ)
+    );
+    assert!(e.take_pending_tx_disable(), "TX off after this over");
+    assert_eq!(key(&mut e, 104), None, "no 73, and no CQ after it");
+    assert_eq!(e.stored_log().len(), 1, "the contact is logged once");
+}
+
+/// #530 in a CQ run: while the run still holds the contact, the partner's dual frame closes it as
+/// WSJT-X's dual arm does: the rest of our RRR becomes the CQ and no 73 is sent; the run keeps TX
+/// on and calls CQ, as after every contact of a run. Once the run is back on CQ it changes nothing
+/// (WSJT-X's `m_bCallingCQ`, :7542-7550).
+#[test]
+fn in_a_cq_run_the_partners_dual_frame_closes_the_held_contact_and_the_run_calls_cq() {
+    let mut e = run_holding_our_switched_rrr();
+    assert_eq!(key(&mut e, 106).as_deref(), Some(RRR), "premise");
+    hear(&mut e, DUAL_FROM_PARTNER, -10, 106);
+    assert_eq!(
+        Route::new(50_000).switch(&mut e, 106, at(106, 2_000.0)),
+        switched(RRR, CQ),
+        "holding the contact"
+    );
+    assert!(!e.take_pending_tx_disable(), "the run keeps TX on");
+    assert_eq!(key(&mut e, 108).as_deref(), Some(CQ), "the run calls CQ");
+    assert_eq!(e.stored_log().len(), 1, "logged once");
+
+    let mut e = run_back_on_cq_after_our_rrr();
+    hear(&mut e, DUAL_FROM_PARTNER, -10, 106);
+    assert_eq!(key(&mut e, 106).as_deref(), Some(CQ), "back on CQ");
+    hear(&mut e, DUAL_FROM_PARTNER, -10, 106);
+    assert_eq!(
+        Route::new(50_000).switch(&mut e, 106, at(106, 2_000.0)),
+        None,
+        "back on CQ, found late"
+    );
+}
