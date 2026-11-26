@@ -10,9 +10,15 @@ import type { Settings } from '../types'
 
 const saveStationProfile = vi.fn(async (..._a: unknown[]) => ({}))
 const removeStationProfile = vi.fn(async (..._a: unknown[]) => ({}))
+const setStationProfileQrzKey = vi.fn(async (..._a: unknown[]) => {})
+const stationProfileQrzKeyStored = vi.fn(async (..._a: unknown[]) => false)
+const qrzTestConnection = vi.fn(async (..._a: unknown[]) => 'KD9TAW/P (Portable) — 3 QSOs in the online logbook')
 vi.mock('../api', () => ({
   saveStationProfile: (...a: unknown[]) => saveStationProfile(...a),
   removeStationProfile: (...a: unknown[]) => removeStationProfile(...a),
+  setStationProfileQrzKey: (...a: unknown[]) => setStationProfileQrzKey(...a),
+  stationProfileQrzKeyStored: (...a: unknown[]) => stationProfileQrzKeyStored(...a),
+  qrzTestConnection: (...a: unknown[]) => qrzTestConnection(...a),
 }))
 
 import { StationProfiles } from './StationProfiles'
@@ -21,6 +27,10 @@ afterEach(() => {
   cleanup()
   saveStationProfile.mockClear()
   removeStationProfile.mockClear()
+  setStationProfileQrzKey.mockClear()
+  stationProfileQrzKeyStored.mockReset()
+  stationProfileQrzKeyStored.mockImplementation(async () => false)
+  qrzTestConnection.mockClear()
 })
 
 const station = {
@@ -84,6 +94,46 @@ describe('My station profiles', () => {
       id: 'p1', name: 'Portable', call: 'KD9TAW/P', grid: 'EN43', state: 'WI', powerW: 10,
       ...blank, lotwLocation: 'Portable EN43',
     })
+  })
+
+  // #503: a profile's own QRZ Logbook key, kept in the system keychain through its own writer,
+  // never in the profile the form saves.
+  it("keeps a profile's own QRZ Logbook key apart from the profile, with a Test", async () => {
+    const form = {
+      ...station,
+      activeStationProfile: 'home',
+      stationProfiles: [
+        { id: 'home', name: '', call: 'KD9TAW', grid: 'EN52', state: 'WI', powerW: 100, ...blank },
+        { id: 'p1', name: 'Portable', call: 'KD9TAW/P', grid: 'EN43', state: 'WI', powerW: 10, ...blank },
+      ],
+    } as unknown as Settings
+    render(<StationProfiles form={form} readOnly={false} onChanged={vi.fn()} />)
+    fireEvent.click(screen.getAllByText('Edit')[1])
+    await waitFor(() => expect(stationProfileQrzKeyStored).toHaveBeenCalledWith('p1'))
+    expect(await screen.findByText(/uses the key in Settings ▸ Services/)).toBeTruthy()
+    const field = screen.getByLabelText('QRZ Logbook API key') as HTMLInputElement
+    expect(field.type).toBe('password')
+    fireEvent.change(field, { target: { value: 'A1B2-C3D4-E5F6-0789' } })
+    stationProfileQrzKeyStored.mockImplementation(async () => true)
+    fireEvent.click(screen.getByText('Save key'))
+    await waitFor(() => expect(setStationProfileQrzKey).toHaveBeenCalledWith('p1', 'A1B2-C3D4-E5F6-0789'))
+    expect(await screen.findByText('This profile has its own key.')).toBeTruthy()
+    expect((screen.getByLabelText('QRZ Logbook API key') as HTMLInputElement).value).toBe('')
+    fireEvent.click(screen.getByText('Test'))
+    await waitFor(() => expect(qrzTestConnection).toHaveBeenCalledWith('p1'))
+    expect(await screen.findByText(/3 QSOs in the online logbook/)).toBeTruthy()
+    fireEvent.click(screen.getByText('Remove key'))
+    await waitFor(() => expect(setStationProfileQrzKey).toHaveBeenCalledWith('p1', ''))
+    fireEvent.click(screen.getByText('Save profile'))
+    await waitFor(() => expect(saveStationProfile).toHaveBeenCalled())
+    expect(JSON.stringify(saveStationProfile.mock.calls)).not.toContain('A1B2')
+  })
+
+  it('a profile not saved yet has no key field', () => {
+    render(<StationProfiles form={station} readOnly={false} onChanged={vi.fn()} />)
+    fireEvent.click(screen.getByText('Add a profile…'))
+    expect(screen.queryByLabelText('QRZ Logbook API key')).toBeNull()
+    expect(stationProfileQrzKeyStored).not.toHaveBeenCalled()
   })
 
   it('from a computer driving the station: shown, set at the station', () => {

@@ -2217,7 +2217,7 @@ fn no_credential_is_typed_or_cleared_from_afar() {
         .collect();
     assert_eq!(
         setters.len(),
-        23,
+        24,
         "premise: the credential setters are found by name: {setters:?}"
     );
     for name in setters {
