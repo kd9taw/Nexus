@@ -22085,7 +22085,14 @@ fn alias_for(
     }
     let mut hits = usb
         .iter()
-        .filter(|u| u.vid == identity.0 && u.pid == identity.1 && u.product == identity.2)
+        // The product without the "(COMn)" a Windows friendly name ends in: that is the part
+        // that changed (`tempo_app::serial_port::normalized_product`).
+        .filter(|u| {
+            u.vid == identity.0
+                && u.pid == identity.1
+                && tempo_app::serial_port::normalized_product(&u.product)
+                    == tempo_app::serial_port::normalized_product(&identity.2)
+        })
         .filter(|u| present.contains(&u.port_name))
         .map(|u| u.port_name.clone());
     let first = hits.next()?;
@@ -53899,6 +53906,20 @@ mod tests {
             alias_for("COM5", &id, &twins, &present(&["COM7", "COM8"])),
             None,
             "two identical rigs: not ours to guess"
+        );
+        // ⭐ Windows: the product is the device's friendly name, which ends in the port name.
+        // Remembered as "(COM5)" and found as "(COM7)", it never matched, so the follow never
+        // fired on Windows. The COM number is the part that changed, and is not compared.
+        let friendly = "Silicon Labs CP210x USB to UART Bridge";
+        let windows = [usb("COM7", 0x10c4, 0xea60, &format!("{friendly} (COM7)"))];
+        assert_eq!(
+            alias_for(
+                "COM5",
+                &(0x10c4, 0xea60, format!("{friendly} (COM5)")),
+                &windows,
+                &present(&["COM7"])
+            ),
+            Some("COM7".to_string())
         );
     }
 

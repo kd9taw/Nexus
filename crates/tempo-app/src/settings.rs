@@ -2171,8 +2171,13 @@ pub struct Settings {
     /// Settings save ([`Settings::remember_present_ports`]), read at launch to follow a radio
     /// Windows renumbered ([`Settings::follow_moved_ports`]). Absent from an older file, which
     /// loads unchanged, and skipped when empty, so a station without USB ports writes the file it
-    /// always did.
-    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    /// always did. A damaged map never fails the file: its bad entries are dropped
+    /// ([`port_follow::tolerant_identities`]).
+    #[serde(
+        default,
+        skip_serializing_if = "std::collections::BTreeMap::is_empty",
+        deserialize_with = "port_follow::tolerant_identities"
+    )]
     pub port_identities: std::collections::BTreeMap<String, crate::serial_port::PortIdentity>,
     /// What the CAT port's RTS / DTR control lines are held at for the whole session:
     /// `"low"` (default), `"high"`, or `"untouched"`. Parsed by

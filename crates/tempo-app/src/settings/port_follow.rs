@@ -51,6 +51,53 @@ pub struct PortFollow {
     pub cat_missing: Option<String>,
 }
 
+/// `Settings::port_identities`' reader, which never fails the file. The map is a cache Nexus
+/// rebuilds from the USB enumeration at every launch, and a settings file that does not parse is
+/// set aside whole and replaced by defaults (`Settings::load`): a damaged map (a hand edit, a
+/// half-written entry, a shape from another build) must cost only itself. Each entry that is not
+/// an identity is dropped, and a value that is not a map at all reads as empty, with one log
+/// line saying so; a field an entry does not know is ignored, as everywhere in the settings.
+pub(crate) fn tolerant_identities<'de, D>(
+    d: D,
+) -> Result<std::collections::BTreeMap<String, PortIdentity>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    let raw = serde_json::Value::deserialize(d)?;
+    let mut out = std::collections::BTreeMap::new();
+    let mut dropped = 0usize;
+    match raw {
+        serde_json::Value::Object(entries) => {
+            for (port, v) in entries {
+                match serde_json::from_value::<PortIdentity>(v) {
+                    Ok(id) if !names_no_device(&id) => {
+                        out.insert(port, id);
+                    }
+                    _ => dropped += 1,
+                }
+            }
+        }
+        serde_json::Value::Null => {}
+        _ => dropped += 1,
+    }
+    if dropped > 0 {
+        let said = format!(
+            "forgot {dropped} unreadable serial-port identit{} in the settings; Nexus learns them \
+             again from the ports plugged in",
+            if dropped == 1 { "y" } else { "ies" }
+        );
+        eprintln!("tempo: {said}");
+        tempo_core::applog::warn("settings_forgiven", &said);
+    }
+    Ok(out)
+}
+
+/// An entry that parsed only because every field defaults (`null`, `{}`) names no device.
+fn names_no_device(id: &PortIdentity) -> bool {
+    *id == PortIdentity::default()
+}
+
 /// Which setting a port belongs to, in the order a shared port is named by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum PortRole {
@@ -639,6 +686,57 @@ mod tests {
         s.serial_port = "COM3".into();
         assert!(s.remember_present_ports(&[plain("COM3")]));
         assert!(s.port_identities.is_empty());
+    }
+
+    /// ⭐ A damaged identity map costs only the damage. A hand-edited or half-written
+    /// `portIdentities` (an entry of the wrong type, junk, a field from a newer build, or a map
+    /// that is not a map at all) used to fail the whole file: `load` set it aside and the station
+    /// came up on defaults, every setting lost. The bad entries are dropped; everything else,
+    /// good identities included, loads.
+    #[test]
+    fn a_damaged_identity_map_loses_only_the_damaged_entries() {
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-port-follow-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let file = |identities: serde_json::Value| {
+            let doc = serde_json::json!({
+                "mycall": "W9XYZ",
+                "serialPort": "COM5",
+                "portIdentities": identities,
+            });
+            std::fs::write(&path, doc.to_string()).unwrap();
+            Settings::load(&path)
+        };
+        let s = file(serde_json::json!({
+            "COM5": { "vid": "oops", "pid": 1 },
+            "COM6": 12,
+            "COM8": null,
+            "COM7": { "vid": 4292, "pid": 60016, "serial": "00A5B1C2", "interface": 1,
+                      "fromANewerBuild": true },
+        }));
+        assert_eq!(
+            (s.mycall.as_str(), s.serial_port.as_str()),
+            ("W9XYZ", "COM5")
+        );
+        assert_eq!(s.port_identities.len(), 1, "{:?}", s.port_identities);
+        assert_eq!(s.port_identities["COM7"].interface, Some(1));
+        for junk in [
+            serde_json::json!("junk"),
+            serde_json::json!([1, 2]),
+            serde_json::json!(7),
+        ] {
+            let s = file(junk);
+            assert_eq!(
+                (s.mycall.as_str(), s.serial_port.as_str()),
+                ("W9XYZ", "COM5")
+            );
+            assert!(s.port_identities.is_empty());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// MIGRATION: a settings file from before identities loads unchanged, and a station that has
