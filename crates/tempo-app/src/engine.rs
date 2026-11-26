@@ -4936,6 +4936,9 @@ pub struct Engine {
     /// The rig is transmitting, INFERRED from the frequency it reported rather
     /// than from its PTT line — see [`Engine::sat_inferred_keyed`].
     sat_inferred_keyed: bool,
+    /// The rig is transmitting, inferred from a dial reading of a standing TERRESTRIAL split's
+    /// transmit frequency — see [`Engine::split_inferred_keyed`].
+    split_inferred_keyed: bool,
     /// The operator took the MODE back during a pass (they picked a sideband by
     /// hand). While set, [`Engine::sat_tx_mode`] says nothing at all: we never
     /// re-assert a sideband over the top of a choice the operator just made.
@@ -7657,6 +7660,12 @@ struct SatTune {
 /// never swallow the channel next door.
 const SAT_CHANNEL_HOLD_TOLERANCE_HZ: u64 = 3_500;
 
+/// How far a dial reading may sit from a standing split's TX frequency, or from the receive dial,
+/// and still be that VFO reported back rather than a knob move (Hz). A rig hands back what it was
+/// written, at most rounded to its own tuning resolution, which is 10 Hz on the coarsest CAT
+/// rigs; a knob turn that lands inside this of either frequency is not one worth telling apart.
+const SPLIT_VFO_READ_TOLERANCE_HZ: u64 = 10;
+
 /// What a rig-reported dial frequency MEANS while a satellite pass is held —
 /// the answer [`Engine::sat_observe_operator_tune`] gives its one caller.
 ///
@@ -8159,6 +8168,7 @@ impl Engine {
             sat_row_pin: None,
             sat_alt_uplinks: Vec::new(),
             sat_inferred_keyed: false,
+            split_inferred_keyed: false,
             sat_mode_released: false,
             split_tx_mhz: None,
             tx_split_confirmed_hz: None,
@@ -10844,6 +10854,30 @@ impl Engine {
             // dial IS the corrected uplink.
             SatObservation::Held => return,
             SatObservation::NotOurs => {}
+        }
+        // ⭐ A STANDING TERRESTRIAL SPLIT, READ BACK OFF THE RIG, IS NOT A KNOB QSY — the
+        // satellite arm above answers the same question for a pass. Keyed in split, an Icom
+        // reports its TRANSMIT VFO, and the radio loop's guards on that (`rig_keyed`) answer from
+        // a PTT poll up to a second old: key the radio's own mic or paddle and a dial read in that
+        // window comes back with the TX frequency. Falling through cleared the split mid-over.
+        //
+        // So the split's TX frequency coming back is the rig transmitting: nothing is adopted,
+        // the split stands, and the loop stands its dial reader and dial pushes down on it
+        // ([`Self::split_inferred_keyed`]). The receive dial coming back (the unkey) is no QSY
+        // either. A VFO select is its own arm and is left exactly as it was.
+        self.split_inferred_keyed = false;
+        if !vfo_select {
+            if let Some(tx_hz) = self.split_tx_on_rig_hz() {
+                let dial_hz = (self.settings.dial_mhz * 1e6).round() as u64;
+                let near = |f: u64| f.abs_diff(hz) <= SPLIT_VFO_READ_TOLERANCE_HZ;
+                if near(tx_hz) && !near(dial_hz) {
+                    self.split_inferred_keyed = true;
+                    return;
+                }
+                if near(dial_hz) {
+                    return;
+                }
+            }
         }
         // A knob QSY returns the rig to simplex, exactly like an app-commanded retune
         // (set_frequency): otherwise a manual split's TX VFO would be left on the OLD dial —
@@ -26370,6 +26404,28 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.sat_inferred_keyed
     }
 
+    /// The rig is transmitting, inferred from the frequency it reported: the last dial reading
+    /// was a standing terrestrial split's TX frequency, which a keyed rig in split reports
+    /// ([`Self::observe_rig_freq`]). The terrestrial twin of [`Self::sat_inferred_keyed`],
+    /// read by the radio loop beside it and released the same two ways: by any other reading,
+    /// or by a fresh PTT read that says off ([`Self::observe_rig_ptt_read`]).
+    pub fn split_inferred_keyed(&self) -> bool {
+        self.split_inferred_keyed
+    }
+
+    /// The frequency the radio transmits on under the split standing now, as a dial read would
+    /// return it from a keyed rig: VFO A's while the acknowledged split is reversed, else the
+    /// acknowledged split TX dial, else the one asked for (a pending request that has not been
+    /// answered yet). `None` with no split.
+    fn split_tx_on_rig_hz(&self) -> Option<u64> {
+        let asked = self.split_tx_mhz.map(|m| (m * 1e6).round() as u64)?;
+        Some(
+            self.tx_split_confirmed_hz
+                .map(|c| self.split_tx_on_vfo_a_hz.unwrap_or(c))
+                .unwrap_or(asked),
+        )
+    }
+
     /// A PTT read just came back off the rig. `on` is what it said.
     ///
     /// Separate from [`Self::observe_rig_ptt`] because the two answer different
@@ -26382,6 +26438,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
     pub fn observe_rig_ptt_read(&mut self, on: bool) {
         if !on {
             self.sat_inferred_keyed = false;
+            self.split_inferred_keyed = false;
         }
     }
 

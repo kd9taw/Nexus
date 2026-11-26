@@ -5491,6 +5491,10 @@ struct RadioLoop {
     /// the guards, like `cur_dial`, never a second authority. Read through
     /// [`RadioLoop::operator_keyed`] and never on its own.
     sat_inferred_keyed: bool,
+    /// The same inference for a TERRESTRIAL split (`Engine::split_inferred_keyed`): the rig
+    /// answered a dial read with the split's TX frequency. Mirrored and read exactly as the
+    /// flag above.
+    split_inferred_keyed: bool,
     /// A tracked satellite pass is UP (`Engine::sat_pass_engaged`), mirrored on
     /// the same tick as the flag above. Only the PTT-poll cadence reads it.
     sat_pass_engaged: bool,
@@ -6083,6 +6087,7 @@ impl RadioLoop {
             rig_keyed: false,
             ptt_diag: ptt_diag::PttDiag::default(),
             sat_inferred_keyed: false,
+            split_inferred_keyed: false,
             sat_pass_engaged: false,
             last_ptt_poll: 0.0,
             key_watch_until: None,
@@ -6199,12 +6204,13 @@ impl RadioLoop {
     /// reported — a rig answering with the pass's transmit leg is transmitting,
     /// and that evidence is live rather than up to a second old
     /// (`Engine::sat_note_keyed_leg` derives it; this loop only mirrors it).
+    /// `split_inferred_keyed` is that evidence for a terrestrial split.
     ///
     /// Deliberately NOT folded into `manual_ptt_applied` or the slot-TX flags:
     /// those are keying WE did, and several paths must still behave differently
     /// for the two.
     fn operator_keyed(&self) -> bool {
-        self.rig_keyed || self.sat_inferred_keyed
+        self.rig_keyed || self.sat_inferred_keyed || self.split_inferred_keyed
     }
 
     /// Which kind of CAT link the radio is on, for `crate::txextras` and the COMP write's pace.
@@ -10466,6 +10472,7 @@ impl RadioLoop {
                 // the fast dial read and the PTT poll further down the tick) are
                 // answering from this tick's truth.
                 self.sat_inferred_keyed = eng.sat_inferred_keyed();
+                self.split_inferred_keyed = eng.split_inferred_keyed();
                 self.sat_pass_engaged = eng.sat_pass_engaged();
                 // For the PTT method line only (`ptt_diag`).
                 self.ptt_diag.share = (eng.cat_share_port(), eng.settings().cat_broker_ptt);
@@ -17207,6 +17214,7 @@ impl RadioLoop {
                             }
                         }
                         self.sat_inferred_keyed = eng.sat_inferred_keyed();
+                        self.split_inferred_keyed = eng.split_inferred_keyed();
                     }
                 }
             } else if keyed_now && self.rig_keyed {
@@ -52070,6 +52078,125 @@ mod tests {
             "control: the steer was WITHHELD, not dropped — it reaches the rig on the first \
              tick after the radio says it is receiving, which is what makes the guard a \
              deferral rather than a lost correction: {back_traffic:?}"
+        );
+    }
+
+    #[test]
+    fn a_rig_keyed_at_its_own_mic_in_terrestrial_split_keeps_the_split() {
+        // The terrestrial twin of the V/V field report above. Split is up (RX
+        // 14.025, TX 14.027) and the operator keys from the RADIO's mic or paddle:
+        // Nexus did not ask, and the PTT poll runs about once a second, so
+        // `rig_keyed` is still false. Keyed and in split, an Icom reports its
+        // TRANSMIT VFO, so a dial read in that window comes back 14.027. Taken as
+        // a knob QSY, that cleared the split mid-over, and the dial-keep then had
+        // a dial to push at the rig's selected VFO, which while keyed is the
+        // transmit one.
+        let engine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let mut backend = MockBackend::new();
+        let (addr, log, rig_dial) = mock_rigctld_switchable(14_025_000);
+        let mut rig = Rig::rigctld(&addr);
+        let mut state = loop_state();
+        let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        let mut tick = 0.0f64;
+        let mut run = |state: &mut RadioLoop,
+                       rig: &mut Rig,
+                       backend: &mut MockBackend,
+                       n: usize,
+                       tick: &mut f64| {
+            for _ in 0..n {
+                *tick += 400.0;
+                state
+                    .step(
+                        &engine,
+                        backend,
+                        rig,
+                        &sinks,
+                        *tick,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+        };
+        let dial = |e: &Arc<Mutex<Engine>>| e.lock().unwrap().settings().dial_mhz;
+        let set = |hz: u64| rig_dial.store(hz, std::sync::atomic::Ordering::SeqCst);
+
+        // The scene: the loop follows the rig onto 14.025, then split goes up.
+        run(&mut state, &mut rig, &mut backend, 4, &mut tick);
+        engine.lock().unwrap().request_split(Some(14.027));
+        run(&mut state, &mut rig, &mut backend, 4, &mut tick);
+        assert_eq!(dial(&engine), 14.025, "scene: the dial followed the rig");
+        assert_eq!(
+            engine.lock().unwrap().split_tx_mhz(),
+            Some(14.027),
+            "scene: split is up"
+        );
+        assert!(
+            log.lock().unwrap().iter().any(|l| l.starts_with("S 1")),
+            "scene: the split reached the rig: {:?}",
+            log.lock().unwrap()
+        );
+
+        // ---- THE OVER, keyed at the radio. `rig_keyed` stays false: the poll
+        // has not seen it, and this stub never answers `t` at all. ----
+        log.lock().unwrap().clear();
+        set(14_027_000);
+        run(&mut state, &mut rig, &mut backend, 8, &mut tick);
+        let keyed_traffic = log.lock().unwrap().clone();
+        assert!(
+            keyed_traffic.iter().any(|l| l.trim() == "f"),
+            "scene: the loop really did read the transmit VFO: {keyed_traffic:?}"
+        );
+        assert_eq!(
+            engine.lock().unwrap().split_tx_mhz(),
+            Some(14.027),
+            "a dial reading of the split's own TX frequency is the rig transmitting, not a \
+             knob QSY: the split stands"
+        );
+        assert!(
+            !keyed_traffic.iter().any(|l| l.starts_with("S 0")),
+            "nothing hands the rig back to simplex mid-over: {keyed_traffic:?}"
+        );
+        assert_eq!(dial(&engine), 14.025, "the receive dial is not moved");
+        assert!(
+            !keyed_traffic.iter().any(|l| l.starts_with("F ")),
+            "and no dial goes out at the rig's selected VFO, which while keyed is the \
+             transmit one: {keyed_traffic:?}"
+        );
+
+        // ---- UNKEY: the rig reports its receive VFO again. ----
+        log.lock().unwrap().clear();
+        set(14_025_000);
+        run(&mut state, &mut rig, &mut backend, 8, &mut tick);
+        let back_traffic = log.lock().unwrap().clone();
+        assert_eq!(
+            engine.lock().unwrap().split_tx_mhz(),
+            Some(14.027),
+            "the receive VFO coming back is not a QSY either"
+        );
+        assert!(
+            !back_traffic.iter().any(|l| l.starts_with("S 0")),
+            "{back_traffic:?}"
+        );
+        assert_eq!(dial(&engine), 14.025);
+
+        // ---- POSITIVE CONTROL: a real knob turn, away from both frequencies,
+        // is a QSY and clears the split exactly as before. ----
+        log.lock().unwrap().clear();
+        set(14_030_000);
+        run(&mut state, &mut rig, &mut backend, 8, &mut tick);
+        let knob_traffic = log.lock().unwrap().clone();
+        assert_eq!(dial(&engine), 14.030, "control: the dial follows the knob");
+        assert_eq!(
+            engine.lock().unwrap().split_tx_mhz(),
+            None,
+            "control: a knob QSY still clears the split"
+        );
+        assert!(
+            knob_traffic.iter().any(|l| l.starts_with("S 0")),
+            "control: and simplex reaches the rig: {knob_traffic:?}"
         );
     }
 
