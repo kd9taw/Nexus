@@ -220,11 +220,48 @@ impl Settings {
         out
     }
 
+    /// [`Self::port_fields`], read only. The two lists name the same fields in the same order
+    /// (`the_two_port_lists_name_the_same_fields`).
+    fn port_values(&self) -> Vec<(PortRole, &String)> {
+        let mut out: Vec<(PortRole, &String)> = vec![
+            (PortRole::Cat, &self.serial_port),
+            (PortRole::Ptt, &self.ptt_serial_port),
+            (PortRole::CwKey, &self.cw_key_port),
+            (PortRole::WinKeyer, &self.winkeyer_port),
+            (PortRole::Fsk, &self.rtty_fsk_port),
+            (PortRole::Rotator, &self.rotator_port),
+            (PortRole::Amp, &self.amp_port),
+        ];
+        for r in &self.radios {
+            out.push((PortRole::Cat, &r.serial_port));
+            out.push((PortRole::Ptt, &r.ptt_serial_port));
+            out.push((PortRole::CwKey, &r.cw_key_port));
+            out.push((PortRole::WinKeyer, &r.winkeyer_port));
+            out.push((PortRole::Fsk, &r.rtty_fsk_port));
+            out.push((PortRole::Rotator, &r.rotator_port));
+            out.push((PortRole::Amp, &r.amp_port));
+        }
+        out
+    }
+
+    /// Every port name a setting uses other than `port` (however either is spelled): the PTT,
+    /// CW-key, WinKeyer, FSK, rotator and amplifier ports, and every other radio's CAT port. The
+    /// radio loop's in-session CAT follow never takes one of these
+    /// (`tempo_audio::service`'s `alias_for`): a port another setting names is that setting's
+    /// device, and CAT opened on a keying line can key it.
+    pub fn port_names_besides(&self, port: &str) -> Vec<String> {
+        self.named_ports()
+            .into_iter()
+            .map(|(n, _)| n)
+            .filter(|n| !same_port(n, port))
+            .collect()
+    }
+
     /// The distinct port names the settings use (one spelling each, the first met), with the
     /// first role that names each.
-    fn named_ports(&mut self) -> Vec<(String, PortRole)> {
+    fn named_ports(&self) -> Vec<(String, PortRole)> {
         let mut names: Vec<(String, PortRole)> = Vec::new();
-        for (role, field) in self.port_fields() {
+        for (role, field) in self.port_values() {
             let name = field.trim();
             if name.is_empty() {
                 continue;
@@ -848,6 +885,39 @@ mod tests {
             assert!(s.port_identities.is_empty());
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The read-only and the writing port lists must never drift: a field only one of them
+    /// names would be followed but not guarded, or guarded but not followed.
+    #[test]
+    fn the_two_port_lists_name_the_same_fields() {
+        let mut s = Settings::default();
+        s.ensure_radio_profiles();
+        s.radios.push(s.radios[0].clone());
+        let read: Vec<(PortRole, *const String)> = s
+            .port_values()
+            .into_iter()
+            .map(|(r, f)| (r, f as *const String))
+            .collect();
+        let write: Vec<(PortRole, *const String)> = s
+            .port_fields()
+            .into_iter()
+            .map(|(r, f)| (r, &*f as *const String))
+            .collect();
+        assert_eq!(read, write);
+    }
+
+    /// Every other setting's port is named, the CAT port itself is not, whatever the spelling.
+    #[test]
+    fn the_ports_besides_cat_are_every_other_setting() {
+        let s = Settings {
+            serial_port: "COM5".into(),
+            ptt_serial_port: "com5".into(),
+            cw_key_port: "COM9".into(),
+            amp_port: "COM11".into(),
+            ..Settings::default()
+        };
+        assert_eq!(s.port_names_besides("COM5"), vec!["COM9", "COM11"]);
     }
 
     /// MIGRATION: a settings file from before identities loads unchanged, and a station that has
