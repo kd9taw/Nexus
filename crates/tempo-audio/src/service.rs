@@ -7918,7 +7918,7 @@ impl RadioLoop {
         &mut self,
         engine: &Arc<Mutex<Engine>>,
         hold_ms: u64,
-        tci_tune_drive: Option<u32>,
+        tci_tune_drive: Option<crate::tci::TuneDrive>,
     ) -> Option<String> {
         let started = match self.rigctld_proc.as_ref() {
             Some(CatDaemon::Flex(d)) => Some(
@@ -17741,27 +17741,30 @@ impl RadioLoop {
             // (#564: left alone, the program tuned at whatever its own tune drive was, and an
             // amplifier behind it tripped). The same safe direction as above: never more than the
             // level the operator commands, nor the duty-cycle ceiling in force, and with no level
-            // commanded yet, that ceiling alone. Nothing to put back after: the over's drive is
-            // never touched. `None` (no Tune power set) leaves the program's tune drive as it is.
-            let tci_tune_drive = eng
-                .settings()
-                .tune_power_pct
-                .filter(|_| {
-                    keying
-                        && native
-                        && self
-                            .rigctld_proc
-                            .as_ref()
-                            .and_then(CatDaemon::tci)
-                            .is_some()
-                })
-                .map(|pct| {
-                    let want = f32::from(pct.min(100)) / 100.0;
-                    let ceiling = eng.active_power_ceiling();
-                    let cap = eng.rf_power().map_or(ceiling, |level| level.min(ceiling));
-                    // Rounded DOWN: a ceiling between whole percents (5.7%) is never exceeded.
-                    (want.min(cap) * 100.0).floor() as u32
-                });
+            // commanded yet, that ceiling alone. With no Tune power set, the program's own tune
+            // drive held to that same cap, never raised to it (the client reads the program's
+            // drive), and with that drive unreported and no cap at all (100%), nothing written,
+            // so no limit never becomes a full-drive write ([`crate::tci::TuneDrive::level`]).
+            // Nothing to put back after: the over's drive is never touched.
+            let tci_tune_drive = (keying
+                && native
+                && self
+                    .rigctld_proc
+                    .as_ref()
+                    .and_then(CatDaemon::tci)
+                    .is_some())
+            .then(|| {
+                let ceiling = eng.active_power_ceiling();
+                let cap = eng.rf_power().map_or(ceiling, |level| level.min(ceiling));
+                // Rounded DOWN: a ceiling between whole percents (5.7%) is never exceeded.
+                let pct = |frac: f32| (frac * 100.0).floor() as u32;
+                match eng.settings().tune_power_pct {
+                    Some(want) => {
+                        crate::tci::TuneDrive::Set(pct((f32::from(want.min(100)) / 100.0).min(cap)))
+                    }
+                    None => crate::tci::TuneDrive::AtMost(pct(cap)),
+                }
+            });
             // Drop the ENGINE lock before the CAT+audio work: a slow/wedged daemon must
             // freeze this tick, not every UI command sharing the mutex (the hang convoy).
             drop(eng);

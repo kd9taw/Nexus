@@ -120,6 +120,34 @@ pub(crate) const UNKEY_WAIT: Duration = Duration::from_millis(1_000);
 /// The longest a tune carrier may be held: the radio loop's own ceiling.
 pub const TUNE_HOLD_MAX_MS: u64 = 60_000;
 
+/// The tune drive [`TciDaemon::tune_on`] writes before the carrier keys, in the program's percent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TuneDrive {
+    /// Exactly this: the operator's Tune power, already held to the power ceiling.
+    Set(u32),
+    /// The program's own tune drive, but never above this ceiling: the lower of the two. With no
+    /// tune drive reported yet, the ceiling itself, unless it is 100 (no limit and no level
+    /// commanded): then nothing is written and the program tunes at its own drive, as before.
+    AtMost(u32),
+}
+
+impl TuneDrive {
+    /// The level to write, given the program's own reported tune drive; `None` writes nothing.
+    pub fn level(self, own: Option<u32>) -> Option<u32> {
+        match self {
+            TuneDrive::Set(level) => Some(level),
+            // Never raised: a program tuning lower than the ceiling stays where it is.
+            TuneDrive::AtMost(ceiling) => match own {
+                Some(own) => Some(own.min(ceiling)),
+                // Its drive unknown and nothing to hold it to: a cap of 100% is no limit, and
+                // writing it would RAISE a program tuning lower to full drive (the amplifier trip
+                // this guards against). Write nothing, as before; a real limit is written.
+                None => (ceiling < 100).then_some(ceiling),
+            },
+        }
+    }
+}
+
 /// Why [`TciDaemon::tune_on`] keyed nothing when Tune was no longer wanted at the key. The operator's
 /// own act, so the radio loop logs it and keeps it off the PTT line.
 pub const TUNE_LET_GO: &str = "Tune not keyed: Tune was let go of before the carrier keyed.";
@@ -678,9 +706,10 @@ impl TciDaemon {
     /// at most [`TUNE_HOLD_MAX_MS`]): the daemon ends it by itself at that plus [`TUNE_MARGIN`],
     /// whether or not the loop runs. The words for the PTT line when it does not key.
     ///
-    /// ⛔ AT THE TUNE DRIVE GIVEN, OR NOT AT ALL (#564). With `tune_drive` (the operator's Tune
-    /// power, already held to the power ceiling by the radio loop), `tune_drive:<trx>,<pct>;` goes
-    /// out first, and the carrier is keyed only once the server reports that level
+    /// ⛔ AT THE TUNE DRIVE GIVEN, OR NOT AT ALL (#564). With `tune_drive` ([`TuneDrive`]: the
+    /// operator's Tune power, or with none set the program's own tune drive held to the power
+    /// ceiling, both from the radio loop), `tune_drive:<trx>,<pct>;` goes out first, and the
+    /// carrier is keyed only once the server reports that level
     /// ([`shim::READBACK_WAIT`]): a write it ignored (another client's hold) or reported late is a
     /// refusal, never a carrier at a drive Nexus does not know. The write is also the ceiling the
     /// session's admission holds the server's `tune_drive` to at the key. The over's `drive` is
@@ -692,11 +721,15 @@ impl TciDaemon {
     pub fn tune_on(
         &self,
         hold_ms: u64,
-        tune_drive: Option<u32>,
+        tune_drive: Option<TuneDrive>,
         still_wanted: impl FnOnce() -> bool,
     ) -> Result<(), String> {
-        if let Some(level) = tune_drive {
-            let trx = self.trx;
+        let trx = self.trx;
+        let own = || {
+            self.conn()
+                .read(|s| s.model.trx(trx).tune_drive.known().copied())
+        };
+        if let Some(level) = tune_drive.and_then(|drive| drive.level(own())) {
             let conn = self.conn();
             if conn
                 .send(Command::Set(Setting::TuneDrive { trx, level }))

@@ -801,7 +801,8 @@ fn tune_writes_the_tune_drive_first_and_keys_only_once_the_program_reports_it() 
                 == Some(&80)),
         "premise: the program's own tune drive is 80"
     );
-    d.tune_on(60_000, Some(25), || true).expect("tune keyed");
+    d.tune_on(60_000, Some(super::TuneDrive::Set(25)), || true)
+        .expect("tune keyed");
     wait_log(&sim, "the carrier", |log| {
         keys(log) == [(Keyer::Client(0), SimSource::Tune)]
     });
@@ -839,7 +840,7 @@ fn a_tune_drive_the_program_does_not_take_keys_no_carrier() {
         "premise: the other program set the tune drive to 100"
     );
     let why = d
-        .tune_on(60_000, Some(10), || true)
+        .tune_on(60_000, Some(super::TuneDrive::Set(10)), || true)
         .expect_err("tuned at 100");
     assert!(
         why.contains("tune drive") && why.contains("10"),
@@ -872,7 +873,7 @@ fn a_lower_tune_drive_the_program_kept_keys_no_carrier() {
         "premise: the other program set the tune drive to 5"
     );
     let why = d
-        .tune_on(60_000, Some(10), || true)
+        .tune_on(60_000, Some(super::TuneDrive::Set(10)), || true)
         .expect_err("tuned at 5");
     assert!(
         why.contains("tune drive") && why.contains("10"),
@@ -885,6 +886,26 @@ fn a_lower_tune_drive_the_program_kept_keys_no_carrier() {
     assert!(keys(&sim.log()).is_empty(), "a carrier keyed");
 }
 
+/// The tune drive written (#564). Tune power is written as given. With none set, the program's own
+/// tune drive held to the ceiling, never raised to it; with no drive reported, the ceiling, unless
+/// there is none to hold to (100%: no limit and no level commanded), when nothing is written and
+/// the program tunes at its own drive as before: a cap of 100% must never become a 100% write.
+#[test]
+fn the_tune_drive_written_is_never_above_the_ceiling_nor_the_programs_own() {
+    use super::TuneDrive::{AtMost, Set};
+    assert_eq!(Set(25).level(Some(80)), Some(25), "Tune power, as given");
+    assert_eq!(Set(25).level(None), Some(25));
+    assert_eq!(AtMost(5).level(Some(80)), Some(5), "held to the ceiling");
+    assert_eq!(AtMost(50).level(Some(10)), Some(10), "never raised");
+    assert_eq!(AtMost(100).level(Some(10)), Some(10), "never raised to 100");
+    assert_eq!(AtMost(5).level(None), Some(5), "unreported: the ceiling");
+    assert_eq!(
+        AtMost(100).level(None),
+        None,
+        "unreported, no limit: nothing written"
+    );
+}
+
 /// ⛔ TUNE NO LONGER WANTED AT THE KEY KEYS NO CARRIER (#564): asked after the tune drive is read
 /// back, right before the key, with the drive written and reported and without one. The words are
 /// [`super::TUNE_LET_GO`], which the radio loop keeps off the PTT line.
@@ -892,7 +913,7 @@ fn a_lower_tune_drive_the_program_kept_keys_no_carrier() {
 fn tune_no_longer_wanted_at_the_key_keys_no_carrier() {
     let sim = esdr3([]);
     let d = daemon(&sim);
-    for drive in [Some(25), None] {
+    for drive in [Some(super::TuneDrive::Set(25)), None] {
         let why = d
             .tune_on(60_000, drive, || false)
             .expect_err("keyed though let go of");
