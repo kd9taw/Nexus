@@ -5965,7 +5965,7 @@ export const JA: PartialCatalog = {
   "settings.stationProfiles.lotwLocation": "TQSL の Station Location",
   "settings.stationProfiles.lotwLocation.hint": "このプロファイルの交信を LoTW 用に署名する TQSL の Station Location。空欄なら「設定 ▸ サービス ▸ コンファーム」のものを使います。",
   "settings.stationProfiles.qrzKey": "QRZ Logbook API キー",
-  "settings.stationProfiles.qrzKey.hint": "このプロファイル専用のキーで、そのコールの QRZ ログブック用です。局がこのプロファイルにある間、交信はこのキーで QRZ に送られます。キーはシステムのキーチェーンに保管され、設定ファイルやバックアップには入りません。",
+  "settings.stationProfiles.qrzKey.hint": "このプロファイル専用のキーで、そのコールの QRZ ログブック用です。このプロファイルのコールで記録した交信は、後で別のプロファイルからアップロードしても、このキーで QRZ に送られます。キーはシステムのキーチェーンに保管され、設定ファイルやバックアップには入りません。",
   "settings.stationProfiles.qrzKey.own": "このプロファイルには専用のキーがあります。",
   "settings.stationProfiles.qrzKey.none": "専用のキーはありません:「設定 ▸ サービス ▸ コンファーム ▸ QRZ」のキーを使います。",
   "settings.stationProfiles.qrzKey.save": "キーを保存",

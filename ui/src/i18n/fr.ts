@@ -9475,7 +9475,7 @@ export const FR: PartialCatalog = {
   "settings.stationProfiles.lotwLocation": "Station Location TQSL",
   "settings.stationProfiles.lotwLocation.hint": "La Station Location de TQSL qui signe les contacts de ce profil pour LoTW. Laissez vide pour utiliser celle de Réglages ▸ Services ▸ Confirmations.",
   "settings.stationProfiles.qrzKey": "Clé API QRZ Logbook",
-  "settings.stationProfiles.qrzKey.hint": "La clé propre à ce profil, pour le logbook QRZ de son indicatif. Tant que la station est sur ce profil, ses contacts partent vers QRZ avec cette clé. Elle est gardée dans le trousseau du système, jamais dans le fichier de réglages ni dans une sauvegarde.",
+  "settings.stationProfiles.qrzKey.hint": "La clé propre à ce profil, pour le logbook QRZ de son indicatif. Les contacts enregistrés sous l'indicatif de ce profil partent vers QRZ avec cette clé, même envoyés plus tard depuis un autre profil. Elle est gardée dans le trousseau du système, jamais dans le fichier de réglages ni dans une sauvegarde.",
   "settings.stationProfiles.qrzKey.own": "Ce profil a sa propre clé.",
   "settings.stationProfiles.qrzKey.none": "Pas de clé propre : il utilise celle de Réglages ▸ Services ▸ Confirmations ▸ QRZ.",
   "settings.stationProfiles.qrzKey.save": "Enregistrer la clé",

@@ -10529,7 +10529,7 @@ export const ZH: PartialCatalog = {
   "settings.stationProfiles.lotwLocation": "TQSL Station Location",
   "settings.stationProfiles.lotwLocation.hint": "TQSL 中用于为此配置的通联签名并上传 LoTW 的 Station Location。留空则使用 设置 ▸ 服务 ▸ 确认 中的那个。",
   "settings.stationProfiles.qrzKey": "QRZ Logbook API 密钥",
-  "settings.stationProfiles.qrzKey.hint": "此配置自己的密钥，用于其呼号的 QRZ 日志。电台使用此配置时，其通联以此密钥上传到 QRZ。密钥保存在系统钥匙串中，不会写入设置文件或备份。",
+  "settings.stationProfiles.qrzKey.hint": "此配置自己的密钥，用于其呼号的 QRZ 日志。以此配置的呼号记录的通联会以此密钥上传到 QRZ，即使之后从其他配置上传也是如此。密钥保存在系统钥匙串中，不会写入设置文件或备份。",
   "settings.stationProfiles.qrzKey.own": "此配置有自己的密钥。",
   "settings.stationProfiles.qrzKey.none": "没有自己的密钥：使用 设置 ▸ 服务 ▸ 确认 ▸ QRZ 中的密钥。",
   "settings.stationProfiles.qrzKey.save": "保存密钥",

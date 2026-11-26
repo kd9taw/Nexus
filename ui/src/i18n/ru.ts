@@ -464,7 +464,7 @@ export const RU: PartialCatalog = {
   "settings.stationProfiles.lotwLocation": "Station Location в TQSL",
   "settings.stationProfiles.lotwLocation.hint": "Station Location в TQSL, которой подписываются связи этого профиля для LoTW. Оставьте пустым, чтобы использовать указанную в Настройки ▸ Сервисы ▸ Подтверждения.",
   "settings.stationProfiles.qrzKey": "API-ключ QRZ Logbook",
-  "settings.stationProfiles.qrzKey.hint": "Собственный ключ этого профиля для журнала QRZ его позывного. Пока станция работает в этом профиле, её связи уходят в QRZ с этим ключом. Хранится в связке ключей системы, никогда в файле настроек или резервной копии.",
+  "settings.stationProfiles.qrzKey.hint": "Собственный ключ этого профиля для журнала QRZ его позывного. Связи, записанные под позывным этого профиля, уходят в QRZ с этим ключом, даже если выгружаются позже из другого профиля. Хранится в связке ключей системы, никогда в файле настроек или резервной копии.",
   "settings.stationProfiles.qrzKey.own": "У этого профиля есть собственный ключ.",
   "settings.stationProfiles.qrzKey.none": "Собственного ключа нет: используется ключ из Настройки ▸ Сервисы ▸ Подтверждения ▸ QRZ.",
   "settings.stationProfiles.qrzKey.save": "Сохранить ключ",

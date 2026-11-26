@@ -10531,7 +10531,7 @@ export const ZH_HANT: PartialCatalog = {
   "settings.stationProfiles.lotwLocation": "TQSL Station Location",
   "settings.stationProfiles.lotwLocation.hint": "TQSL 中用於為此設定檔的通聯簽名並上傳 LoTW 的 Station Location。留空則使用 設定 ▸ 服務 ▸ 確認 中的那個。",
   "settings.stationProfiles.qrzKey": "QRZ Logbook API 金鑰",
-  "settings.stationProfiles.qrzKey.hint": "此設定檔自己的金鑰，用於其呼號的 QRZ 日誌。電台使用此設定檔時，其通聯以此金鑰上傳到 QRZ。金鑰保存在系統鑰匙圈中，不會寫入設定檔案或備份。",
+  "settings.stationProfiles.qrzKey.hint": "此設定檔自己的金鑰，用於其呼號的 QRZ 日誌。以此設定檔的呼號記錄的通聯會以此金鑰上傳到 QRZ，即使之後從其他設定檔上傳也是如此。金鑰保存在系統鑰匙圈中，不會寫入設定檔案或備份。",
   "settings.stationProfiles.qrzKey.own": "此設定檔有自己的金鑰。",
   "settings.stationProfiles.qrzKey.none": "沒有自己的金鑰：使用 設定 ▸ 服務 ▸ 確認 ▸ QRZ 中的金鑰。",
   "settings.stationProfiles.qrzKey.save": "儲存金鑰",

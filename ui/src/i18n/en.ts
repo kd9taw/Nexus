@@ -9454,7 +9454,7 @@ export const EN = {
   'settings.stationProfiles.lotwLocation': 'TQSL Station Location',
   'settings.stationProfiles.lotwLocation.hint': 'The Station Location in TQSL that signs this profile\'s contacts for LoTW. Leave blank to use the one in Settings ▸ Services ▸ Confirmations.',
   'settings.stationProfiles.qrzKey': 'QRZ Logbook API key',
-  'settings.stationProfiles.qrzKey.hint': 'This profile\'s own key, for the QRZ logbook of its call. While the station is on this profile, its contacts go up to QRZ with this key. Kept in your system\'s keychain, never in the settings file or a backup.',
+  'settings.stationProfiles.qrzKey.hint': 'This profile\'s own key, for the QRZ logbook of its call. Contacts logged under this profile\'s call go up to QRZ with this key, even when they are uploaded later from another profile. Kept in your system\'s keychain, never in the settings file or a backup.',
   'settings.stationProfiles.qrzKey.own': 'This profile has its own key.',
   'settings.stationProfiles.qrzKey.none': 'No key of its own: it uses the key in Settings ▸ Services ▸ Confirmations ▸ QRZ.',
   'settings.stationProfiles.qrzKey.save': 'Save key',
