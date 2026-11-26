@@ -736,6 +736,67 @@ pub fn available_usb_ports() -> Vec<UsbPort> {
     Vec::new()
 }
 
+/// Every serial port present now ([`available_ports`]), each USB one with the identity a saved
+/// port is found again by after Windows renumbers it ([`tempo_app::serial_port::PortIdentity`]:
+/// VID, PID, serial number, product, interface number). Read from the enumeration alone: no
+/// port is opened. Empty without the `serial` feature or when the enumeration fails, which the
+/// follower reads as "nothing known", never as "every port is gone"
+/// (`Settings::follow_moved_ports`).
+pub fn present_ports() -> Vec<tempo_app::serial_port::PresentPort> {
+    let identities = usb_identities();
+    available_ports()
+        .into_iter()
+        .map(|name| tempo_app::serial_port::PresentPort {
+            identity: identities
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, id)| id.clone()),
+            name,
+        })
+        .collect()
+}
+
+/// The USB identity of each USB serial port, by name. Panic-contained like
+/// [`available_usb_ports`], for the same driver reasons.
+#[cfg(feature = "serial")]
+fn usb_identities() -> Vec<(String, tempo_app::serial_port::PortIdentity)> {
+    std::panic::catch_unwind(|| {
+        use serialport::SerialPortType;
+        serialport::available_ports()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|p| match p.port_type {
+                SerialPortType::UsbPort(info) => Some((
+                    p.port_name,
+                    tempo_app::serial_port::PortIdentity {
+                        vid: info.vid,
+                        pid: info.pid,
+                        serial: info.serial_number.unwrap_or_default(),
+                        product: tempo_app::serial_port::normalized_product(
+                            &info.product.unwrap_or_default(),
+                        ),
+                        interface: info.interface,
+                    },
+                )),
+                _ => None,
+            })
+            .collect()
+    })
+    .unwrap_or_else(|_| {
+        // Run at launch and at a Settings save only, so no storm to rate-limit; still never silent.
+        eprintln!(
+            "nexus: USB serial-port identity enumeration panicked (caught) — a driver issue on \
+             this system; saved ports are not followed this time"
+        );
+        Vec::new()
+    })
+}
+
+#[cfg(not(feature = "serial"))]
+fn usb_identities() -> Vec<(String, tempo_app::serial_port::PortIdentity)> {
+    Vec::new()
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     /// Every spelling of one port is that port; different ports never are; empty is nothing.

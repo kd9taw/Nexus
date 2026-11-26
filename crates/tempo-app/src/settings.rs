@@ -8,6 +8,7 @@ use crate::dto::SourceKind;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+pub mod port_follow;
 pub mod station_profiles;
 pub mod writer;
 
@@ -2163,6 +2164,16 @@ pub struct Settings {
     /// selected radio, so it isn't per-radio. `#[serde(default)]` so old files load.
     #[serde(default)]
     pub ptt_serial_port: String,
+    /// What each saved serial port was when Nexus last saw it, keyed by the port's name: its USB
+    /// VID, PID, serial number, product and interface ([`crate::serial_port::PortIdentity`]). One
+    /// map for every port setting (CAT, PTT, CW key, WinKeyer, FSK, rotator, amplifier, flat and
+    /// per radio), so a port two settings share has one identity. Written at launch and at a
+    /// Settings save ([`Settings::remember_present_ports`]), read at launch to follow a radio
+    /// Windows renumbered ([`Settings::follow_moved_ports`]). Absent from an older file, which
+    /// loads unchanged, and skipped when empty, so a station without USB ports writes the file it
+    /// always did.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub port_identities: std::collections::BTreeMap<String, crate::serial_port::PortIdentity>,
     /// What the CAT port's RTS / DTR control lines are held at for the whole session:
     /// `"low"` (default), `"high"`, or `"untouched"`. Parsed by
     /// `tempo_audio::rigctld_proc::LineState::from_setting`, which treats anything
@@ -7358,6 +7369,7 @@ impl Default for Settings {
             rig_model_name: "None / VOX".to_string(),
             serial_port: String::new(),
             ptt_serial_port: String::new(),
+            port_identities: std::collections::BTreeMap::new(),
             // Held LOW by default — the 1.0.2 TX-safety fix. Struct-level `#[serde(default)]`
             // means a settings file written before 1.0.2 has no such key and therefore loads
             // THIS value, so the fix reaches existing stations without a migration.

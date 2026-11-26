@@ -19696,6 +19696,12 @@ fn set_settings(
     );
     // ...and the stored keys the form carries, read without them or not.
     command_dispatch::keep_the_shacks_secret_settings_while_watched(&shack, &mut settings, watched);
+    // The port identities are never the form's: the shack's, plus whatever the ports this save
+    // names are now, read from this computer's enumeration (nothing is opened), so a port picked
+    // today is followed after tomorrow's renumbering (`Settings::remember_present_ports`).
+    settings.port_identities = shack.port_identities.clone();
+    #[cfg(feature = "radio")]
+    settings.remember_present_ports(&tempo_audio::ports::present_ports());
     let engine = state.inner().clone();
     // A form save: the ENGINE's roster wins, so a stale panel cannot revert a rig just added.
     let snap = apply_and_persist(
@@ -32326,6 +32332,22 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
             };
             return Ok(cat_test_timeout(detail, audio_error));
         };
+        // A CAT port that is not on this computer is the answer: said first, with the ports that
+        // are here, and with nothing to sweep (`port_follow::cat_port_not_here`). Asked only of a
+        // failed test; the enumeration opens no port.
+        let port_gone = if ok == Some(false) {
+            let s = engine_lock(&state).settings().clone();
+            tempo_app::settings::port_follow::cat_port_not_here(
+                &s,
+                &tempo_audio::ports::present_ports(),
+                |p| cfg!(unix) && p.starts_with('/') && std::path::Path::new(p).exists(),
+            )
+        } else {
+            None
+        };
+        if let Some(words) = &port_gone {
+            detail = format!("{words} {detail}");
+        }
         let ladder = {
             let eng = engine_lock(&state);
             let s = eng.settings();
@@ -32368,7 +32390,7 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
         // transmitter) is not a fault to sweep: the refusal is the answer, and a sweep would
         // open the very port the refusal kept shut, then replace the sentence with a verdict.
         // `refused` is the radio loop's typed flag, never a match on the words.
-        if ok == Some(false) && !refused {
+        if ok == Some(false) && !refused && port_gone.is_none() {
             // A sweep whose rungs could not hold RTS unkeyed on an RTS-keyed port is not run:
             // the probe's own failure stands, with the reason. Asked before the port is taken.
             let sweep_refused = ladder.as_ref().and_then(|(_, _, rig_model, gate, _, _)| {
@@ -54217,6 +54239,32 @@ pub fn run() {
         }
     }
 
+    // A saved serial port Windows renumbered (another USB socket, a hub, a driver reinstall, an
+    // update's restart): found again by its USB identity, only when exactly one port here is that
+    // device and only while the saved name is NOT here (`Settings::follow_moved_ports`). Runs
+    // before the engine, the radio loop and every keyer exist, so a keying line is renamed before
+    // anything opens it and never during an over; nothing is opened to look. The identities of
+    // the ports that are here are remembered for next time. A bare save, like the heal above.
+    #[cfg(feature = "radio")]
+    let launch_port_notes = {
+        let present = tempo_audio::ports::present_ports();
+        let found = settings.follow_moved_ports(&present, |p| {
+            cfg!(unix) && p.starts_with('/') && std::path::Path::new(p).exists()
+        });
+        for line in &found.followed {
+            tempo_core::applog::info("ports", line);
+        }
+        for line in &found.missing {
+            tempo_core::applog::warn("ports", line);
+        }
+        if found.changed {
+            if let Err(e) = settings.save(&settings_path()) {
+                eprintln!("tempo: couldn't save the followed serial ports: {e}");
+            }
+        }
+        found
+    };
+
     // The waterfall's publish seam, shared by the rx-dsp producer, the native scope workers and
     // the UI reader. Created here (not on the Engine) because no part of it is engine state —
     // that separation is the point: the row must not be reachable only through the engine mutex,
@@ -54281,6 +54329,12 @@ pub fn run() {
             stop_for_no_log(&why);
             return;
         }
+    };
+    #[cfg(feature = "radio")]
+    let launched = {
+        let mut launched = launched;
+        launched.set_launch_port_notes(launch_port_notes);
+        launched
     };
     // Stop TX counted without the engine's lock reaches this engine (`StopTx`).
     tempo_app::engine::register_station_stop_tx(launched.stop_tx_handle());

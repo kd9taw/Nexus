@@ -2994,7 +2994,17 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     let init_ok = init_probe.ok;
     {
         let mut eng = engine_lock(&engine);
-        eng.set_cat_status(init_probe.ok, init_probe.detail);
+        // The launch's port findings lead the first status, once: a port Windows renumbered that
+        // was followed, or the CAT port not being on this computer when the open failed.
+        let notes = eng.take_launch_port_notes();
+        eng.set_cat_status(
+            init_probe.ok,
+            tempo_app::settings::port_follow::launch_cat_detail(
+                &notes,
+                init_probe.ok,
+                &init_probe.detail,
+            ),
+        );
         // Read-only-launch seed: the rig's OWN dial/mode become the app's belief, under
         // the same lock and BEFORE the loop starts — so the UI's first snapshot poll
         // already shows the rig's reality, and the band-edge chime's first-value
