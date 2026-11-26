@@ -19,8 +19,8 @@
 //! * **The saved port is here:** nothing moves, whatever else is plugged in. "The serial port you
 //!   choose is the one Nexus opens" (1.19.0): following never overrides a port that exists. Its
 //!   identity is refreshed from the device now at that name.
-//! * **It is gone, and exactly one present port is that device** by serial number, or by VID/PID
-//!   plus interface number ([`crate::serial_port::refind`]): every setting naming the old port is
+//! * **It is gone, and exactly one present port is that device** by its own serial number, and
+//!   by interface number on a multi-port chip ([`crate::serial_port::refind`]): every setting naming the old port is
 //!   moved to the new name, and the operator is told in words.
 //! * **It is gone, and the match is ambiguous or absent:** nothing is guessed. The words say the
 //!   port is not on this computer and list the ports that are.
@@ -493,6 +493,35 @@ mod tests {
         let got = s.follow_moved_ports(&[usb("COM7", 0x1A86, 0x7523, "5", None)], nothing);
         assert_eq!(s.serial_port, "COM5");
         assert!(got.followed.is_empty());
+    }
+
+    /// ⭐ Linux gives EVERY single-interface USB serial interface number 0, so an interface
+    /// number without a serial number is VID/PID alone: a no-serial CH340 radio cable must never
+    /// be followed onto another CH340 cable. The same for a factory-default serial number a whole
+    /// production run shares ("0001" on generic CP2102 cables): it is not a serial number.
+    #[test]
+    fn an_interface_or_a_factory_serial_alone_is_not_a_key() {
+        for serial in ["", "0001", "00000001", "0000"] {
+            let mut s = Settings {
+                serial_port: "/dev/ttyUSB0".into(),
+                ..Settings::default()
+            };
+            s.remember_present_ports(&[usb("/dev/ttyUSB0", 0x1A86, 0x7523, serial, Some(0))]);
+            let got = s.follow_moved_ports(
+                &[usb("/dev/ttyUSB1", 0x1A86, 0x7523, serial, Some(0))],
+                nothing,
+            );
+            assert_eq!(s.serial_port, "/dev/ttyUSB0", "serial {serial:?}");
+            assert!(got.followed.is_empty(), "serial {serial:?}");
+        }
+        // Windows: a no-serial dual chip shows the stand-in serial and MI_00: still not a key.
+        let mut s = Settings {
+            serial_port: "COM5".into(),
+            ..Settings::default()
+        };
+        s.remember_present_ports(&[usb("COM5", 0x10C4, 0xEA70, "6", Some(0))]);
+        s.follow_moved_ports(&[usb("COM7", 0x10C4, 0xEA70, "7", Some(0))], nothing);
+        assert_eq!(s.serial_port, "COM5");
     }
 
     /// Gone with nothing like it here: the words name the port and the ports that are here.

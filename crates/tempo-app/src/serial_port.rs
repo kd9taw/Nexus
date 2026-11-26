@@ -65,10 +65,12 @@ pub fn expand_home_with(port: String, home: Option<&std::ffi::OsStr>) -> String 
 /// is no longer there can be found again under its new name
 /// ([`crate::settings::Settings::follow_moved_ports`]).
 ///
-/// `serial` is the device's own USB serial number, `""` when it has none (or only Windows'
-/// generated stand-in, which [`Self::serial_key`] ignores). `interface` is which port of a
-/// multi-port chip this is: the FT-891's CP2105 shows its Enhanced and Standard COM ports with
-/// the SAME VID, PID and serial number, and only the interface number tells them apart.
+/// `serial` is the device's own USB serial number, `""` when it has none (Windows' generated
+/// stand-in and a factory default a whole production run shares are kept but never count as one,
+/// [`Self::serial_key`]). `interface` is which port of a multi-port chip this is: the FT-891's
+/// CP2105 shows its Enhanced and Standard COM ports with the SAME VID, PID and serial number, and
+/// only the interface number tells them apart. It is never a key by itself: Linux numbers EVERY
+/// single-interface USB serial 0, and Windows says `MI_00` for any dual chip.
 /// `product` is the USB product string, or on Windows the device's friendly name with the
 /// ` (COMn)` it carries taken off ([`normalized_product`]), since that part is what changes.
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -82,15 +84,24 @@ pub struct PortIdentity {
 }
 
 impl PortIdentity {
-    /// The serial number when it can tell one device from another. Windows hands a device with no
-    /// serial number the first piece of the instance id it made up for that USB socket (`"5"`
-    /// out of `5&2C3A…`): it changes when the device moves and is shared by unrelated devices,
-    /// so a serial that short is not one.
+    /// The serial number when it can tell one device from another. Not one:
+    /// - Windows' stand-in for a device with none, the first piece of the instance id it made up
+    ///   for that USB socket (`"5"` out of `5&2C3A…`): it changes when the device moves and is
+    ///   shared by unrelated devices, so a serial that short is not one;
+    /// - a factory default every chip of a run carries: Silicon Labs' `0001` on generic CP210x
+    ///   cables (and any other zeros-and-a-digit value), and the `A50285BI` of cloned FTDI chips.
     fn serial_key(&self) -> Option<&str> {
         let s = self.serial.trim();
-        (s.len() >= 4).then_some(s)
+        let significant = s.trim_start_matches('0');
+        let factory = (s.bytes().all(|b| b.is_ascii_digit()) && significant.len() <= 1)
+            || FACTORY_SERIALS.iter().any(|f| f.eq_ignore_ascii_case(s));
+        (s.len() >= 4 && !factory).then_some(s)
     }
 }
+
+/// Serial numbers shared by every chip of a production run, which identify no device
+/// ([`PortIdentity::serial_key`]).
+const FACTORY_SERIALS: &[&str] = &["A50285BI"];
 
 /// A product name without the ` (COM5)` Windows writes at the end of a serial device's friendly
 /// name: that part is the port name, which is exactly what changed.
@@ -126,16 +137,17 @@ pub enum Refound {
     /// Exactly one present port is that device.
     At(String),
     /// Several present ports could be it, or the identity is too thin to tell (no serial number
-    /// and no interface number): Nexus does not guess.
+    /// of its own): Nexus does not guess.
     Ambiguous(Vec<String>),
     /// Nothing here is that device.
     NotFound,
 }
 
 /// Find the device `was` among the ports present now. Unambiguous only on the device's own
-/// serial number, or on VID/PID plus the interface number of a multi-port chip; VID and PID alone
-/// (two identical cables, or a radio and its twin) are never enough. Product names, when both
-/// sides have one, must agree as well.
+/// serial number ([`PortIdentity::serial_key`]); the interface number then picks the right port
+/// of a multi-port chip, whose ports share one serial. VID and PID alone, with or without an
+/// interface number (two identical cables, or a radio and its twin), are never enough. Product
+/// names, when both sides have one, must agree as well.
 pub fn refind(was: &PortIdentity, present: &[PresentPort]) -> Refound {
     let serial = was.serial_key();
     let product = normalized_product(&was.product);
@@ -151,7 +163,7 @@ pub fn refind(was: &PortIdentity, present: &[PresentPort]) -> Refound {
         })
         .map(|(p, _)| p.name.clone())
         .collect();
-    let keyed = serial.is_some() || was.interface.is_some();
+    let keyed = serial.is_some();
     match hits.len() {
         0 => Refound::NotFound,
         1 if keyed => Refound::At(hits[0].clone()),
