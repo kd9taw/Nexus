@@ -16,8 +16,9 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 
-/// Why a write did not take, for a backend that can tell ([`RigBackend::try_set_freq`],
-/// [`RigBackend::try_set_mode`], and the extended verbs' `try_` forms).
+/// Why a write did not take, or a level read has no value, for a backend that can tell
+/// ([`RigBackend::try_set_freq`], [`RigBackend::try_set_mode`], and the extended verbs' `try_`
+/// forms).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SetFault {
     /// The radio, or the backend, said no: `RPRT -1`.
@@ -151,6 +152,16 @@ pub trait RigBackend: Send + Sync {
     /// (e.g. `"-12"` for STRENGTH dB, `"0.50"` for RFPOWER 0..1).
     fn level(&self, _name: &str) -> Option<String> {
         None
+    }
+    /// The level read as `l` relays it: [`Self::level`], with a reading the radio has not
+    /// reported YET told apart from one it does not have. The default is [`Self::level`], whose
+    /// `None` is `RPRT -11` (not available), so a backend that cannot tell sends exactly the bytes
+    /// it always sent. `Some(Err(SetFault::NoAnswer))` is `RPRT -5`, the radio not answering: the
+    /// radio loop counts it as a miss and asks again, where `-11` on the forward-power meter is
+    /// taken as a radio with no watts meter for the rest of the session. The TCI client overrides
+    /// it.
+    fn try_level(&self, name: &str) -> Option<Result<String, SetFault>> {
+        self.level(name).map(Ok)
     }
     /// Set a level (`L NAME VALUE`, e.g. `RFPOWER 0.5`, `KEYSPD 25`).
     fn set_level(&self, _name: &str, _value: &str) -> Option<bool> {
@@ -787,8 +798,9 @@ pub fn handle_command(line: &str, backend: &dyn RigBackend) -> Handled {
                 },
                 // ---- extended verbs (RPRT -11 when the backend doesn't implement them,
                 // exactly like the pre-extension broker) ----
-                Some("l") => match p.next().and_then(|n| backend.level(n)) {
-                    Some(v) => format!("{v}\n"),
+                Some("l") => match p.next().and_then(|n| backend.try_level(n)) {
+                    Some(Ok(v)) => format!("{v}\n"),
+                    Some(Err(fault)) => rprt_set(Err(fault)),
                     None => "RPRT -11\n".into(),
                 },
                 Some("L") => {
