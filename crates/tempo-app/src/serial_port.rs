@@ -96,11 +96,22 @@ impl PortIdentity {
     /// At launch that is two candidates, so ambiguous and not followed, while both are plugged in;
     /// with only the other one present it would be followed. The radio loop's follow also refuses
     /// any port present while CAT worked, so a cable that sat beside the radio is still refused.
-    fn serial_key(&self) -> Option<&str> {
+    ///
+    /// Windows' FTDI driver writes the port letter (A–D) after an FTDI chip's serial number
+    /// (`…+A702TB52A\0000` reads as `A702TB52A`), so for FTDI's vendor id the factory check reads
+    /// the serial without one trailing letter: `A50285BIA` and `00000000A` are the clone and
+    /// all-zeros serials. The key itself keeps the letter, which is the same on every read.
+    pub(crate) fn serial_key(&self) -> Option<&str> {
         let s = self.serial.trim();
-        let significant = s.trim_start_matches('0');
-        let factory = (s.bytes().all(|b| b.is_ascii_digit()) && significant.len() <= 1)
-            || FACTORY_SERIALS.iter().any(|f| f.eq_ignore_ascii_case(s));
+        let judged = match s.strip_suffix(['A', 'B', 'C', 'D', 'a', 'b', 'c', 'd']) {
+            Some(bare) if self.vid == FTDI_VID && !bare.is_empty() => bare,
+            _ => s,
+        };
+        let significant = judged.trim_start_matches('0');
+        let factory = (judged.bytes().all(|b| b.is_ascii_digit()) && significant.len() <= 1)
+            || FACTORY_SERIALS
+                .iter()
+                .any(|f| f.eq_ignore_ascii_case(judged));
         (s.len() >= 4 && !factory).then_some(s)
     }
 }
@@ -108,6 +119,9 @@ impl PortIdentity {
 /// Serial numbers shared by every chip of a production run, which identify no device
 /// ([`PortIdentity::serial_key`]).
 const FACTORY_SERIALS: &[&str] = &["A50285BI"];
+
+/// Future Technology Devices International's USB vendor id.
+const FTDI_VID: u16 = 0x0403;
 
 /// A product name without the ` (COM5)` Windows writes at the end of a serial device's friendly
 /// name: that part is the port name, which is exactly what changed.

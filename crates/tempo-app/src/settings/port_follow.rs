@@ -49,6 +49,10 @@ pub struct PortFollow {
     /// The active radio's CAT port, when it is one of `missing`: its sentence, for the CAT status
     /// when the launch's connect fails.
     pub cat_missing: Option<String>,
+    /// One sentence per saved port that is here but is now another device (another serial
+    /// number), for the log: it is opened as chosen, never followed, but worth a line when the
+    /// radio stops answering.
+    pub replaced: Vec<String>,
 }
 
 /// `Settings::port_identities`' reader, which never fails the file. The map is a cache Nexus
@@ -285,7 +289,20 @@ impl Settings {
         let cat = self.serial_port.trim().to_string();
         let mut moves: Vec<(String, String)> = Vec::new();
         for (name, role) in &names {
-            if present.iter().any(|p| same_port(&p.name, name)) || exists(name) {
+            if let Some(here) = present.iter().find(|p| same_port(&p.name, name)) {
+                let was = self.identity_of(name);
+                let now = here.identity.as_ref();
+                if let (Some(was), Some(now)) = (was.and_then(|w| w.serial_key()), now) {
+                    if now.serial_key() != Some(was) {
+                        out.replaced.push(format!(
+                            "{name} is a different USB device now than when Nexus last saw it; \
+                             Nexus opens {name} as you chose."
+                        ));
+                    }
+                }
+                continue;
+            }
+            if exists(name) {
                 continue;
             }
             let found = self
@@ -522,6 +539,70 @@ mod tests {
         s.remember_present_ports(&[usb("COM5", 0x10C4, 0xEA70, "6", Some(0))]);
         s.follow_moved_ports(&[usb("COM7", 0x10C4, 0xEA70, "7", Some(0))], nothing);
         assert_eq!(s.serial_port, "COM5");
+    }
+
+    /// ⭐ Windows' FTDI driver writes the port letter after the serial number
+    /// (`FTDIBUS\VID_0403+PID_6001+A702TB52A\0000` reads as `A702TB52A`), so a cloned FT232R's
+    /// shared `A50285BI` arrives as `A50285BIA`, and an all-zeros one as `00000000A`. Still a
+    /// factory serial, still not a key.
+    #[test]
+    fn windows_ftdi_clone_serial_with_port_letter() {
+        for serial in ["A50285BIA", "a50285bib", "00000000A", "0001D"] {
+            let mut s = Settings {
+                serial_port: "COM5".into(),
+                ..Settings::default()
+            };
+            s.remember_present_ports(&[usb("COM5", 0x0403, 0x6001, serial, None)]);
+            let got = s.follow_moved_ports(&[usb("COM8", 0x0403, 0x6001, serial, None)], nothing);
+            assert_eq!(s.serial_port, "COM5", "serial {serial:?}: {got:?}");
+        }
+        // A real FTDI serial with its port letter is still a key: the radio is followed.
+        let mut s = Settings {
+            serial_port: "COM5".into(),
+            ..Settings::default()
+        };
+        s.remember_present_ports(&[usb("COM5", 0x0403, 0x6001, "A702TB52A", None)]);
+        s.follow_moved_ports(&[usb("COM8", 0x0403, 0x6001, "A702TB52A", None)], nothing);
+        assert_eq!(s.serial_port, "COM8");
+    }
+
+    /// A saved port that is here but now holds another device is opened as chosen, never
+    /// followed, and a log line says it changed. The same device, or one with no serial number to
+    /// compare, says nothing.
+    #[test]
+    fn a_saved_port_now_holding_another_device_is_said() {
+        let mut s = Settings {
+            serial_port: "COM5".into(),
+            ..Settings::default()
+        };
+        s.remember_present_ports(&[usb("COM5", 0x10C4, 0xEA60, "IC7300-0001234", None)]);
+        let got = s.follow_moved_ports(
+            &[
+                usb("COM5", 0x1A86, 0x7523, "", None),
+                usb("COM7", 0x10C4, 0xEA60, "IC7300-0001234", None),
+            ],
+            nothing,
+        );
+        assert_eq!(s.serial_port, "COM5");
+        assert!(got.followed.is_empty());
+        assert_eq!(
+            got.replaced,
+            vec![
+                "COM5 is a different USB device now than when Nexus last saw it; Nexus opens \
+                 COM5 as you chose."
+                    .to_string()
+            ]
+        );
+        let mut same = Settings {
+            serial_port: "COM5".into(),
+            ..Settings::default()
+        };
+        same.remember_present_ports(&[usb("COM5", 0x10C4, 0xEA60, "IC7300-0001234", None)]);
+        let got = same.follow_moved_ports(
+            &[usb("COM5", 0x10C4, 0xEA60, "IC7300-0001234", None)],
+            nothing,
+        );
+        assert!(got.replaced.is_empty());
     }
 
     /// Gone with nothing like it here: the words name the port and the ports that are here.

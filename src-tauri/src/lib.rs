@@ -54254,7 +54254,7 @@ pub fn run() {
         for line in &found.followed {
             tempo_core::applog::info("ports", line);
         }
-        for line in &found.missing {
+        for line in found.missing.iter().chain(&found.replaced) {
             tempo_core::applog::warn("ports", line);
         }
         if found.changed {
