@@ -9,6 +9,7 @@
 // behave, not a property of one window.
 
 import { useEffect, useState } from 'react'
+import type { SatTrackStatus } from '../types'
 
 export const QSY_WIPE_KEY = 'nexus.logLine.qsyWipe'
 const CHANGED_EVENT = 'nexus-qsy-wipe-changed'
@@ -50,4 +51,11 @@ export function useQsyWipe(): [boolean, (on: boolean) => void] {
     }
   }, [])
   return [on, setQsyWipe]
+}
+
+/** Is a satellite track driving the dial — Doppler correcting either leg? While it is, the dial
+ *  moves with the pass, not the operator, so no log line takes a move for a QSY (App reads this
+ *  from its own 2 s pass poll for the main window's Contest screen). */
+export function dopplerDrivesDial(track: Pick<SatTrackStatus, 'dopplerDownlink' | 'dopplerUplink'> | null): boolean {
+  return track != null && (track.dopplerDownlink || track.dopplerUplink)
 }

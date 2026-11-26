@@ -325,6 +325,7 @@ export function ContestLargeEntry({
   operatorAsk,
   onOperatorFocused,
   satellite,
+  dopplerTracking = false,
   barEnd,
   entryOnly = false,
 }: {
@@ -346,6 +347,9 @@ export function ContestLargeEntry({
   /** The bird whose transponder the engine holds, while one is held (the logger window's read of
    *  `getSatTransponder`); null while none is. Absent in the main window, which draws no such line. */
   satellite?: string | null
+  /** A satellite track has Doppler driving the dial (`dopplerDrivesDial`): the main window's
+   *  Contest screen reads it from App's pass poll, as the logger window reads `satellite`. */
+  dopplerTracking?: boolean
   /** What ends the bar after A− / A+: the logger window's pin. Absent in the main window. */
   barEnd?: ReactNode
   /** The entry alone: no last contacts under it (the logger window's `entry` layout). */
@@ -420,9 +424,12 @@ export function ContestLargeEntry({
             fdMode={m.fdMode}
             fdSubmode={m.fdSubmode}
             sharedEntry={sharedEntry}
-            // The QSY wipe, if the operator turned it on, as on the cockpits' strips — never while the
-            // logger window says a satellite pass's transponder is held (the dial follows Doppler).
-            offerQsyWipe={satellite == null}
+            // The QSY wipe, if the operator turned it on, as on the cockpits' strips — never while a
+            // satellite pass moves the dial: the logger window's held transponder, or the main
+            // window's Doppler-driven track. With the logger window open, both windows show one
+            // shared line and both run the wipe: whichever sees the held move first sets it aside,
+            // and the other may show no notice of its own (accepted: it is one contact).
+            offerQsyWipe={satellite == null && !dopplerTracking}
             noCreditChip={
               <NoCreditChip fdActive={fdActive} ruleset={fdRuleset} activeMode={stationMode(section, snap.link.tier, keyboardMode)} />
             }

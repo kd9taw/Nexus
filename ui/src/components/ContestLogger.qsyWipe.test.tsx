@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, act, fireEvent } from '@testing-library/react'
 import { ContestLargeEntry } from './ContestLogger'
-import { setQsyWipe } from '../features/qsyWipe'
+import { dopplerDrivesDial, setQsyWipe } from '../features/qsyWipe'
 import type { AppSnapshot, FieldDayStatus } from '../types'
 
 vi.mock('../api', async (importOriginal) => {
@@ -55,7 +55,7 @@ const at = (dialMhz: number, rigKeyed = false) =>
     bandChangeTick: 1,
   }) as unknown as AppSnapshot
 
-const entry = (snap: AppSnapshot, logger: boolean, satellite: string | null = null) => (
+const entry = (snap: AppSnapshot, logger: boolean, satellite: string | null = null, dopplerTracking = false) => (
   <ContestLargeEntry
     snap={snap}
     fieldDay={party()}
@@ -66,6 +66,7 @@ const entry = (snap: AppSnapshot, logger: boolean, satellite: string | null = nu
     operator=""
     onSaveOperator={() => {}}
     satellite={satellite}
+    dopplerTracking={dopplerTracking}
     entryOnly
   />
 )
@@ -117,6 +118,23 @@ describe('the QSY wipe on the Contest screen and in the logger window', () => {
     view.rerender(entry(at(435.81), true, 'SO-50'))
     await wait(5000)
     expect(callBox().value).toBe('K9AAA')
+  })
+
+  it('the main window\'s Contest screen during a Doppler-tracked pass leaves the line alone', async () => {
+    const view = render(entry(at(435.8), false, null, true))
+    fireEvent.change(callBox(), { target: { value: 'K9AAA' } })
+    view.rerender(entry(at(435.81), false, null, true))
+    await wait(5000)
+    expect(callBox().value).toBe('K9AAA')
+  })
+
+  it('a track drives the dial only while Doppler corrects a leg (App reads this from its pass poll)', () => {
+    const track = (dopplerDownlink: boolean, dopplerUplink: boolean) =>
+      ({ name: 'SO-50', state: 'tracking', mode: 'rotor+doppler', dopplerDownlink, dopplerUplink }) as unknown as Parameters<typeof dopplerDrivesDial>[0]
+    expect(dopplerDrivesDial(null)).toBe(false)
+    expect(dopplerDrivesDial(track(false, false))).toBe(false)
+    expect(dopplerDrivesDial(track(true, false))).toBe(true)
+    expect(dopplerDrivesDial(track(false, true))).toBe(true)
   })
 
   it('is off by default', async () => {

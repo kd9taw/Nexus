@@ -216,6 +216,7 @@ import { processDxpedAlerts } from './features/dxpedChase'
 import { checkDxpedAlarms } from './features/dxpedAlarm'
 import { checkSatAlarms, satAlarmMap } from './features/satAlarm'
 import { tickSatPassAlert } from './features/satPassAlert'
+import { dopplerDrivesDial } from './features/qsyWipe'
 import type { EsmSetting } from './features/esmHost'
 import { tickIssAutoArm } from './features/issAutoArm'
 import { enterView, isDecoderScreen, type DecoderScreen } from './features/decoderScreens'
@@ -453,6 +454,8 @@ function App() {
   // walkthrough offer. Pure documentation: it writes nothing and is never
   // shown unasked, so there is no "seen" flag to persist.
   const [showGuide, setShowGuide] = useState(false)
+  // Is a satellite track's Doppler driving the dial (the pass poll below, `dopplerDrivesDial`)?
+  const [dopplerTracking, setDopplerTracking] = useState(false)
   // The first-run question ("How much have you done?") is asked only when the wizard opens by
   // itself on a fresh install; re-opened from Settings it does not ask again.
   const [wizardAsks, setWizardAsks] = useState(showWizard)
@@ -1293,6 +1296,9 @@ function App() {
         .then((t) => {
           if (!live || seq < applied) return
           applied = seq
+          // The same answer says whether Doppler drives the dial now: the Contest screen's QSY
+          // wipe stands down while it does.
+          setDopplerTracking(dopplerDrivesDial(t))
           tickSatPassAlert(t, Math.floor(Date.now() / 1000), {
             soundOff: settingsRef.current?.satPassAlertSoundOff === true,
             rotPostPass: settingsRef.current?.rotPostPass ?? 'stop',
@@ -3896,6 +3902,7 @@ function App() {
               title={t('contestScreen.entry.title')}
               operator={settings ? (settings.fdOperator ?? '') : null}
               onSaveOperator={handleSetOperator}
+              dopplerTracking={dopplerTracking}
               operatorAsk={operatorAsk}
               onOperatorFocused={() => setOperatorAsk(0)}
               barEnd={
