@@ -8,10 +8,13 @@
 //    back, and Ctrl+W cannot be undone. Ctrl+W typed in a text box that is not the log line's is
 //    left to that box.
 //  · "Wipe an unlogged call when I QSY" (Settings ▸ Logbook ▸ Log line, off by default) sets the
-//    un-logged line aside, with Restore, when the dial moves off the contact's frequency: more than
-//    3 kHz on phone, more than 1 kHz on CW and the digital modes. Never while transmitting, and a
-//    transmission on the new frequency makes it the contact's.
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+//    un-logged line aside, with Restore, when the dial moves off the contact's frequency and stays
+//    off for QSY_HOLD_MS: more than 3 kHz on phone, more than 1 kHz on CW and the digital modes.
+//    Never while transmitting, nor on a dial read taken during an over: a keyed rig in split reads
+//    back its TX VFO, and the rig's own PTT is polled only about once a second, so an over is seen
+//    late and the dial read during it is not where the contact is. A transmission on the new
+//    frequency makes it the contact's, once the dial has settled after the over.
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act } from '@testing-library/react'
 import type { ComponentProps } from 'react'
 import { LogEntry } from './LogEntry'
@@ -197,23 +200,40 @@ describe('Ctrl+W and Alt+W wipe every log line, not only a contest strip', () =>
 })
 
 describe('"Wipe an unlogged call when I QSY"', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+  /** Time passing with the dial where it is: the hold, or an over. */
+  const wait = (ms: number) => act(async () => { vi.advanceTimersByTime(ms) })
+  /** The station on `dialMhz`, keyed (the engine's TX owner or the rig's own PTT read back) or not. */
+  const rx = (dialMhz: number) => at(dialMhz)
+  const keyedByRig = (dialMhz: number) =>
+    ({ ...at(dialMhz), radio: { band: '20m', dialMhz, transmitting: false, rigKeyed: true } }) as unknown as AppSnapshot
+  const keyedByNexus = (dialMhz: number) =>
+    ({ ...at(dialMhz), radio: { band: '20m', dialMhz, transmitting: false, txBusyReason: 'cw' } }) as unknown as AppSnapshot
+
   it('is off by default: a QSY leaves the call in the line', async () => {
-    const view = render(phone(at(14.25)))
+    const view = render(phone(rx(14.25)))
     type(call(), 'EA8XX')
-    view.rerender(phone(at(14.27)))
-    await settle()
+    view.rerender(phone(rx(14.27)))
+    await wait(5000)
     expect(call().value).toBe('EA8XX')
   })
 
-  it('on phone, a move of 3 kHz or less keeps the line, and more sets it aside, with Restore', async () => {
+  it('on phone, a move of 3 kHz or less keeps the line, and more, held, sets it aside, with Restore', async () => {
     setQsyWipe(true)
-    const view = render(phone(at(14.25)))
+    const view = render(phone(rx(14.25)))
     fillEa8xx()
-    view.rerender(phone(at(14.253)))
-    await settle()
+    view.rerender(phone(rx(14.253)))
+    await wait(5000)
     expect(lineNow(), 'tuning onto the voice is not a QSY').toEqual(FILLED)
-    view.rerender(phone(at(14.2535)))
+    view.rerender(phone(rx(14.2535)))
     await settle()
+    expect(lineNow(), 'not before the move has held').toEqual(FILLED)
+    await wait(2500)
     expect(lineNow()).toEqual(BLANK)
     expect(notice()?.textContent).toContain('EA8XX')
     expect(notice()?.textContent, 'the notice says where it will log').toContain('14.250')
@@ -221,8 +241,8 @@ describe('"Wipe an unlogged call when I QSY"', () => {
     await settle()
     expect(lineNow()).toEqual(FILLED)
     // Put back on the new frequency, it is not wiped again for being there.
-    view.rerender(phone(at(14.2536)))
-    await settle()
+    view.rerender(phone(rx(14.2536)))
+    await wait(5000)
     expect(lineNow()).toEqual(FILLED)
     // …and logs on the frequency it was made on.
     fireEvent.click(screen.getByRole('button', { name: /^log$/i }))
@@ -230,61 +250,118 @@ describe('"Wipe an unlogged call when I QSY"', () => {
     expect((mockedLog.mock.calls[0][0] as unknown as { freqMhz: number }).freqMhz).toBeCloseTo(14.25, 6)
   })
 
-  it('on CW, more than 1 kHz is a QSY', async () => {
+  it('on CW, more than 1 kHz, held, is a QSY', async () => {
     setQsyWipe(true)
-    const view = render(cw(at(14.025)))
+    const view = render(cw(rx(14.025)))
     type(call(), 'EA8XX')
-    view.rerender(cw(at(14.0259)))
-    await settle()
+    view.rerender(cw(rx(14.0259)))
+    await wait(5000)
     expect(call().value).toBe('EA8XX')
-    view.rerender(cw(at(14.0262)))
-    await settle()
+    view.rerender(cw(rx(14.0262)))
+    await wait(2500)
     expect(call().value).toBe('')
+  })
+
+  it('a quick spin out and back is not a QSY', async () => {
+    setQsyWipe(true)
+    const view = render(cw(rx(14.025)))
+    type(call(), 'EA8XX')
+    view.rerender(cw(rx(14.03)))
+    await wait(1000)
+    view.rerender(cw(rx(14.025)))
+    await wait(5000)
+    expect(call().value).toBe('EA8XX')
+  })
+
+  it('SPLIT, keyed at the rig\'s own mic: the TX VFO read before the PTT poll sees the key never wipes', async () => {
+    setQsyWipe(true)
+    const view = render(phone(rx(14.195)))
+    type(call(), 'EA8XX')
+    // Keyed at the mic: the rig reads back its TX VFO 5 kHz up, and the PTT read is a second late.
+    view.rerender(phone(rx(14.2)))
+    await wait(1000)
+    view.rerender(phone(keyedByRig(14.2)))
+    await wait(4000)
+    // Unkeyed: the dial is the RX VFO again, the PTT read still a second late.
+    view.rerender(phone(keyedByRig(14.195)))
+    await wait(1000)
+    view.rerender(phone(rx(14.195)))
+    await wait(5000)
+    expect(call().value).toBe('EA8XX')
+  })
+
+  it('SPLIT, a pile-up: an over read at the TX VFO, then the RX VFO again, never wipes, call after call', async () => {
+    setQsyWipe(true)
+    const view = render(cw(rx(14.025)))
+    type(call(), 'EA8XX')
+    for (let over = 0; over < 3; over++) {
+      view.rerender(cw(keyedByNexus(14.027)))
+      await wait(3000)
+      view.rerender(cw(rx(14.025)))
+      await wait(5000)
+      expect(call().value, `after over ${over + 1}`).toBe('EA8XX')
+    }
   })
 
   it('never during a transmission, and a transmission on the new frequency makes it the contact\'s', async () => {
     setQsyWipe(true)
-    const view = render(phone(at(14.25)))
+    const view = render(phone(rx(14.25)))
     type(call(), 'EA8XX')
-    view.rerender(phone(at(14.26, true)))
+    view.rerender(phone(rx(14.26)))
     await settle()
+    view.rerender(phone(keyedByNexus(14.26)))
+    await wait(5000)
     expect(call().value, 'mid-over: untouched').toBe('EA8XX')
-    view.rerender(phone(at(14.26, false)))
-    await settle()
+    view.rerender(phone(rx(14.26)))
+    await wait(5000)
     expect(call().value, 'called on 14.260: the contact is there now').toBe('EA8XX')
+  })
+
+  it('a move made while the other-radio override is open never wipes, then or when it closes', async () => {
+    setQsyWipe(true)
+    const view = render(phone(rx(14.25)))
+    type(call(), 'EA8XX')
+    const toggle = screen.getByRole('button', { name: /Log a contact from another radio/ })
+    fireEvent.click(toggle)
+    view.rerender(phone(rx(14.27)))
+    await wait(5000)
+    expect(call().value, 'override open').toBe('EA8XX')
+    fireEvent.click(toggle)
+    await wait(5000)
+    expect(call().value, 'override closed: the line is where the dial is now').toBe('EA8XX')
   })
 
   it('an empty line is never set aside, and a call typed after a QSY is anchored where it was typed', async () => {
     setQsyWipe(true)
-    const view = render(phone(at(14.25)))
-    view.rerender(phone(at(14.3)))
-    await settle()
+    const view = render(phone(rx(14.25)))
+    view.rerender(phone(rx(14.3)))
+    await wait(5000)
     expect(notice()).toBeNull()
     type(call(), 'EA8XX')
-    view.rerender(phone(at(14.301)))
-    await settle()
+    view.rerender(phone(rx(14.301)))
+    await wait(5000)
     expect(call().value).toBe('EA8XX')
   })
 
   it('the Satellites line is never touched: its dial follows Doppler', async () => {
     setQsyWipe(true)
-    const view = render(sat(at(145.8)))
+    const view = render(sat(rx(145.8)))
     type(call(), 'EA8XX')
-    view.rerender(sat(at(145.81)))
-    await settle()
+    view.rerender(sat(rx(145.81)))
+    await wait(5000)
     expect(call().value).toBe('EA8XX')
   })
 
   it('turned on with a call already in the line, the call is anchored where the dial is then', async () => {
-    const view = render(phone(at(14.25)))
+    const view = render(phone(rx(14.25)))
     type(call(), 'EA8XX')
-    view.rerender(phone(at(14.26)))
+    view.rerender(phone(rx(14.26)))
     await settle()
     act(() => setQsyWipe(true))
-    await settle()
+    await wait(5000)
     expect(call().value).toBe('EA8XX')
-    view.rerender(phone(at(14.27)))
-    await settle()
+    view.rerender(phone(rx(14.27)))
+    await wait(2500)
     expect(call().value).toBe('')
   })
 })

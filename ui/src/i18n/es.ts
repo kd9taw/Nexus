@@ -10346,6 +10346,7 @@ export const ES: PartialCatalog = {
   "logEntry.bandCleared.contestBand": "Un contacto de concurso se registra en la banda del equipo: vuelva a {{band}} para restaurarlo.",
   "logEntry.qsyCleared": "Salió de {{freq}} MHz: se apartó la línea de registro de {{call}}. Restaurar la devuelve, para registrarla en {{freq}} MHz.",
   "logEntry.qsyCleared.noCall": "Salió de {{freq}} MHz: se apartó la línea de registro. Restaurar la devuelve, para registrarla en {{freq}} MHz.",
+  "logEntry.qsyCleared.contest": "Salió de {{freq}} MHz: se apartó la línea de registro. Restaurar la devuelve; un contacto de concurso se registra en la frecuencia del equipo.",
   // contest stats tab
   "contestStats.tabs.aria": "Vista de la pantalla de concurso",
   "contestStats.tab.score": "Marcador",

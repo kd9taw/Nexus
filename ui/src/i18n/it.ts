@@ -342,6 +342,7 @@ export const IT: PartialCatalog = {
   "logEntry.bandCleared.contestBand": "Un collegamento in contest viene registrato sulla banda in cui si trova la radio: torna su {{band}} per ripristinarlo.",
   "logEntry.qsyCleared": "Hai lasciato {{freq}} MHz: la riga di log per {{call}} è stata messa da parte. Ripristina la rimette, per registrare su {{freq}} MHz.",
   "logEntry.qsyCleared.noCall": "Hai lasciato {{freq}} MHz: la riga di log è stata messa da parte. Ripristina la rimette, per registrare su {{freq}} MHz.",
+  "logEntry.qsyCleared.contest": "Hai lasciato {{freq}} MHz: la riga di log è stata messa da parte. Ripristina la rimette; un collegamento in contest viene registrato sulla frequenza in cui si trova la radio.",
   "settings.save.contestBlocked": "Salvare passerebbe il contest in corso a {{contest}}, che non può ancora iniziare: {{reason}}",
   "bandPicker.select.title": "Banda: la tua ultima frequenza su questa banda in questo modo in questa sessione, altrimenti l'inizio del tuo segmento autorizzato",
   "bandPicker.txLock.label": "🔒 TX bloccato",

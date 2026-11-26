@@ -1961,16 +1961,17 @@ lists a logged contact is checked against. The services you upload to are on
 JTTY and JS8 screens, a band change always sets an unlogged contact in the log line
 aside, with **Restore** to put it back. Turn this on and moving the dial off the
 contact's frequency does the same: more than 3 kHz on phone, more than 1 kHz on CW
-and the digital modes. Restore puts the line back to log on the frequency it was
-made on. It never acts while you transmit, and if you transmit on the new frequency
-the contact belongs there. A contact being logged or edited, or typed for another
+and the digital modes, once the dial has stayed there for 2 seconds (so a quick
+spin out and back does nothing). Restore puts the line back to log on the frequency
+it was made on; a contest contact logs on the frequency the radio is on, as every
+contest contact does. It never acts while you transmit, and a dial reading taken
+during an over is ignored: a radio in split reads back its transmit frequency while
+keyed. If you transmit on the new frequency, the contact belongs there. A contact being logged or edited, or typed for another
 radio, is left alone, and the Satellites and FT screens are never touched (a
 satellite's dial follows Doppler; an FT contact is sequenced). N1MM Logger+ has the
 same idea as "QSYing wipes the call & spots QSO in bandmap". To wipe the
 line by hand, press **Alt+W** or **Ctrl+W** on any screen with a log line; a second
 Alt+W right after puts the line back, while Ctrl+W, as in N1MM, cannot be undone. Remembered per computer, in every window.
-
-_Undocumented so far._
 
 ### Deleted contacts
 

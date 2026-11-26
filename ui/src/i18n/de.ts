@@ -10336,6 +10336,7 @@ export const DE: PartialCatalog = {
   "logEntry.bandCleared.contestBand": "Ein Contest-QSO wird auf dem Band geloggt, auf dem das Funkgerät steht: Zum Wiederherstellen zurück auf {{band}}.",
   "logEntry.qsyCleared": "Sie haben {{freq}} MHz verlassen: Die Logzeile für {{call}} wurde beiseitegelegt. Wiederherstellen holt sie zurück, geloggt auf {{freq}} MHz.",
   "logEntry.qsyCleared.noCall": "Sie haben {{freq}} MHz verlassen: Die Logzeile wurde beiseitegelegt. Wiederherstellen holt sie zurück, geloggt auf {{freq}} MHz.",
+  "logEntry.qsyCleared.contest": "Sie haben {{freq}} MHz verlassen: Die Logzeile wurde beiseitegelegt. Wiederherstellen holt sie zurück; ein Contest-QSO wird auf der Frequenz geloggt, auf der das Funkgerät steht.",
   // contest stats tab
   "contestStats.tabs.aria": "Ansicht des Contest-Bildschirms",
   "contestStats.tab.score": "Punktestand",

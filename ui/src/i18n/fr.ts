@@ -10346,6 +10346,7 @@ export const FR: PartialCatalog = {
   "logEntry.bandCleared.contestBand": "Un contact de concours est journalisé sur la bande de la radio : revenez sur {{band}} pour le rétablir.",
   "logEntry.qsyCleared": "Vous avez quitté {{freq}} MHz : la ligne du log pour {{call}} a été mise de côté. Rétablir la remet, pour la journaliser sur {{freq}} MHz.",
   "logEntry.qsyCleared.noCall": "Vous avez quitté {{freq}} MHz : la ligne du log a été mise de côté. Rétablir la remet, pour la journaliser sur {{freq}} MHz.",
+  "logEntry.qsyCleared.contest": "Vous avez quitté {{freq}} MHz : la ligne du log a été mise de côté. Rétablir la remet ; un contact de concours est journalisé sur la fréquence de la radio.",
   // contest stats tab
   "contestStats.tabs.aria": "Vue de l’écran concours",
   "contestStats.tab.score": "Tableau des scores",

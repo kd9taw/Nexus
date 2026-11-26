@@ -81,6 +81,11 @@ import { useQsyWipe } from '../features/qsyWipe'
 // entry-strip.html`), never in jsdom — jsdom lays out nothing and every rect is 0.
 // ---------------------------------------------------------------------------
 
+/** How long a dial move must hold, with nothing on the air in it, before the QSY wipe sets the line
+ *  aside — longer than the rig's own PTT read (polled about once a second), so an over keyed at
+ *  the rig in split, read back at its TX VFO before the key is seen, is never taken for a QSY. */
+export const QSY_HOLD_MS = 2000
+
 /** How long a call stands in the strip before it is reported to the Rotor box (`onEntryCall`). */
 export const ENTRY_SETTLE_MS = 300
 
@@ -1620,31 +1625,73 @@ export function LogEntry({
   // Logbook ▸ Log line, `features/qsyWipe`; N1MM Logger+'s "QSYing wipes the call"). The line's
   // contact is anchored at the dial where the line first held something; a move of more than
   // `qsyWipeHz` from there — 3 kHz on phone, a voice's width, and 1 kHz on CW and the digital modes,
-  // where a station 1 kHz away is another station — sets it aside as a band change does, with
-  // Restore, which logs it on the frequency it was made on. A band change is the effect's above.
-  // Only on a strip that clears on a band change (never Satellites, whose dial follows Doppler), and
-  // never while transmitting: a transmission on the new frequency makes it the contact's, so the
-  // line is anchored there. Never a contact being logged or edited, nor one for another radio (the
-  // override). The FT screens have no such line: their contact is sequenced, and nothing here
-  // reaches it.
+  // where a station 1 kHz away is another station — that HOLDS for `QSY_HOLD_MS` sets it aside as a
+  // band change does, with Restore. A band change is the effect's above. Only on a strip that
+  // clears on a band change (never Satellites, whose dial follows Doppler); the FT screens have no
+  // such line, their contact being sequenced.
+  //
+  // ⛔ A DIAL READ DURING AN OVER IS NOT WHERE THE CONTACT IS. A keyed rig in split reads back its
+  // TX VFO, and the rig's own PTT (`rigKeyed`) is polled only about once a second, so an over keyed
+  // at the rig's mic or paddle shows first as a dial jump with nothing on air, and its end as the
+  // RX dial coming back. Hence: the move must hold longer than that poll with no on-air sample in
+  // it (which also keeps a quick spin out and back from wiping); nothing is anchored while on air;
+  // and after an over the anchor is taken again only once the dial has been off the air for
+  // `QSY_HOLD_MS` — so a transmission on a new frequency makes it the contact's, and a pile-up's
+  // overs never move the anchor to the TX VFO. A contact being logged or edited, or one for another
+  // radio (the override), is never set aside: it is anchored where the dial is meanwhile, so the
+  // moment the guard lifts is no QSY.
   const [qsyWipe] = useQsyWipe()
   const qsyWipeHz = fdMode === 'PH' ? 3000 : 1000
   const qsyAnchor = useRef<{ band: string; dialMhz: number; context: LineContext } | null>(null)
+  // When the dial was first seen off the anchor (null: it is not), and when the station was last
+  // seen on the air (or the anchor last needs taking again after an over).
+  const qsyAwaySince = useRef<number | null>(null)
+  const qsyOnAirAt = useRef<number | null>(null)
+  // A render after the hold, so a move held with no new snapshot is still seen.
+  const [, setQsyRecheck] = useState(0)
+  const qsyTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (qsyTimer.current) clearTimeout(qsyTimer.current) }, [])
   useEffect(() => {
     const radio = snap.radio
+    const recheck = () => {
+      if (qsyTimer.current) clearTimeout(qsyTimer.current)
+      qsyTimer.current = setTimeout(() => { qsyTimer.current = null; setQsyRecheck((n) => n + 1) }, QSY_HOLD_MS + 50)
+    }
     if (!qsyWipe || !clearCallOnBandChange || remoteMode || !lineHasContent(currentLine())) {
       qsyAnchor.current = null
+      qsyAwaySince.current = null
+      qsyOnAirAt.current = null
+      return
+    }
+    const now = Date.now()
+    if (isOnAir(radio)) {
+      qsyOnAirAt.current = now
+      qsyAwaySince.current = null
+      return
+    }
+    const here = { band: radio.band, dialMhz: radio.dialMhz, context: draftContext ?? lineContextNow() }
+    if (qsyOnAirAt.current != null) {
+      // Just off the air: the dial is not settled until it has been off for the hold.
+      if (now - qsyOnAirAt.current < QSY_HOLD_MS) return recheck()
+      qsyOnAirAt.current = null
+      qsyAnchor.current = here
       return
     }
     const anchor = qsyAnchor.current
-    if (!anchor || anchor.band !== radio.band || isOnAir(radio)) {
-      qsyAnchor.current = { band: radio.band, dialMhz: radio.dialMhz, context: draftContext ?? lineContextNow() }
+    if (!anchor || anchor.band !== radio.band || committing.current || overrideOpen || editing) {
+      qsyAnchor.current = here
+      qsyAwaySince.current = null
       return
     }
-    if (committing.current || overrideOpen || editing) return
     // To the hertz, so float noise in the MHz never decides a move of exactly the threshold.
-    if (Math.round(Math.abs(radio.dialMhz - anchor.dialMhz) * 1e6) <= qsyWipeHz) return
+    if (Math.round(Math.abs(radio.dialMhz - anchor.dialMhz) * 1e6) <= qsyWipeHz) {
+      qsyAwaySince.current = null
+      return
+    }
+    if (qsyAwaySince.current == null) qsyAwaySince.current = now
+    if (now - qsyAwaySince.current < QSY_HOLD_MS) return recheck()
     qsyAnchor.current = null
+    qsyAwaySince.current = null
     setLineAside(anchor.context, true)
   })
   useEffect(() => {
@@ -3089,12 +3136,16 @@ export function LogEntry({
   const bandClearedNotice = bandCleared && (
     <p className="le-contest-resume le-band-cleared" role="status">
       {bandCleared.qsy
-        ? bandCleared.line.call.trim()
-          ? t('logEntry.qsyCleared', {
-              call: bandCleared.line.call.trim().toUpperCase(),
-              freq: bandCleared.context.freqMhz.toFixed(3),
-            })
-          : t('logEntry.qsyCleared.noCall', { freq: bandCleared.context.freqMhz.toFixed(3) })
+        ? fdActive
+          ? // A contest contact logs where the radio is (the contest log takes no frequency), so a
+            // contest strip's notice never promises the frequency the line was made on.
+            t('logEntry.qsyCleared.contest', { freq: bandCleared.context.freqMhz.toFixed(3) })
+          : bandCleared.line.call.trim()
+            ? t('logEntry.qsyCleared', {
+                call: bandCleared.line.call.trim().toUpperCase(),
+                freq: bandCleared.context.freqMhz.toFixed(3),
+              })
+            : t('logEntry.qsyCleared.noCall', { freq: bandCleared.context.freqMhz.toFixed(3) })
         : bandCleared.line.call.trim()
           ? t('logEntry.bandCleared', {
               call: bandCleared.line.call.trim().toUpperCase(),

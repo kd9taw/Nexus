@@ -328,6 +328,7 @@ export const ZH_HANT: PartialCatalog = {
   "logEntry.bandCleared.contestBand": "比賽通聯記錄在目前電台所在波段：回到 {{band}} 以恢復它。",
   "logEntry.qsyCleared": "您已離開 {{freq}} MHz：{{call}} 的日誌行已被暫存。恢復將把它放回，以在 {{freq}} MHz 上記錄。",
   "logEntry.qsyCleared.noCall": "您已離開 {{freq}} MHz：日誌行已被暫存。恢復將把它放回，以在 {{freq}} MHz 上記錄。",
+  "logEntry.qsyCleared.contest": "您已離開 {{freq}} MHz：日誌行已被暫存。恢復將把它放回；比賽通聯記錄在電台目前所在的頻率上。",
   "settings.save.contestBlocked": "儲存會將正在進行的比賽切換為 {{contest}}，但該比賽尚無法啟動：{{reason}}",
   "bandPicker.select.title": "波段——本工作階段中此模式下該波段的上次頻率，否則為你授權頻段起點",
   "bandPicker.txLock.label": "🔒 TX 鎖定",

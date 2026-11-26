@@ -6135,6 +6135,7 @@ export const EN = {
   'logEntry.bandCleared.contestBand': 'A contest contact logs on the band the radio is on: go back to {{band}} to restore it.',
   'logEntry.qsyCleared': 'You moved off {{freq}} MHz: the log line for {{call}} was set aside. Restore puts it back, to log on {{freq}} MHz.',
   'logEntry.qsyCleared.noCall': 'You moved off {{freq}} MHz: the log line was set aside. Restore puts it back, to log on {{freq}} MHz.',
+  'logEntry.qsyCleared.contest': 'You moved off {{freq}} MHz: the log line was set aside. Restore puts it back; a contest contact logs on the frequency the radio is on.',
   'fieldDay.log.remove': 'Remove',
   'fieldDay.log.remove.ask': 'Remove {{contact}}? Click Remove again.',
   'fieldDay.log.remove.title': 'Take this contact out of the contest log. It is kept under Removed and can be restored. Click twice: the first click asks.',

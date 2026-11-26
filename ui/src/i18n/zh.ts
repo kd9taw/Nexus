@@ -326,6 +326,7 @@ export const ZH: PartialCatalog = {
   "logEntry.bandCleared.contestBand": "比赛通联记录在当前电台所在波段：回到 {{band}} 以恢复它。",
   "logEntry.qsyCleared": "您已离开 {{freq}} MHz：{{call}} 的日志行已被暂存。恢复将把它放回，以在 {{freq}} MHz 上记录。",
   "logEntry.qsyCleared.noCall": "您已离开 {{freq}} MHz：日志行已被暂存。恢复将把它放回，以在 {{freq}} MHz 上记录。",
+  "logEntry.qsyCleared.contest": "您已离开 {{freq}} MHz：日志行已被暂存。恢复将把它放回；比赛通联记录在电台当前所在的频率上。",
   "settings.save.contestBlocked": "保存会将正在进行的比赛切换为 {{contest}}，但该比赛尚无法启动：{{reason}}",
   "bandPicker.select.title": "波段——本会话中此模式下该波段的上次频率，否则为你授权频段起点",
   "bandPicker.txLock.label": "🔒 TX 锁定",
