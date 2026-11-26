@@ -2221,6 +2221,18 @@ DXKeeper under *Configuration ▸ Defaults ▸ Network Service* first.
   DXKeeper ignores it for Club Log and QRZ if *Auto upload* is ticked on its own
   QSL Configuration tab — untick it there.
 
+### TCP ADIF output (JTDX-style)
+
+Sends every contact you log to a logger over TCP, the way JTDX does, for a logger
+that listens for JTDX's feed (RadioGes RG40, for example). Enter the logger's host
+and port; JTDX's default port, 52001, is filled in. It is off until you enter a host.
+
+Each contact goes as one ADIF record, with the same Log command JTDX sends. Logging
+is never held up by the logger: if it is not running, contacts wait (up to 256) and
+Nexus tries again every 30 seconds. The section says whether the logger is
+answering and how many contacts are waiting; a logger that refuses a contact says
+so in the Connections log.
+
 ### N3FJP Integration (club master log)
 
 "Each contact you log in Contest mode reaches the club's master N3FJP log the
