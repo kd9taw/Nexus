@@ -131,12 +131,15 @@ describe('the QSY wipe on the Contest screen and in the logger window', () => {
     expect(callBox().value).toBe('K9AAA')
   })
 
-  it('any satellite pass up holds the wipe, Doppler on or not (App reads this from its pass poll)', () => {
-    const track = (dopplerDownlink: boolean) =>
-      ({ name: 'SO-50', state: 'armed', mode: 'rotor-only', dopplerDownlink, dopplerUplink: false }) as unknown as Parameters<typeof passHoldsDial>[0]
+  it('a pass holds the wipe only while it is up (AOS to LOS) or Doppler drives a leg; an armed wait does not', () => {
+    const track = (state: string, dopplerDownlink = false, dopplerUplink = false) =>
+      ({ name: 'SO-50', state, mode: 'rotor-only', dopplerDownlink, dopplerUplink }) as unknown as Parameters<typeof passHoldsDial>[0]
     expect(passHoldsDial(null)).toBe(false)
-    expect(passHoldsDial(track(false))).toBe(true)
-    expect(passHoldsDial(track(true))).toBe(true)
+    expect(passHoldsDial(track('armed')), 'armed, up to two days ahead').toBe(false)
+    expect(passHoldsDial(track('prepositioning')), 'the rotor slews; the dial is the operator\'s').toBe(false)
+    expect(passHoldsDial(track('tracking')), 'the pass is up').toBe(true)
+    expect(passHoldsDial(track('armed', true))).toBe(true)
+    expect(passHoldsDial(track('prepositioning', false, true))).toBe(true)
   })
 
   it('TWO WINDOWS, ONE LINE: only the logger window runs the wipe, so one notice, one Restore', async () => {

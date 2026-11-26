@@ -1609,12 +1609,16 @@ export function LogEntry({
     (!l.parkFor.hunt && l.parkRef.trim() !== '') ||
     l.rstSent != null ||
     l.rstRcvd != null
+  /** Every received box, empty: what a wipe leaves. Each box goes as an empty value rather than
+   *  absent, so a window sharing the line (`takeUp`, which keeps a box the entry does not hold)
+   *  empties its copy too, and nothing of the wiped contact rides into the next call. */
+  const wipedFields = (): Record<string, string> => Object.fromEntries(fdReceives.map((f) => [f.key, '']))
   const setLineAside = (context: LineContext, qsy = false) => {
     setBandCleared({ line: currentLine(), context, qsy, fdFields, fill: fillRef.current })
     // As Clear does (the serial in flight released, Enter Sends Message at a new contact), and every
     // box with it, as Alt+W's wipe does. No caret move: the operator is at the band control.
     reset(false)
-    setFdFields({})
+    setFdFields(wipedFields())
   }
   useEffect(() => {
     const seen = bandTickSeen.current
@@ -2281,7 +2285,7 @@ export function LogEntry({
     wipedRef.current = null
     if (!undoable) {
       reset()
-      setFdFields({})
+      setFdFields(wipedFields())
       return
     }
     const blank = fdActive
@@ -2295,7 +2299,7 @@ export function LogEntry({
     }
     wipedRef.current = { line: currentLine(), fields: fdFields, fill: fillRef.current }
     reset()
-    setFdFields({})
+    setFdFields(wipedFields())
   }
   pressWipeRef.current = pressWipe
 

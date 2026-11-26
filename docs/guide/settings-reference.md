@@ -1969,9 +1969,11 @@ during an over is ignored: a radio in split reads back its transmit frequency wh
 keyed. If you transmit on the new frequency, the contact belongs there. The same
 applies to the Contest screen's log line and the contest logger window (a band
 change leaves their line as it is, as before, and neither touches it while a
-satellite pass is up). With the logger window open the two windows show one line,
-and only the logger window sets it aside; a new call typed in either window, or
-that contact logged, ends a waiting Restore. A contact being logged or edited, or typed for
+satellite pass is up, from AOS to LOS or while Doppler corrects the radio). With the logger window open the two windows show one line,
+and only the logger window sets it aside, emptying every box in both. A new call
+typed in the other window, or that contact logged from either, ends a waiting
+Restore; in the window showing it, Restore puts the line back over what is there,
+as after a band change. A contact being logged or edited, or typed for
 another radio, is left alone, and the Satellites and FT screens are never touched (a
 satellite's dial follows Doppler; an FT contact is sequenced). N1MM Logger+ has the
 same idea as "QSYing wipes the call & spots QSO in bandmap". To wipe the

@@ -53,10 +53,10 @@ export function useQsyWipe(): [boolean, (on: boolean) => void] {
   return [on, setQsyWipe]
 }
 
-/** Does a satellite pass hold the dial? Any track at all, armed or tracking, Doppler on or not:
- *  Doppler may take a leg at any tick and the pass poll answers only every 2 s, so a contest line
- *  takes no move for a QSY while a pass is up (App's pass poll for the main window's Contest
- *  screen, and the logger window's own). */
+/** Does a satellite pass hold the dial? While the pass is UP (`tracking`, AOS to LOS) or Doppler
+ *  drives either leg. Not while a track is only armed — that can be two days ahead — or a rotor is
+ *  slewing to the AOS azimuth with the dial left to the operator: the wipe works then as it always
+ *  does. Read by App's pass poll for the main window's Contest screen, and the logger window's own. */
 export function passHoldsDial(track: SatTrackStatus | null): boolean {
-  return track != null
+  return track != null && (track.state === 'tracking' || track.dopplerDownlink || track.dopplerUplink)
 }
