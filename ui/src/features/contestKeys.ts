@@ -2,9 +2,9 @@
 // its keys here, is `contestRemoval.ts`'s):
 //
 //   Alt+W or Ctrl+W, N1MM Logger+'s two wipe keys, wipe the log line — every log line, not only a
-//   contest strip's — and a contest strip releases the serial number in flight; a second press
-//   right after puts it back (`LogEntry` keeps the line it wiped). N1MM's own Ctrl+W cannot be
-//   undone; here both keys can, at the operator's request;
+//   contest strip's — and a contest strip releases the serial number in flight. As in N1MM, a
+//   second Alt+W right after puts the line back (`LogEntry` keeps the line it wiped), and Ctrl+W
+//   is irreversible;
 //   Ctrl+O sets the operator call: it takes the caret to the operator box.
 //
 // THE OPERATOR BOX IS NOT THE STRIP'S. It is the Contest screen's — on the title line of its large

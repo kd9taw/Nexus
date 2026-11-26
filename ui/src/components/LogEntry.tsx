@@ -885,10 +885,10 @@ export function LogEntry({
   // key lets it lapse, as every other key lets a removal lapse.
   const [esmLine, setEsmLine] = useState<{ text: string; alert: boolean; about?: string } | null>(null)
   const esmLineKey = useRef<Event | null>(null)
-  // The line Alt+W or Ctrl+W wiped (`pressWipe`, below), kept until any other key: what a second
-  // press puts back.
+  // The line Alt+W wiped (`pressWipe`, below), kept until any other key: what a second Alt+W puts
+  // back. Ctrl+W keeps none.
   const wipedRef = useRef<{ line: LogDraft; fields: Record<string, string>; fill: FillState } | null>(null)
-  const pressWipeRef = useRef<() => void>(() => {})
+  const pressWipeRef = useRef<(undoable: boolean) => void>(() => {})
   // The call Alt+M marks with (`features/freqMarkers.ts`).
   const markCallRef = useRef(logCall)
   markCallRef.current = logCall
@@ -1072,7 +1072,8 @@ export function LogEntry({
       e.preventDefault()
       // Pressed in a contact's edit, it is that edit's moment, not the entry line's.
       if (target?.closest('.contest-edit')) return
-      if (!e.repeat) pressWipeRef.current()
+      // Alt+W can be undone by a second Alt+W; Ctrl+W cannot, as in N1MM (`features/contestKeys.ts`).
+      if (!e.repeat) pressWipeRef.current(e.altKey)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -2190,20 +2191,26 @@ export function LogEntry({
     onReset?.()
   }
 
-  // ⭐ ALT+W OR CTRL+W — WIPE THE LINE, AND PUT IT BACK (`features/contestKeys.ts`: the same key
-  // again reverses it). The wipe clears the call as Clear does — on a contest strip the serial in
+  // ⭐ ALT+W OR CTRL+W — WIPE THE LINE; ALT+W ALSO PUTS IT BACK (`features/contestKeys.ts`: a second
+  // Alt+W reverses an Alt+W; Ctrl+W, as in N1MM, is irreversible and ends any Alt+W's chance to be
+  // put back — `undoable` false). The wipe clears the call as Clear does — on a contest strip the serial in
   // flight released, Enter Sends Message at a new contact — and every box as well, a report back to
   // its default, keeping what the line held. A second press, with no other key between and the line
   // still as the wipe left it, puts back the call and every box (`putLineBack`), a contest strip's
   // call-history marks with them, and a contest strip's station takes its serial number up again,
   // as the call box's commit does. What went out to the call is not put back: Enter Sends Message
   // starts that contact over, as after Clear.
-  const pressWipe = () => {
+  const pressWipe = (undoable: boolean) => {
     // A contact's edit (Ctrl+Y) has the line's place, and the line waits for it as typed: the wipe
     // wipes nothing while the edit is open.
     if (editRows.length > 0) return
     const wiped = wipedRef.current
     wipedRef.current = null
+    if (!undoable) {
+      reset()
+      setFdFields({})
+      return
+    }
     const blank = fdActive
       ? logCall.trim() === '' &&
         sentRstValue === sentRstDefault &&

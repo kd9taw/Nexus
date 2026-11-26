@@ -4,8 +4,9 @@
 // feature to clear the log. Say you are not going to get someone worked and move up the band").
 //
 //  · Ctrl+W joins Alt+W, N1MM Logger+'s two wipe keys, and both reach every log line, not only a
-//    contest strip: the call and every box go, and a second press right after puts them back.
-//    Ctrl+W typed in a text box that is not the log line's is left to that box.
+//    contest strip: the call and every box go. As in N1MM, a second Alt+W right after puts them
+//    back, and Ctrl+W cannot be undone. Ctrl+W typed in a text box that is not the log line's is
+//    left to that box.
 //  · "Wipe an unlogged call when I QSY" (Settings ▸ Logbook ▸ Log line, off by default) sets the
 //    un-logged line aside, with Restore, when the dial moves off the contact's frequency: more than
 //    3 kHz on phone, more than 1 kHz on CW and the digital modes. Never while transmitting, and a
@@ -98,24 +99,43 @@ beforeEach(() => {
 })
 
 describe('Ctrl+W and Alt+W wipe every log line, not only a contest strip', () => {
-  for (const [name, key] of [['Ctrl+W', CTRL_W], ['Alt+W', ALT_W]] as const) {
-    it(`${name} wipes the Phone line, every box of it, and a second ${name} right after puts it back`, async () => {
-      render(phone(at()))
-      fillEa8xx()
-      expect(lineNow()).toEqual(FILLED)
-      expect(await press(key, call()), `${name} is the line's: the webview gets nothing of it`).toBe(false)
-      expect(lineNow()).toEqual(BLANK)
-      expect(await press(key, call())).toBe(false)
-      expect(lineNow(), 'put back').toEqual(FILLED)
-    })
-  }
+  it('Alt+W wipes the Phone line, every box of it, and a second Alt+W right after puts it back', async () => {
+    render(phone(at()))
+    fillEa8xx()
+    expect(lineNow()).toEqual(FILLED)
+    expect(await press(ALT_W, call()), 'Alt+W is the line\'s: the webview gets nothing of it').toBe(false)
+    expect(lineNow()).toEqual(BLANK)
+    expect(await press(ALT_W, call())).toBe(false)
+    expect(lineNow(), 'put back').toEqual(FILLED)
+  })
+
+  it('Ctrl+W wipes the Phone line for good, as in N1MM: a second Ctrl+W, or an Alt+W, puts nothing back', async () => {
+    render(phone(at()))
+    fillEa8xx()
+    expect(await press(CTRL_W, call()), 'Ctrl+W is the line\'s: the webview gets nothing of it').toBe(false)
+    expect(lineNow()).toEqual(BLANK)
+    expect(await press(CTRL_W, call())).toBe(false)
+    expect(lineNow(), 'irreversible').toEqual(BLANK)
+    expect(await press(ALT_W, call())).toBe(false)
+    expect(lineNow(), 'Alt+W cannot undo a Ctrl+W').toEqual(BLANK)
+  })
+
+  it('Ctrl+W after an Alt+W ends the chance to put the Alt+W\'s line back', async () => {
+    render(phone(at()))
+    fillEa8xx()
+    await press(ALT_W)
+    await press(CTRL_W)
+    expect(lineNow(), 'Ctrl+W never puts back').toEqual(BLANK)
+    await press(ALT_W)
+    expect(lineNow()).toEqual(BLANK)
+  })
 
   it('any other key between the two presses ends the chance to put it back', async () => {
     render(phone(at()))
     fillEa8xx()
-    await press(CTRL_W)
+    await press(ALT_W)
     await press({ key: 'a', code: 'KeyA' })
-    await press(CTRL_W)
+    await press(ALT_W)
     expect(lineNow()).toEqual(BLANK)
   })
 
@@ -168,7 +188,8 @@ describe('Ctrl+W and Alt+W wipe every log line, not only a contest strip', () =>
   it('a wipe never logs anything', async () => {
     render(phone(at()))
     fillEa8xx()
-    await press(CTRL_W)
+    await press(ALT_W)
+    await press(ALT_W)
     await press(CTRL_W)
     await settle()
     expect(mockedLog).not.toHaveBeenCalled()

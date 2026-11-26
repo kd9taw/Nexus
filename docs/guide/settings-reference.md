@@ -1967,8 +1967,8 @@ the contact belongs there. A contact being logged or edited, or typed for anothe
 radio, is left alone, and the Satellites and FT screens are never touched (a
 satellite's dial follows Doppler; an FT contact is sequenced). N1MM Logger+ has the
 same idea as "QSYing wipes the call & spots QSO in bandmap". To wipe the
-line by hand, press **Alt+W** or **Ctrl+W** on any screen with a log line; press it
-again right after to put the line back. Remembered per computer, in every window.
+line by hand, press **Alt+W** or **Ctrl+W** on any screen with a log line; a second
+Alt+W right after puts the line back, while Ctrl+W, as in N1MM, cannot be undone. Remembered per computer, in every window.
 
 _Undocumented so far._
 
