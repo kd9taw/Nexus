@@ -34,6 +34,7 @@ function answerView(over: Partial<BestTimesView> = {}): BestTimesView {
     call: 'EA8ABC',
     entity: 'Canary Islands',
     basis: { kind: 'grid', from: 'heard', grid: 'IL18' },
+    myGrid: 'EN52',
     km: 5000,
     bearing: 105,
     engine: 'p533',
@@ -78,7 +79,7 @@ describe('the Best times box', () => {
     expect(c.container.textContent).toMatch(/Type a call to see when/)
     ask(c, 'ea8abc')
     await waitFor(() => expect(c.container.textContent).toMatch(/Now: try 20m/))
-    expect(c.container.textContent).toMatch(/Worked out from grid IL18, sent on the air\./)
+    expect(c.container.textContent).toMatch(/From your grid EN52 to their grid IL18, sent on the air\./)
     expect(c.container.textContent).toMatch(/A path forecast, not a promise they are on the air\./)
     expect(c.container.textContent).not.toMatch(/%/)
     // The chart's hovers say words, never figures; the unlicensed band is marked.

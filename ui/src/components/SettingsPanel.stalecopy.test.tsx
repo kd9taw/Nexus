@@ -362,6 +362,7 @@ describe('an edit made in any section of Settings is saved', () => {
     { section: 'integrations-feeds', ...field('wsjtxUdp', false, false, true), edit: clickIn('integrations-feeds', 'switch', /^WSJT-X UDP API/) },
     { section: 'antenna-gain', ...field('antTxGainDbi', 0, 3, 6), edit: opened('antenna-gain', setIn('antenna-gain', 'spinbutton', 'TX antenna gain (dBi)', '6')) },
     { section: 'dxkeeper', ...field('dxkeeperHost', '', '10.0.0.2', '10.0.0.9'), edit: setIn('dxkeeper', 'textbox', /^DXKeeper host/, '10.0.0.9') },
+    { section: 'adif-tcp', ...field('adifTcpHost', '', '10.0.0.2', '10.0.0.9'), edit: setIn('adif-tcp', 'textbox', /^Logger host/, '10.0.0.9') },
     { section: 'n3fjp', ...field('n3fjpHost', '', '10.0.0.2', '10.0.0.9'), edit: setIn('n3fjp', 'textbox', /^N3FJP host/, '10.0.0.9') },
     { section: 'n1mm', ...field('n1mmAddr', '', '10.0.0.2:12060', '10.0.0.9:12060'), edit: setIn('n1mm', 'textbox', /^N1MM contact broadcast address/, '10.0.0.9:12060') },
     { section: 'lotw-users', ...field('lotwMaxAgeDays', 365, 90, 180), edit: setIn('lotw-users', 'spinbutton', /^Count as a LoTW user/, '180') },
