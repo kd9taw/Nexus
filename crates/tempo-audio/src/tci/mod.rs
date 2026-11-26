@@ -40,10 +40,11 @@
 //!   whatever the session believes.
 //! - **Tune** is the SDR program's own carrier (`tune:<trx>,true;`), started and ended with typed
 //!   calls ([`TciDaemon::tune_on`], [`TciDaemon::tune_off`]): rigctld has no verb for a radio's tune
-//!   carrier. With the operator's Tune power set, its tune drive (`tune_drive:<trx>,<pct>;`) is
-//!   written first and must be reported back before the carrier keys; without it, the carrier is at
-//!   the program's own tune drive. The daemon ends it by itself past the hold it was given, whether or not
-//!   the radio loop runs.
+//!   carrier. Its tune drive (`tune_drive:<trx>,<pct>;`) is written first and must be reported back
+//!   before the carrier keys: the operator's Tune power, or with none set the program's own tune
+//!   drive held to the power ceiling, never raised ([`TuneDrive`]); only with no drive reported
+//!   and no ceiling at all is nothing written, and the carrier is at the program's own tune drive.
+//!   The daemon ends it by itself past the hold it was given, whether or not the radio loop runs.
 //!
 //! ## Teardown
 //! From its first step no new key goes out, and one already on its way through the shim goes out or
@@ -713,7 +714,8 @@ impl TciDaemon {
     /// ([`shim::READBACK_WAIT`]): a write it ignored (another client's hold) or reported late is a
     /// refusal, never a carrier at a drive Nexus does not know. The write is also the ceiling the
     /// session's admission holds the server's `tune_drive` to at the key. The over's `drive` is
-    /// not touched. Without it, the carrier goes out at the program's own tune drive.
+    /// not touched. With no level to write (`None`, or [`TuneDrive::level`] says none), the
+    /// carrier goes out at the program's own tune drive.
     ///
     /// ⛔ STILL WANTED AT THE KEY. `still_wanted` is asked once, right before the key and after
     /// that wait: Tune let go of or Stop TX pressed while the program took the drive keys nothing

@@ -1907,11 +1907,12 @@ fn tune_let_go_of_while_the_tune_drive_is_taken_keys_no_carrier() {
 
 /// ⭐ WITH NO TUNE POWER SET, TUNE IS STILL HELD TO THE POWER CEILING (#564), and never above the SDR
 /// program's own tune drive: the lower of the two is written and read back before the key. The
-/// program's 80 under a 5% Phone ceiling tunes at 5; its 10 under a 50% ceiling stays at 10, never
-/// raised to 50; its 10 with no ceiling and no level commanded stays at 10, never raised to 100.
+/// program's 80 under a 5% Phone ceiling tunes at 5, and under a 5.7% one at 5 too (rounded down,
+/// never up past it); its 10 under a 50% ceiling stays at 10, never raised to 50; its 10 with no
+/// ceiling and no level commanded stays at 10, never raised to 100.
 #[test]
 fn with_no_tune_power_the_tune_drive_is_held_to_the_ceiling_and_never_raised() {
-    let cases: [(&str, u32, Setup, &str); 3] = [
+    let cases: [(&str, u32, Setup, &str); 4] = [
         (
             "80 under a 5% Phone ceiling",
             80,
@@ -1919,6 +1920,17 @@ fn with_no_tune_power_the_tune_drive_is_held_to_the_ceiling_and_never_raised() {
                 phone(e);
                 let mut s = e.settings().clone();
                 s.max_power_phone = Some(0.05);
+                e.apply_settings(s);
+            },
+            "tune_drive:0,5",
+        ),
+        (
+            "80 under a 5.7% Phone ceiling",
+            80,
+            |e| {
+                phone(e);
+                let mut s = e.settings().clone();
+                s.max_power_phone = Some(0.057);
                 e.apply_settings(s);
             },
             "tune_drive:0,5",
