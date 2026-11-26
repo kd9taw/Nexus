@@ -715,6 +715,7 @@ mod tests {
             "COM5": { "vid": "oops", "pid": 1 },
             "COM6": 12,
             "COM8": null,
+            "COM9": {},
             "COM7": { "vid": 4292, "pid": 60016, "serial": "00A5B1C2", "interface": 1,
                       "fromANewerBuild": true },
         }));

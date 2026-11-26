@@ -22085,14 +22085,7 @@ fn alias_for(
     }
     let mut hits = usb
         .iter()
-        // The product without the "(COMn)" a Windows friendly name ends in: that is the part
-        // that changed (`tempo_app::serial_port::normalized_product`).
-        .filter(|u| {
-            u.vid == identity.0
-                && u.pid == identity.1
-                && tempo_app::serial_port::normalized_product(&u.product)
-                    == tempo_app::serial_port::normalized_product(&identity.2)
-        })
+        .filter(|u| u.vid == identity.0 && u.pid == identity.1 && u.product == identity.2)
         .filter(|u| present.contains(&u.port_name))
         .map(|u| u.port_name.clone());
     let first = hits.next()?;
@@ -53907,19 +53900,24 @@ mod tests {
             None,
             "two identical rigs: not ours to guess"
         );
-        // ⭐ Windows: the product is the device's friendly name, which ends in the port name.
-        // Remembered as "(COM5)" and found as "(COM7)", it never matched, so the follow never
-        // fired on Windows. The COM number is the part that changed, and is not compared.
+        // ⭐ Windows: the product is the device's friendly name, which ends in the port name, so
+        // a port that came back under another number does NOT match here, and that is kept on
+        // purpose. This rule has only VID, PID and that name, and a generic bridge's name is the
+        // same on every cable: with the CAT port gone, the one port left carrying that name is
+        // as likely the PTT cable's as the radio's, and following onto it opens CAT on a keying
+        // line. Launch follows a renumbered port by serial number or interface instead
+        // (`tempo_app::settings::Settings::follow_moved_ports`).
         let friendly = "Silicon Labs CP210x USB to UART Bridge";
-        let windows = [usb("COM7", 0x10c4, 0xea60, &format!("{friendly} (COM7)"))];
+        let ptt_cable = [usb("COM9", 0x10c4, 0xea60, &format!("{friendly} (COM9)"))];
         assert_eq!(
             alias_for(
                 "COM5",
                 &(0x10c4, 0xea60, format!("{friendly} (COM5)")),
-                &windows,
-                &present(&["COM7"])
+                &ptt_cable,
+                &present(&["COM9"])
             ),
-            Some("COM7".to_string())
+            None,
+            "CAT must never follow onto the PTT cable's port"
         );
     }
 
