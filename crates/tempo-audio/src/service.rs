@@ -7930,17 +7930,27 @@ impl RadioLoop {
     /// all, and an over that goes out unkeys at its end as any over does.
     /// Start the radio's own tune carrier through Nexus's Flex client
     /// ([`crate::flex::FlexDaemon::tune_on`]), or the SDR program's through Nexus's TCI client
-    /// ([`crate::tci::TciDaemon::tune_on`]), held at most `hold_ms`. A refusal goes on the PTT line
+    /// ([`crate::tci::TciDaemon::tune_on`]) at `tci_tune_drive` when one is given, held at most
+    /// `hold_ms`. A refusal goes on the PTT line
     /// in the operator's words, as a refused key's does ([`Self::report_ptt`]), and comes back for
     /// the log; a start clears that line.
-    fn key_radio_tune(&mut self, engine: &Arc<Mutex<Engine>>, hold_ms: u64) -> Option<String> {
+    fn key_radio_tune(
+        &mut self,
+        engine: &Arc<Mutex<Engine>>,
+        hold_ms: u64,
+        tci_tune_drive: Option<crate::tci::TuneDrive>,
+    ) -> Option<String> {
         let started = match self.rigctld_proc.as_ref() {
             Some(CatDaemon::Flex(d)) => Some(
                 d.tune_on(hold_ms)
                     .map_err(|refusal| crate::flex::tune_refusal_words(refusal.as_ref())),
             ),
-            // Its refusal is already in the operator's words.
-            Some(CatDaemon::Tci(d)) => Some(d.tune_on(hold_ms)),
+            // Its refusal is already in the operator's words. ⛔ Tune let go of (or Stop TX) while
+            // the client waited for the SDR program's tune drive keys nothing, as during the split
+            // writes (#564).
+            Some(CatDaemon::Tci(d)) => {
+                Some(d.tune_on(hold_ms, tci_tune_drive, || engine_lock(engine).tuning()))
+            }
             _ => None,
         };
         let why = match started {
@@ -7952,6 +7962,10 @@ impl RadioLoop {
             None => crate::flex::tune_refusal_words(None),
         };
         tempo_core::applog::info("tx", &format!("{why} (dropped)"));
+        // The operator's own act, not a refusal: nothing for the PTT line, as with the split writes.
+        if why == crate::tci::TUNE_LET_GO {
+            return Some(why);
+        }
         if matches!(self.err_owner, ErrOwner::None | ErrOwner::Ptt) {
             engine_lock(engine).set_audio_error(Some((AudioErrorKind::Ptt, why.clone())));
             self.err_owner = ErrOwner::Ptt;
@@ -17741,6 +17755,36 @@ impl RadioLoop {
                 .tune_power_pct
                 .filter(|_| !native)
                 .map(|pct| f32::from(pct.min(100)) / 100.0);
+            // …except the SDR program's carrier on the TCI connection, which keys at the program's
+            // own tune drive (`tune_drive`), a level of its own beside the drive an over uses. The
+            // operator's Tune power is written there, before the key, as the program's percent
+            // (#564: left alone, the program tuned at whatever its own tune drive was, and an
+            // amplifier behind it tripped). The same safe direction as above: never more than the
+            // level the operator commands, nor the duty-cycle ceiling in force, and with no level
+            // commanded yet, that ceiling alone. With no Tune power set, the program's own tune
+            // drive held to that same cap, never raised to it (the client reads the program's
+            // drive), and with that drive unreported and no cap at all (100%), nothing written,
+            // so no limit never becomes a full-drive write ([`crate::tci::TuneDrive::level`]).
+            // Nothing to put back after: the over's drive is never touched.
+            let tci_tune_drive = (keying
+                && native
+                && self
+                    .rigctld_proc
+                    .as_ref()
+                    .and_then(CatDaemon::tci)
+                    .is_some())
+            .then(|| {
+                let ceiling = eng.active_power_ceiling();
+                let cap = eng.rf_power().map_or(ceiling, |level| level.min(ceiling));
+                // Rounded DOWN: a ceiling between whole percents (5.7%) is never exceeded.
+                let pct = |frac: f32| (frac * 100.0).floor() as u32;
+                match eng.settings().tune_power_pct {
+                    Some(want) => {
+                        crate::tci::TuneDrive::Set(pct((f32::from(want.min(100)) / 100.0).min(cap)))
+                    }
+                    None => crate::tci::TuneDrive::AtMost(pct(cap)),
+                }
+            });
             // Drop the ENGINE lock before the CAT+audio work: a slow/wedged daemon must
             // freeze this tick, not every UI command sharing the mutex (the hang convoy).
             drop(eng);
@@ -17868,7 +17912,7 @@ impl RadioLoop {
                 } else if native {
                     // Held at most the auto-release's time: the client's session ends it at that
                     // plus its margin even if this loop stalls.
-                    self.key_radio_tune(engine, max_ms as u64)
+                    self.key_radio_tune(engine, max_ms as u64, tci_tune_drive)
                 } else if let Err(why) = &keyer {
                     tempo_core::applog::warn("tx", &format!("tune not keyed: {why}"));
                     Some(why.clone())

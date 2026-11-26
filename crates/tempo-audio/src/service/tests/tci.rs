@@ -421,7 +421,8 @@ struct TciScene {
     state: RadioLoop,
     rig: Rig,
     card: Card,
-    sim: Simulator,
+    /// Shared, so a helper thread can watch the wire and act while the loop is inside a step.
+    sim: Arc<Simulator>,
     options: TciOptions,
     reopen: Reopen,
     rebuilds: Arc<std::sync::atomic::AtomicUsize>,
@@ -448,8 +449,10 @@ impl TciScene {
         options: TciOptions,
         setup: impl FnOnce(&mut Engine),
     ) -> TciScene {
-        let sim = Simulator::start(SimConfig::dialect(dialect).with(faults))
-            .expect("the simulator starts");
+        let sim = Arc::new(
+            Simulator::start(SimConfig::dialect(dialect).with(faults))
+                .expect("the simulator starts"),
+        );
         registry::forget((sim.addr(), trx0()));
         let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
         {
@@ -1082,6 +1085,15 @@ impl TciScene {
             );
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    /// How many times the scene's client wrote the over's drive (`drive:`).
+    fn drive_writes(&self) -> usize {
+        self.sim
+            .commands_from(0)
+            .iter()
+            .filter(|c| c.starts_with("drive:"))
+            .count()
     }
 
     /// The client's transmit route.
@@ -1744,6 +1756,315 @@ fn tune_is_the_sdr_programs_own_carrier() {
     s.run_until("the release never ended the carrier", |s| {
         s.sent(0, "tune:0,false") >= 1
     });
+}
+
+/// ⭐ THE OPERATOR'S TUNE POWER REACHES THE SDR PROGRAM'S CARRIER (#564): with Tune power at 10%,
+/// the loop writes `tune_drive:0,10` before `tune:0,true`, where the program's own tune drive was
+/// 80, and never writes the over's `drive`. Held to the duty-cycle ceiling in force (Phone capped
+/// at 5%: the carrier goes out at 5) and to the level the operator commands (3%: at 3). A ceiling
+/// between whole percents is rounded DOWN (5.7%: at 5), never up past it.
+#[test]
+fn the_operators_tune_power_is_the_sdr_programs_tune_drive_held_to_the_ceiling() {
+    let cases: [(&str, Setup, &str); 4] = [
+        (
+            "Tune power alone",
+            |e| {
+                phone(e);
+                let mut s = e.settings().clone();
+                s.tune_power_pct = Some(10);
+                e.apply_settings(s);
+            },
+            "tune_drive:0,10",
+        ),
+        (
+            "under a 5% Phone ceiling",
+            |e| {
+                phone(e);
+                let mut s = e.settings().clone();
+                s.tune_power_pct = Some(10);
+                s.max_power_phone = Some(0.05);
+                e.apply_settings(s);
+            },
+            "tune_drive:0,5",
+        ),
+        (
+            "under a 5.7% Phone ceiling",
+            |e| {
+                phone(e);
+                let mut s = e.settings().clone();
+                s.tune_power_pct = Some(10);
+                s.max_power_phone = Some(0.057);
+                e.apply_settings(s);
+            },
+            "tune_drive:0,5",
+        ),
+        (
+            "with 3% commanded",
+            |e| {
+                phone(e);
+                let mut s = e.settings().clone();
+                s.tune_power_pct = Some(10);
+                e.apply_settings(s);
+                e.set_rf_power(0.03);
+            },
+            "tune_drive:0,3",
+        ),
+    ];
+    for (what, setup, written) in cases {
+        let mut s = TciScene::new([], waits(), setup);
+        s.sim.operator("tune_drive:0,80;");
+        assert!(
+            s.daemon()
+                .session()
+                .wait_until(WAIT, |snap| snap.model.trx(trx0()).tune_drive.known()
+                    == Some(&80)),
+            "{what}: premise: the program's own tune drive is 80"
+        );
+        s.run(300);
+        let drives_before = s.drive_writes();
+        s.engine().set_tune(true);
+        s.run_until(&format!("{what}: the tune never keyed"), |s| {
+            !s.keys().is_empty()
+        });
+        let commands = s.sim.commands_from(0);
+        let drive_at = commands.iter().position(|c| c == written);
+        let key_at = commands.iter().position(|c| c == "tune:0,true");
+        assert!(
+            drive_at.is_some_and(|d| key_at.is_some_and(|k| d < k)),
+            "{what}: {written} was not written before the key: {commands:?}"
+        );
+        assert_eq!(
+            s.drive_writes(),
+            drives_before,
+            "{what}: the over's drive was written for the tune"
+        );
+        s.engine().set_tune(false);
+        s.run_until(
+            &format!("{what}: the release never ended the carrier"),
+            |s| s.sent(0, "tune:0,false") >= 1,
+        );
+    }
+}
+
+/// ⛔ TUNE LET GO OF, OR STOP TX PRESSED, WHILE THE SDR PROGRAM TAKES THE TUNE DRIVE KEYS NO CARRIER
+/// (#564). The key waits up to half a second for the program to report the tune drive Nexus wrote;
+/// Tune let go of in that wait is seen before the key, as it is during the split writes, never a
+/// carrier for a tick after. It is no refusal either: the PTT line stays clear. Here the program's
+/// own operator holds the tune drive at 80, so Nexus's write waits, and sets Nexus's 20 only once
+/// the operator at Nexus has let go: the readback the key waited for arrives, and still nothing keys.
+/// The same with Tune power set to 20 and with none set under a 20% Phone ceiling.
+#[test]
+fn tune_let_go_of_while_the_tune_drive_is_taken_keys_no_carrier() {
+    let setups: [(&str, Setup); 2] = [
+        ("Tune power 20%", |e| {
+            phone(e);
+            let mut s = e.settings().clone();
+            s.tune_power_pct = Some(20);
+            e.apply_settings(s);
+        }),
+        ("no Tune power, a 20% Phone ceiling", |e| {
+            phone(e);
+            let mut s = e.settings().clone();
+            s.max_power_phone = Some(0.2);
+            e.apply_settings(s);
+        }),
+    ];
+    let let_gos: [(&str, Setup); 2] = [
+        ("Tune off", |e| e.set_tune(false)),
+        ("Stop TX", Engine::halt_tx),
+    ];
+    for ((setup_is, setup), (let_go_is, let_go)) in setups
+        .into_iter()
+        .flat_map(|setup| let_gos.into_iter().map(move |let_go| (setup, let_go)))
+    {
+        let what = format!("{setup_is}, {let_go_is}");
+        let mut s = TciScene::new(
+            [Fault::Hold200ms {
+                window: Duration::from_secs(5),
+            }],
+            waits(),
+            setup,
+        );
+        s.sim.operator("tune_drive:0,80;");
+        assert!(
+            s.daemon()
+                .session()
+                .wait_until(WAIT, |snap| snap.model.trx(trx0()).tune_drive.known()
+                    == Some(&80)),
+            "{what}: premise: the program's own tune drive is 80"
+        );
+        s.run(300);
+        let (sim, engine) = (s.sim.clone(), s.engine.clone());
+        let helper = std::thread::spawn(move || {
+            let deadline = Instant::now() + WAIT;
+            while !sim.commands_from(0).iter().any(|c| c == "tune_drive:0,20") {
+                if Instant::now() > deadline {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            let_go(&mut engine.lock().unwrap());
+            sim.operator("tune_drive:0,20;");
+            true
+        });
+        s.engine().set_tune(true);
+        s.run_until(&format!("{what}: the helper never finished"), |_| {
+            helper.is_finished()
+        });
+        assert!(
+            helper.join().expect("the helper"),
+            "{what}: the tune drive was never written"
+        );
+        assert!(
+            s.daemon()
+                .session()
+                .wait_until(WAIT, |snap| snap.model.trx(trx0()).tune_drive.known()
+                    == Some(&20)),
+            "{what}: premise: the program reported Nexus's tune drive"
+        );
+        s.run(300);
+        assert!(
+            !s.any_key_asked(),
+            "{what}: a carrier was keyed after the let-go"
+        );
+        assert!(s.keys().is_empty(), "{what}: the radio keyed");
+        assert!(!s.engine().tuning(), "{what}: Tune is on again");
+        assert_eq!(
+            s.engine().snapshot().radio.audio_error,
+            None,
+            "{what}: the let-go was put on the PTT line as a refusal"
+        );
+    }
+}
+
+/// ⭐ WITH NO TUNE POWER SET, TUNE IS STILL HELD TO THE POWER CEILING (#564), and never above the SDR
+/// program's own tune drive: the lower of the two is written and read back before the key. The
+/// program's 80 under a 5% Phone ceiling tunes at 5, and under a 5.7% one at 5 too (rounded down,
+/// never up past it); its 10 under a 50% ceiling stays at 10, never raised to 50; its 10 with no
+/// ceiling and no level commanded stays at 10, never raised to 100.
+#[test]
+fn with_no_tune_power_the_tune_drive_is_held_to_the_ceiling_and_never_raised() {
+    let cases: [(&str, u32, Setup, &str); 4] = [
+        (
+            "80 under a 5% Phone ceiling",
+            80,
+            |e| {
+                phone(e);
+                let mut s = e.settings().clone();
+                s.max_power_phone = Some(0.05);
+                e.apply_settings(s);
+            },
+            "tune_drive:0,5",
+        ),
+        (
+            "80 under a 5.7% Phone ceiling",
+            80,
+            |e| {
+                phone(e);
+                let mut s = e.settings().clone();
+                s.max_power_phone = Some(0.057);
+                e.apply_settings(s);
+            },
+            "tune_drive:0,5",
+        ),
+        (
+            "10 under a 50% Phone ceiling",
+            10,
+            |e| {
+                phone(e);
+                let mut s = e.settings().clone();
+                s.max_power_phone = Some(0.5);
+                e.apply_settings(s);
+            },
+            "tune_drive:0,10",
+        ),
+        ("10 with no ceiling", 10, phone, "tune_drive:0,10"),
+    ];
+    for (what, own, setup, written) in cases {
+        let mut s = TciScene::new([], waits(), setup);
+        assert!(
+            s.engine().settings().tune_power_pct.is_none(),
+            "{what}: premise: no Tune power"
+        );
+        s.sim.operator(&format!("tune_drive:0,{own};"));
+        assert!(
+            s.daemon()
+                .session()
+                .wait_until(WAIT, |snap| snap.model.trx(trx0()).tune_drive.known()
+                    == Some(&own)),
+            "{what}: premise: the program's own tune drive is {own}"
+        );
+        s.run(300);
+        let drives_before = s.drive_writes();
+        s.engine().set_tune(true);
+        s.run_until(&format!("{what}: the tune never keyed"), |s| {
+            !s.keys().is_empty()
+        });
+        let commands = s.sim.commands_from(0);
+        let tune_drives: Vec<_> = commands
+            .iter()
+            .filter(|c| c.starts_with("tune_drive:"))
+            .collect();
+        assert_eq!(tune_drives, [written], "{what}: the tune drives written");
+        let drive_at = commands.iter().position(|c| c == written);
+        let key_at = commands.iter().position(|c| c == "tune:0,true");
+        assert!(
+            drive_at.is_some_and(|d| key_at.is_some_and(|k| d < k)),
+            "{what}: {written} was not written before the key: {commands:?}"
+        );
+        assert_eq!(
+            s.drive_writes(),
+            drives_before,
+            "{what}: the over's drive was written for the tune"
+        );
+        s.engine().set_tune(false);
+        s.run_until(
+            &format!("{what}: the release never ended the carrier"),
+            |s| s.sent(0, "tune:0,false") >= 1,
+        );
+    }
+}
+
+/// ⛔ WITH NO TUNE POWER SET, A PROGRAM THAT KEEPS A HIGHER TUNE DRIVE KEYS NO CARRIER (#564): its
+/// own operator holds the tune drive at 80, so Nexus's 5 (the Phone ceiling) is ignored. Refused,
+/// the TX line says why, and nothing keys.
+#[test]
+fn with_no_tune_power_a_higher_tune_drive_kept_keys_no_carrier() {
+    let mut s = TciScene::new(
+        [Fault::Hold200ms {
+            window: Duration::from_secs(5),
+        }],
+        waits(),
+        |e| {
+            phone(e);
+            let mut s = e.settings().clone();
+            s.max_power_phone = Some(0.05);
+            e.apply_settings(s);
+        },
+    );
+    s.sim.operator("tune_drive:0,80;");
+    assert!(
+        s.daemon()
+            .session()
+            .wait_until(WAIT, |snap| snap.model.trx(trx0()).tune_drive.known()
+                == Some(&80)),
+        "premise: the program's own tune drive is 80"
+    );
+    s.run(300);
+    s.engine().set_tune(true);
+    s.run_until("the tune was never refused", |s| {
+        s.engine().snapshot().radio.audio_error.is_some()
+    });
+    s.run(300);
+    assert_eq!(
+        s.sent(0, "tune_drive:0,5"),
+        1,
+        "the ceiling was not written"
+    );
+    let line = s.engine().snapshot().radio.audio_error.unwrap_or_default();
+    assert!(line.contains("tune drive"), "{line}");
+    assert!(!s.any_key_asked(), "a carrier was keyed");
+    assert!(s.keys().is_empty(), "the radio keyed");
 }
 
 // ── What the client knows that `rig` does not ────────────────────────────────────────────────
