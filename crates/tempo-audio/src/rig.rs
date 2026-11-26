@@ -2592,10 +2592,21 @@ impl Rig {
     }
 
     pub fn read_freq(&mut self) -> std::io::Result<u64> {
+        self.read_freq_within(None)
+    }
+
+    /// [`Self::read_freq`] that must END by `deadline_ms` (`None`: the transport's deadline, as
+    /// `read_freq`), each socket read waiting only for what is left of it, as the meter reads
+    /// bounded by an over's end do ([`Self::read_meter_within`]). A read that does not end by it
+    /// is abandoned, as theirs are.
+    pub fn read_freq_within(&mut self, deadline_ms: Option<u64>) -> std::io::Result<u64> {
         if self.control.is_none() {
             return Err(std::io::Error::other("not a CAT rig"));
         }
-        let reply = self.command("f\n")?;
+        let reply = match deadline_ms {
+            Some(ms) => self.command_ending_by("f\n", ms)?,
+            None => self.command("f\n")?,
+        };
         let hz = reply.lines().find_map(hz_in_line).filter(|hz| *hz > 0);
         // A dial somewhere else than where the split writes were confirmed (the operator's knob, a
         // band change at the radio): what VFO B holds is no longer known.

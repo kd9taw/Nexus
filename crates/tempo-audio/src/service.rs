@@ -1902,6 +1902,10 @@ const CW_HANG_MS: f64 = 1_000.0;
 /// one loop tick ([`run_radio`] sleeps 20 ms between steps), the resolution the next word is handed
 /// over at anyway. A word that left later than that (behind a speed write or another read on a
 /// slow link) has its window counted from the moment it left.
+///
+/// ⚠️ The time in the tick is the wall clock's, so a test stepping the loop on a simulated clock
+/// still sees it: one whose tick spends more than this before the word (a heavily loaded machine)
+/// has that word's window start later than the simulated tick, by that much.
 const CW_LATE_SEND_MS: f64 = 20.0;
 /// Does Hamlib model `rig_model` select VFO A with every split command
 /// ([`RadioLoop::note_split_reselected_vfo_a`])? Hamlib's Icom models (3000s), less the three
@@ -12350,7 +12354,11 @@ impl RadioLoop {
                 // implemented as a permanent latch it left a recovered link dead for the session.
                 && (self.cat_ok != Some(false) || now >= self.cat_retry_at)
                 && now - self.last_rig_poll >= RIG_POLL_MS
-                // …and not while Nexus's own CW is sending (`cw_keying`, above).
+                // …and not while Nexus's own CW is sending (`cw_keying`, above). What this block
+                // drains for the operator (a DSP switch, the filter width, RIT/XIT, the VFO, the
+                // ATU press) waits with it, until the message ends, as it waits through an over.
+                // The dial alone is still read in the message (the fast reader below), for the
+                // licence gate.
                 && !cw_keying
                 // …and NOT on a switch the handoff has not seen (W0): `rig` is still the radio
                 // being left, and every request this block drains (DSP switches, filter width,
@@ -13662,6 +13670,27 @@ impl RadioLoop {
                 }
             }
 
+            // ⛔ THE DIAL IS STILL READ WHILE NEXUS'S OWN CW IS SENDING, because the licence gate
+            // keys every word against it ([`Engine::poll_cw_word`]): a knob turned out of the
+            // privileges mid-macro must drop the rest of the message, and only this read tells the
+            // engine of the turn. But only when it can END before the next word is due
+            // (`cw_busy_until`), by the rule a transmit meter read keeps to an over's end
+            // ([`tx_meter_read_plan`]), so on wfview's virtual port it never holds a word up.
+            // `Some(deadline)`: the dial may be read, by that deadline (`None` = the link's own).
+            let dial_read = if cw_keying {
+                let left = self.cw_busy_until - now_in_tick(now, tick_started);
+                tx_meter_read_plan(
+                    false,
+                    Some(left),
+                    rig.slow_transport(),
+                    rig.transport_deadline_ms(),
+                    raw_alc_over_deadline_ms(rig),
+                )
+                .map(|plan| Some(plan.deadline))
+            } else {
+                Some(None)
+            };
+
             // Fast dial-only mirror: the dial is the one value that must track a manual VFO knob in
             // real time (a 1–2 s lag made live tuning feel unusable; pure fast polling tracks it in
             // ~⅕ s). Runs on the fast cadence when the heavy read-back above did NOT (it
@@ -13691,13 +13720,13 @@ impl RadioLoop {
                 && !self.operator_keyed()
                 && self.cat_ok != Some(false)
                 && self.freq_misses == 0 // a heavy-poll miss pauses fast reads until it recovers
-                // …and not while Nexus's own CW is sending, as the heavy poll above.
-                && !cw_keying
+                // …and while Nexus's own CW is sending, only by the next word (`dial_read`).
+                && dial_read.is_some()
                 && now - self.last_freq_poll >= FREQ_POLL_MS
             {
                 self.last_freq_poll = now;
                 let remote_read = self.remote_read(engine);
-                if let Ok(hz) = rig.read_freq() {
+                if let Ok(hz) = rig.read_freq_within(dial_read.flatten()) {
                     {
                         let mut eng = engine_lock(engine);
                         eng.remote_observe_cat(remote_read.as_ref(), Some(true));
@@ -56292,13 +56321,20 @@ mod tests {
 
     // ---- CAT CW over the native CI-V daemon on a slow virtual port (wfview's) ----
 
+    /// Every frame a [`SlowVsp`] radio was sent: when (ms after the operator's send), the command
+    /// byte and its data.
+    type VspFrames = Vec<(f64, u8, Vec<u8>)>;
+
+    /// [`SlowVsp`]'s record as it is written: each frame with the instant it arrived.
+    type VspWire = Arc<Mutex<Vec<(std::time::Instant, u8, Vec<u8>)>>>;
+
     /// A radio behind wfview's virtual port: every reply arrives `delay` after the command that
-    /// asked for it, and the time each CW text frame (`17`) reached the radio is recorded.
+    /// asked for it, and every frame written to it is recorded with the time it arrived.
     struct SlowVsp {
         inner: crate::civ::engine::tests_support::FakeRadio,
         delay: Duration,
         wrote_at: Option<std::time::Instant>,
-        cw: Arc<Mutex<Vec<(std::time::Instant, String)>>>,
+        frames: VspWire,
     }
     impl std::io::Write for SlowVsp {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
@@ -56306,10 +56342,7 @@ mod tests {
             self.wrote_at = Some(now);
             for bytes in buf.split_inclusive(|&b| b == 0xFD) {
                 if let Some(f) = crate::civ::frame::Frame::parse(bytes) {
-                    if f.cmd == 0x17 {
-                        let text = String::from_utf8_lossy(&f.data).into_owned();
-                        self.cw.lock().unwrap().push((now, text));
-                    }
+                    self.frames.lock().unwrap().push((now, f.cmd, f.data));
                 }
             }
             self.inner.write(buf)
@@ -56328,20 +56361,42 @@ mod tests {
         }
     }
 
+    /// The CW words (`17 <text>`, not the `17 FF` stop) among `frames`, with when each arrived.
+    fn vsp_words(frames: &VspFrames) -> Vec<(f64, String)> {
+        frames
+            .iter()
+            .filter(|(_, cmd, data)| *cmd == 0x17 && data.first() != Some(&0xFF))
+            .map(|(at, _, data)| (*at, String::from_utf8_lossy(data).into_owned()))
+            .collect()
+    }
+
     /// Key `text` at `wpm` on the CAT keyer through the native daemon on a virtual port whose
-    /// replies take `delay`, running the real loop in real time, and answer when each CW frame
-    /// reached the radio (ms after the operator's send) with its text.
-    fn cw_over_slow_vsp(delay: Duration, text: &str, wpm: u32) -> Vec<(f64, String)> {
+    /// replies take `delay`, running the real loop in real time for `run_ms` after the
+    /// operator's send. `mid(words keyed so far, engine, radio)` runs before every tick until it
+    /// answers true: what the operator or the radio does mid-macro. Answers every frame the radio
+    /// was sent after the send, and when (ms after the send) `mid` answered true.
+    fn cw_over_slow_vsp(
+        delay: Duration,
+        text: &str,
+        wpm: u32,
+        run_ms: u64,
+        mut mid: impl FnMut(
+            usize,
+            &Arc<Mutex<Engine>>,
+            &Arc<Mutex<crate::civ::engine::tests_support::Regs>>,
+        ) -> bool,
+    ) -> (VspFrames, Option<f64>) {
         use crate::civ::broker::{CivDaemon, Link};
         use crate::civ::commands::IcomModel;
         let addr = IcomModel::Ic7300.default_civ_addr();
         let (radio, _push) = crate::civ::engine::tests_support::FakeRadio::new(addr);
-        let cw = Arc::new(Mutex::new(Vec::new()));
+        let regs = radio.regs();
+        let frames: VspWire = Arc::new(Mutex::new(Vec::new()));
         let vsp = SlowVsp {
             inner: radio,
             delay,
             wrote_at: None,
-            cw: Arc::clone(&cw),
+            frames: Arc::clone(&frames),
         };
         let d = CivDaemon::start_with_link(
             Box::new(vsp),
@@ -56373,8 +56428,7 @@ mod tests {
         let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
         let mut station = StationSinks::new();
         let t0 = std::time::Instant::now();
-        // Settle: the loop's first polls and the CW mode set, before the operator's F-key.
-        while t0.elapsed() < Duration::from_secs(3) {
+        let mut step = |state: &mut RadioLoop| {
             let _ = state.step(
                 &engine,
                 &mut backend,
@@ -56386,28 +56440,40 @@ mod tests {
                 &mut station,
             );
             std::thread::sleep(Duration::from_millis(20));
+        };
+        // Settle: the loop's first polls and the CW mode set, before the operator's F-key.
+        while t0.elapsed() < Duration::from_secs(3) {
+            step(&mut state);
         }
         engine.lock().unwrap().send_cw(text);
         let sent_at = std::time::Instant::now();
-        let words = text.split_whitespace().count();
-        while cw.lock().unwrap().len() < words && sent_at.elapsed() < Duration::from_secs(30) {
-            let _ = state.step(
-                &engine,
-                &mut backend,
-                &mut rig,
-                &sinks,
-                t0.elapsed().as_secs_f64() * 1000.0,
-                &mut ra,
-                &mut rr,
-                &mut station,
-            );
-            std::thread::sleep(Duration::from_millis(20));
+        let mut fired = None;
+        while sent_at.elapsed() < Duration::from_millis(run_ms) {
+            if fired.is_none() {
+                let keyed = frames
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|(at, cmd, data)| {
+                        *at >= sent_at && *cmd == 0x17 && data.first() != Some(&0xFF)
+                    })
+                    .count();
+                if mid(keyed, &engine, &regs) {
+                    fired = Some(sent_at.elapsed().as_secs_f64() * 1000.0);
+                }
+            }
+            step(&mut state);
         }
-        let keyed = cw.lock().unwrap();
-        keyed
+        let sent = frames.lock().unwrap();
+        let out = sent
             .iter()
-            .map(|(at, w)| (at.duration_since(sent_at).as_secs_f64() * 1000.0, w.clone()))
-            .collect()
+            .filter(|(at, _, _)| *at >= sent_at)
+            .map(|(at, cmd, data)| {
+                let ms = at.duration_since(sent_at).as_secs_f64() * 1000.0;
+                (ms, *cmd, data.clone())
+            })
+            .collect();
+        (out, fired)
     }
 
     /// ⛔ A CAT CW MACRO KEYS IN TIME ON WFVIEW'S VIRTUAL PORT (an IC-7300 on the native CI-V
@@ -56422,7 +56488,9 @@ mod tests {
     fn a_cat_cw_macro_keys_on_time_over_a_slow_virtual_port() {
         let rtt = Duration::from_millis(250);
         let wpm = 30;
-        let got = cw_over_slow_vsp(rtt, "CQ DE KD9TAW KD9TAW K", wpm);
+        let (frames, _) =
+            cw_over_slow_vsp(rtt, "CQ DE KD9TAW KD9TAW K", wpm, 9_000, |_, _, _| false);
+        let got = vsp_words(&frames);
         let words: Vec<&str> = got.iter().map(|(_, w)| w.as_str()).collect();
         assert_eq!(
             words,
@@ -56442,5 +56510,68 @@ mod tests {
                 "{next} reached the radio {late:.0} ms off its time after {word}: {got:?}"
             );
         }
+    }
+
+    /// ⛔ THE VFO SPUN OUT OF THE PRIVILEGES MID-MACRO DROPS THE REST, ON THAT SLOW LINK TOO. The
+    /// licence gate keys every word against the dial the engine knows, and only the dial read
+    /// tells it of a knob turn: with the receive reads paused for the whole message, the rest of
+    /// an 8-word macro keyed out of band. The read goes on while the radio sends, by the next
+    /// word's due time, so at most a word or two already handed over go out after the turn.
+    #[test]
+    fn a_vfo_turned_out_of_the_privileges_mid_macro_drops_the_rest_over_a_slow_virtual_port() {
+        let (frames, turned) = cw_over_slow_vsp(
+            Duration::from_millis(100),
+            "CQ CQ CQ DE KD9TAW KD9TAW KD9TAW K",
+            20,
+            14_000,
+            |keyed, _, radio| {
+                if keyed >= 1 {
+                    radio.lock().unwrap().main_hz = 14_400_000; // above 20 m
+                }
+                keyed >= 1
+            },
+        );
+        let words = vsp_words(&frames);
+        let turned = turned.expect("premise: the first word keyed");
+        let after = words.iter().filter(|(at, _)| *at > turned).count();
+        assert!(
+            after <= 2,
+            "{after} words keyed after the VFO left the band: {words:?}"
+        );
+    }
+
+    /// ⛔ STOP MID-MACRO ON THAT SLOW LINK: the CW stop (`17 FF`) reaches the radio within a round
+    /// trip or so of the press, and no word after it.
+    #[test]
+    fn stop_mid_macro_over_a_slow_virtual_port_is_prompt_and_keys_nothing_after() {
+        let rtt = 250.0;
+        let (frames, stopped) = cw_over_slow_vsp(
+            Duration::from_millis(250),
+            "CQ CQ CQ DE KD9TAW KD9TAW KD9TAW K",
+            25,
+            9_000,
+            |keyed, engine, _| {
+                if keyed >= 2 {
+                    engine.lock().unwrap().stop_cw();
+                }
+                keyed >= 2
+            },
+        );
+        let at = stopped.expect("premise: two words keyed");
+        let stop = frames
+            .iter()
+            .find(|(t, cmd, data)| *t >= at && *cmd == 0x17 && data.first() == Some(&0xFF))
+            .map(|(t, _, _)| *t)
+            .expect("the CW stop reached the radio");
+        assert!(
+            stop - at < rtt + 150.0,
+            "the CW stop took {:.0} ms",
+            stop - at
+        );
+        let words = vsp_words(&frames);
+        assert!(
+            words.iter().all(|(t, _)| *t <= at),
+            "a word keyed after Stop: {words:?}"
+        );
     }
 }
