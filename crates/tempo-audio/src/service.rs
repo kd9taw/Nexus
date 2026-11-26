@@ -7925,8 +7925,12 @@ impl RadioLoop {
                 d.tune_on(hold_ms)
                     .map_err(|refusal| crate::flex::tune_refusal_words(refusal.as_ref())),
             ),
-            // Its refusal is already in the operator's words.
-            Some(CatDaemon::Tci(d)) => Some(d.tune_on(hold_ms, tci_tune_drive)),
+            // Its refusal is already in the operator's words. ⛔ Tune let go of (or Stop TX) while
+            // the client waited for the SDR program's tune drive keys nothing, as during the split
+            // writes (#564).
+            Some(CatDaemon::Tci(d)) => {
+                Some(d.tune_on(hold_ms, tci_tune_drive, || engine_lock(engine).tuning()))
+            }
             _ => None,
         };
         let why = match started {
@@ -7938,6 +7942,10 @@ impl RadioLoop {
             None => crate::flex::tune_refusal_words(None),
         };
         tempo_core::applog::info("tx", &format!("{why} (dropped)"));
+        // The operator's own act, not a refusal: nothing for the PTT line, as with the split writes.
+        if why == crate::tci::TUNE_LET_GO {
+            return Some(why);
+        }
         if matches!(self.err_owner, ErrOwner::None | ErrOwner::Ptt) {
             engine_lock(engine).set_audio_error(Some((AudioErrorKind::Ptt, why.clone())));
             self.err_owner = ErrOwner::Ptt;
@@ -17751,7 +17759,8 @@ impl RadioLoop {
                     let want = f32::from(pct.min(100)) / 100.0;
                     let ceiling = eng.active_power_ceiling();
                     let cap = eng.rf_power().map_or(ceiling, |level| level.min(ceiling));
-                    (want.min(cap) * 100.0).round() as u32
+                    // Rounded DOWN: a ceiling between whole percents (5.7%) is never exceeded.
+                    (want.min(cap) * 100.0).floor() as u32
                 });
             // Drop the ENGINE lock before the CAT+audio work: a slow/wedged daemon must
             // freeze this tick, not every UI command sharing the mutex (the hang convoy).

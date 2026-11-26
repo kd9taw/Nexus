@@ -768,7 +768,7 @@ fn tune_is_the_sdr_programs_carrier_and_ends_by_itself_past_its_hold() {
         },
     );
     assert!(d.tunes_natively());
-    d.tune_on(300, None).expect("tune keyed");
+    d.tune_on(300, None, || true).expect("tune keyed");
     wait_log(&sim, "the carrier", |log| {
         keys(log) == [(Keyer::Client(0), SimSource::Tune)]
     });
@@ -779,7 +779,7 @@ fn tune_is_the_sdr_programs_carrier_and_ends_by_itself_past_its_hold() {
         "the tune carrier outlasted its hold, so Nexus ended it"
     );
     wait_unkeyed(&d);
-    d.tune_on(60_000, None).expect("tune keyed");
+    d.tune_on(60_000, None, || true).expect("tune keyed");
     wait_log(&sim, "the second carrier", |log| keys(log).len() == 2);
     assert!(d.tune_off());
     wait_log(&sim, "the second carrier ended", |log| unkeys(log) == 2);
@@ -801,7 +801,7 @@ fn tune_writes_the_tune_drive_first_and_keys_only_once_the_program_reports_it() 
                 == Some(&80)),
         "premise: the program's own tune drive is 80"
     );
-    d.tune_on(60_000, Some(25)).expect("tune keyed");
+    d.tune_on(60_000, Some(25), || true).expect("tune keyed");
     wait_log(&sim, "the carrier", |log| {
         keys(log) == [(Keyer::Client(0), SimSource::Tune)]
     });
@@ -838,7 +838,9 @@ fn a_tune_drive_the_program_does_not_take_keys_no_carrier() {
                 == Some(&100)),
         "premise: the other program set the tune drive to 100"
     );
-    let why = d.tune_on(60_000, Some(10)).expect_err("tuned at 100");
+    let why = d
+        .tune_on(60_000, Some(10), || true)
+        .expect_err("tuned at 100");
     assert!(
         why.contains("tune drive") && why.contains("10"),
         "the refusal does not name the tune drive: {why}"
@@ -848,6 +850,68 @@ fn a_tune_drive_the_program_does_not_take_keys_no_carrier() {
         "a carrier was asked for"
     );
     assert!(keys(&sim.log()).is_empty(), "a carrier keyed");
+}
+
+/// ⛔ THE READBACK ALONE REFUSES A TUNE DRIVE NOT TAKEN, EVEN A LOWER ONE (#564). Another program
+/// holds `tune_drive` at 5, below the 10 Nexus writes, so admission's ceiling would let the key
+/// through: only the readback stands between the operator and a carrier at a drive Nexus did not
+/// set. Refused, and nothing keys.
+#[test]
+fn a_lower_tune_drive_the_program_kept_keys_no_carrier() {
+    let sim = esdr3([Fault::Hold200ms {
+        window: Duration::from_secs(5),
+    }]);
+    let d = daemon(&sim);
+    let mut other = Peer::connect(sim.addr(), WAIT).expect("another program connects");
+    other
+        .send_text("tune_drive:0,5;")
+        .expect("the other program's write");
+    assert!(
+        d.session()
+            .wait_until(WAIT, |s| s.model.trx(trx0()).tune_drive.known() == Some(&5)),
+        "premise: the other program set the tune drive to 5"
+    );
+    let why = d
+        .tune_on(60_000, Some(10), || true)
+        .expect_err("tuned at 5");
+    assert!(
+        why.contains("tune drive") && why.contains("10"),
+        "the refusal does not name the tune drive: {why}"
+    );
+    assert!(
+        d.session().read(|s| s.keyed.is_none()),
+        "a carrier was asked for"
+    );
+    assert!(keys(&sim.log()).is_empty(), "a carrier keyed");
+}
+
+/// ⛔ TUNE NO LONGER WANTED AT THE KEY KEYS NO CARRIER (#564): asked after the tune drive is read
+/// back, right before the key, with the drive written and reported and without one. The words are
+/// [`super::TUNE_LET_GO`], which the radio loop keeps off the PTT line.
+#[test]
+fn tune_no_longer_wanted_at_the_key_keys_no_carrier() {
+    let sim = esdr3([]);
+    let d = daemon(&sim);
+    for drive in [Some(25), None] {
+        let why = d
+            .tune_on(60_000, drive, || false)
+            .expect_err("keyed though let go of");
+        assert_eq!(why, super::TUNE_LET_GO, "{drive:?}");
+    }
+    assert!(
+        d.session()
+            .wait_until(WAIT, |s| s.model.trx(trx0()).tune_drive.known()
+                == Some(&25)),
+        "the tune drive was still written and read back"
+    );
+    assert!(
+        d.session().read(|s| s.keyed.is_none()),
+        "a carrier was asked for"
+    );
+    assert!(
+        !sim.commands_from(0).iter().any(|c| c == "tune:0,true"),
+        "a carrier was keyed"
+    );
 }
 
 // ── What the radio loop is told ─────────────────────────────────────────────────────────────

@@ -120,6 +120,10 @@ pub(crate) const UNKEY_WAIT: Duration = Duration::from_millis(1_000);
 /// The longest a tune carrier may be held: the radio loop's own ceiling.
 pub const TUNE_HOLD_MAX_MS: u64 = 60_000;
 
+/// Why [`TciDaemon::tune_on`] keyed nothing when Tune was no longer wanted at the key. The operator's
+/// own act, so the radio loop logs it and keeps it off the PTT line.
+pub const TUNE_LET_GO: &str = "Tune not keyed: Tune was let go of before the carrier keyed.";
+
 /// How long past its hold the daemon ends a tune carrier by itself: the SDR program latches the
 /// carrier, and the radio loop that would release it can stall for a decode's length.
 pub(crate) const TUNE_MARGIN: Duration = Duration::from_millis(2_000);
@@ -681,7 +685,16 @@ impl TciDaemon {
     /// refusal, never a carrier at a drive Nexus does not know. The write is also the ceiling the
     /// session's admission holds the server's `tune_drive` to at the key. The over's `drive` is
     /// not touched. Without it, the carrier goes out at the program's own tune drive.
-    pub fn tune_on(&self, hold_ms: u64, tune_drive: Option<u32>) -> Result<(), String> {
+    ///
+    /// ⛔ STILL WANTED AT THE KEY. `still_wanted` is asked once, right before the key and after
+    /// that wait: Tune let go of or Stop TX pressed while the program took the drive keys nothing
+    /// (the words then say so), never a carrier for a tick after.
+    pub fn tune_on(
+        &self,
+        hold_ms: u64,
+        tune_drive: Option<u32>,
+        still_wanted: impl FnOnce() -> bool,
+    ) -> Result<(), String> {
         if let Some(level) = tune_drive {
             let trx = self.trx;
             let conn = self.conn();
@@ -695,12 +708,17 @@ impl TciDaemon {
             conn.wait_until(shim::READBACK_WAIT, |s| {
                 s.phase == Phase::Closed || reported(s)
             });
+            if !still_wanted() {
+                return Err(TUNE_LET_GO.into());
+            }
             if !conn.read(reported) {
                 return Err(format!(
                     "Tune not keyed: the SDR program did not take the tune drive Nexus set \
                      ({level}%), so its carrier's level is not known."
                 ));
             }
+        } else if !still_wanted() {
+            return Err(TUNE_LET_GO.into());
         }
         let hold = Duration::from_millis(hold_ms.min(TUNE_HOLD_MAX_MS));
         match self.conn().key(TxStart::Tune) {
