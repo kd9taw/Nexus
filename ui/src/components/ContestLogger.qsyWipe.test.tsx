@@ -8,7 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, act, fireEvent } from '@testing-library/react'
 import { ContestLargeEntry } from './ContestLogger'
-import { dopplerDrivesDial, setQsyWipe } from '../features/qsyWipe'
+import { passHoldsDial, setQsyWipe } from '../features/qsyWipe'
 import type { AppSnapshot, FieldDayStatus } from '../types'
 
 vi.mock('../api', async (importOriginal) => {
@@ -44,8 +44,9 @@ const party = (): FieldDayStatus =>
     ],
   }) as unknown as FieldDayStatus
 
-/** The station on `dialMhz`, the rig's own PTT read back keyed or not. */
-const at = (dialMhz: number, rigKeyed = false) =>
+/** The station on `dialMhz`, the rig's own PTT read back keyed or not; `shared`, the one entry the
+ *  two windows show while the logger window is open (`contestEntry`). */
+const at = (dialMhz: number, rigKeyed = false, shared?: { rev: number; call: string }) =>
   ({
     mycall: 'KD9TAW',
     mygrid: 'EN52',
@@ -53,12 +54,13 @@ const at = (dialMhz: number, rigKeyed = false) =>
     link: { tier: 'CW' },
     hunt: null,
     bandChangeTick: 1,
+    ...(shared ? { contestEntry: { rev: shared.rev, contact: 0, call: shared.call, fields: {}, marks: null } } : {}),
   }) as unknown as AppSnapshot
 
-const entry = (snap: AppSnapshot, logger: boolean, satellite: string | null = null, dopplerTracking = false) => (
+const entry = (snap: AppSnapshot, logger: boolean, satellite: string | null = null, dopplerTracking = false, fd = party()) => (
   <ContestLargeEntry
     snap={snap}
-    fieldDay={party()}
+    fieldDay={fd}
     fdActive
     fdRuleset={null}
     title="Contest"
@@ -72,6 +74,7 @@ const entry = (snap: AppSnapshot, logger: boolean, satellite: string | null = nu
 )
 const callBox = () => document.querySelector<HTMLInputElement>('input.le-fd-input-call')!
 const notice = () => document.querySelector('.le-band-cleared')?.textContent ?? ''
+const notices = () => document.querySelectorAll('.le-band-cleared').length
 const wait = (ms: number) => act(async () => { vi.advanceTimersByTime(ms) })
 
 beforeEach(() => {
@@ -128,13 +131,54 @@ describe('the QSY wipe on the Contest screen and in the logger window', () => {
     expect(callBox().value).toBe('K9AAA')
   })
 
-  it('a track drives the dial only while Doppler corrects a leg (App reads this from its pass poll)', () => {
-    const track = (dopplerDownlink: boolean, dopplerUplink: boolean) =>
-      ({ name: 'SO-50', state: 'tracking', mode: 'rotor+doppler', dopplerDownlink, dopplerUplink }) as unknown as Parameters<typeof dopplerDrivesDial>[0]
-    expect(dopplerDrivesDial(null)).toBe(false)
-    expect(dopplerDrivesDial(track(false, false))).toBe(false)
-    expect(dopplerDrivesDial(track(true, false))).toBe(true)
-    expect(dopplerDrivesDial(track(false, true))).toBe(true)
+  it('any satellite pass up holds the wipe, Doppler on or not (App reads this from its pass poll)', () => {
+    const track = (dopplerDownlink: boolean) =>
+      ({ name: 'SO-50', state: 'armed', mode: 'rotor-only', dopplerDownlink, dopplerUplink: false }) as unknown as Parameters<typeof passHoldsDial>[0]
+    expect(passHoldsDial(null)).toBe(false)
+    expect(passHoldsDial(track(false))).toBe(true)
+    expect(passHoldsDial(track(true))).toBe(true)
+  })
+
+  it('TWO WINDOWS, ONE LINE: only the logger window runs the wipe, so one notice, one Restore', async () => {
+    const both = (dialMhz: number) => (
+      <>
+        {entry(at(dialMhz, false, { rev: 1, call: 'K9AAA' }), false)}
+        {entry(at(dialMhz, false, { rev: 1, call: 'K9AAA' }), true)}
+      </>
+    )
+    const view = render(both(14.025))
+    await wait(0)
+    const calls = () => [...document.querySelectorAll<HTMLInputElement>('input.le-fd-input-call')].map((b) => b.value)
+    expect(calls()).toEqual(['K9AAA', 'K9AAA'])
+    view.rerender(both(14.03))
+    await wait(2500)
+    expect(notices(), 'one window set the line aside, not both').toBe(1)
+    expect(calls(), 'the main window waits for the shared line to empty').toEqual(['K9AAA', ''])
+  })
+
+  it('a notice ends when its line takes up a call typed in the other window: its Restore can never overwrite it', async () => {
+    const view = render(entry(at(14.025), false))
+    fireEvent.change(callBox(), { target: { value: 'K9AAA' } })
+    view.rerender(entry(at(14.03), false))
+    await wait(2500)
+    expect(notices()).toBe(1)
+    // The logger window opens and the operator there types the next station.
+    view.rerender(entry(at(14.03, false, { rev: 4, call: 'W1BBB' }), false))
+    await wait(0)
+    expect(callBox().value).toBe('W1BBB')
+    expect(notices(), 'the stale Restore is gone').toBe(0)
+  })
+
+  it('a notice ends when that contact is logged from the other window', async () => {
+    const view = render(entry(at(14.025), false))
+    fireEvent.change(callBox(), { target: { value: 'K9AAA' } })
+    view.rerender(entry(at(14.03), false))
+    await wait(2500)
+    expect(notices()).toBe(1)
+    const logged = { ...party(), qsoCount: 1, log: [{ call: 'K9AAA', band: '20m', mode: 'CW', whenUnix: 1_792_342_800, rcvd: ['599', 'KANE'] }] } as unknown as FieldDayStatus
+    view.rerender(entry(at(14.03), false, null, false, logged))
+    await wait(0)
+    expect(notices(), 'no Restore of a contact already in the log').toBe(0)
   })
 
   it('is off by default', async () => {

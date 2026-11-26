@@ -10329,7 +10329,7 @@ export const JA: PartialCatalog = {
   "logEntry.bandCleared.contestBand": "コンテストの交信は無線機のバンドで記録されます。元に戻すには {{band}} に戻してください。",
   "logEntry.qsyCleared": "{{freq}} MHz から移動したため、{{call}} のログ行を退避しました。元に戻すと {{freq}} MHz で記録します。",
   "logEntry.qsyCleared.noCall": "{{freq}} MHz から移動したため、ログ行を退避しました。元に戻すと {{freq}} MHz で記録します。",
-  "logEntry.qsyCleared.contest": "{{freq}} MHz から移動したため、ログ行を退避しました。元に戻すと戻せますが、コンテストの交信は無線機の現在の周波数で記録されます。",
+  "logEntry.qsyCleared.contest": "{{freq}} MHz から移動したため、ログ行を退避しました。「元に戻す」でログ行を戻せます。コンテストの交信は、無線機が今いる周波数で記録されます。",
   // contest stats tab
   "contestStats.tabs.aria": "コンテスト画面の表示",
   "contestStats.tab.score": "スコアボード",

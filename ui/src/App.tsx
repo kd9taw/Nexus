@@ -216,7 +216,7 @@ import { processDxpedAlerts } from './features/dxpedChase'
 import { checkDxpedAlarms } from './features/dxpedAlarm'
 import { checkSatAlarms, satAlarmMap } from './features/satAlarm'
 import { tickSatPassAlert } from './features/satPassAlert'
-import { dopplerDrivesDial } from './features/qsyWipe'
+import { passHoldsDial } from './features/qsyWipe'
 import type { EsmSetting } from './features/esmHost'
 import { tickIssAutoArm } from './features/issAutoArm'
 import { enterView, isDecoderScreen, type DecoderScreen } from './features/decoderScreens'
@@ -454,7 +454,7 @@ function App() {
   // walkthrough offer. Pure documentation: it writes nothing and is never
   // shown unasked, so there is no "seen" flag to persist.
   const [showGuide, setShowGuide] = useState(false)
-  // Is a satellite track's Doppler driving the dial (the pass poll below, `dopplerDrivesDial`)?
+  // Does a satellite pass hold the dial (the pass poll below, `passHoldsDial`)?
   const [dopplerTracking, setDopplerTracking] = useState(false)
   // The first-run question ("How much have you done?") is asked only when the wizard opens by
   // itself on a fresh install; re-opened from Settings it does not ask again.
@@ -1296,9 +1296,9 @@ function App() {
         .then((t) => {
           if (!live || seq < applied) return
           applied = seq
-          // The same answer says whether Doppler drives the dial now: the Contest screen's QSY
-          // wipe stands down while it does.
-          setDopplerTracking(dopplerDrivesDial(t))
+          // The same answer says whether a pass holds the dial now: the Contest screen's QSY wipe
+          // stands down while one is up.
+          setDopplerTracking(passHoldsDial(t))
           tickSatPassAlert(t, Math.floor(Date.now() / 1000), {
             soundOff: settingsRef.current?.satPassAlertSoundOff === true,
             rotPostPass: settingsRef.current?.rotPostPass ?? 'stop',

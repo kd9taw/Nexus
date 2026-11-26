@@ -1241,6 +1241,9 @@ export function LogEntry({
     seeds: sharedEntry !== 'logger',
     content: shareContent,
     adopt: (c) => {
+      // A contact typed in the other window is the line now: a set-aside line's Restore here would
+      // overwrite it, so the notice ends.
+      if (c.call.trim()) setBandCleared(null)
       setLogCall(c.call)
       setFdFields(c.fields)
       fillRef.current = c.fill
@@ -1666,7 +1669,10 @@ export function LogEntry({
       if (qsyTimer.current) clearTimeout(qsyTimer.current)
       qsyTimer.current = setTimeout(() => { qsyTimer.current = null; setQsyRecheck((n) => n + 1) }, QSY_HOLD_MS + 50)
     }
-    if (!qsyWipe || !(clearCallOnBandChange || offerQsyWipe) || remoteMode || !lineHasContent(currentLine())) {
+    // While the contest line is shared with the logger window, only that window's strip runs the
+    // wipe: two would each set the one line aside, each with its own Restore.
+    const otherWindowWipes = share.sharing && sharedEntry !== 'logger'
+    if (!qsyWipe || !(clearCallOnBandChange || offerQsyWipe) || otherWindowWipes || remoteMode || !lineHasContent(currentLine())) {
       qsyAnchor.current = null
       qsyAwaySince.current = null
       qsyOnAirAt.current = null
@@ -1733,6 +1739,17 @@ export function LogEntry({
         ? null
         : b,
     )
+  // …and a contact logged from either window (the shared line's other window included) ends a
+  // set-aside notice for that very contact: its Restore would bring back a dupe.
+  const fdLogSeen = useRef(fdLogLen)
+  useEffect(() => {
+    const was = fdLogSeen.current
+    fdLogSeen.current = fdLogLen
+    const row = fieldDay?.log?.[fdLogLen - 1]
+    if (fdLogLen <= was || !row?.call || !row.band) return
+    loggedFromStrip(row.call, row.band)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fdLogLen])
   const restoreBlocked =
     bandCleared != null && fdActive && bandCleared.context.band.toLowerCase() !== snap.radio.band.toLowerCase()
   const restoreBandCleared = () => {

@@ -303,6 +303,20 @@ describe('"Wipe an unlogged call when I QSY"', () => {
     }
   })
 
+  it('after an over, a dial that lags back to the RX VFO is not a QSY: the anchor waits for it to settle', async () => {
+    setQsyWipe(true)
+    const view = render(cw(rx(14.025)))
+    type(call(), 'EA8XX')
+    view.rerender(cw(keyedByNexus(14.027)))
+    await wait(3000)
+    // Unkeyed, the first dial read is still the TX VFO's; the RX VFO's comes half a second later.
+    view.rerender(cw(rx(14.027)))
+    await wait(500)
+    view.rerender(cw(rx(14.025)))
+    await wait(5000)
+    expect(call().value).toBe('EA8XX')
+  })
+
   it('never during a transmission, and a transmission on the new frequency makes it the contact\'s', async () => {
     setQsyWipe(true)
     const view = render(phone(rx(14.25)))
