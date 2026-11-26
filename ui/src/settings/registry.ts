@@ -529,6 +529,15 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'table', 'station card', 'callsign card', 'call card', 'hover', 'pointer'],
   },
   {
+    // How the cockpits' log line behaves: the QSY wipe (features/qsyWipe), N1MM's "QSYing wipes
+    // the call".
+    id: 'log-line',
+    label: 'Log line',
+    tab: 'logbook',
+    keywords: ['qsy', 'wipe', 'clear call', 'unlogged', 'log strip', 'move up the band', 'tune away',
+      'band change', 'set aside', 'n1mm', 'ctrl+w', 'alt+w'],
+  },
+  {
     // How long the log's history keeps a deleted contact for Recently deleted and Undo.
     id: 'logbook-history',
     label: 'Deleted contacts',

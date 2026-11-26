@@ -17,6 +17,7 @@ describe('Settings ▸ Logbook', () => {
   it('holds the logbook sections, in the order the panel renders them', () => {
     expect(sectionsForTab('logbook').map((s) => s.id)).toEqual([
       'logbook-display',
+      'log-line',
       'logbook-history',
       'callbook',
       'connections-b4',

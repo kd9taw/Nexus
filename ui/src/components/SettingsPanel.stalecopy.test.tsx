@@ -405,6 +405,7 @@ describe('an edit made in any section of Settings is saved', () => {
     'waterfall-scopes': 'display preferences kept on this computer',
     'map-globe': 'display preferences kept on this computer',
     'logbook-display': 'the Logbook columns’ one writer, and the station card kept on this computer',
+    'log-line': 'the QSY wipe, kept on this computer',
     performance: 'display preferences kept on this computer',
     'app-updates': 'setBetaUpdates, the beta channel’s one writer',
     'start-at-sign-in': 'setLaunchAtLogin, the login entry’s one writer',

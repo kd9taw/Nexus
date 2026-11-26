@@ -242,6 +242,8 @@ const SHARED = [
   'nexus.logbook.globe',
   // Station card on hover (features/callCardHover): the same kind of standing preference as the globe.
   'nexus.callCard.hover',
+  // "Wipe an unlogged call when I QSY" (features/qsyWipe): the same kind of standing preference.
+  'nexus.logLine.qsyWipe',
   // Prose language: the same preference in every window, for the same reason units are. A
   // pop-out band map reading a different language than the window that spawned it would be
   // the shape of bug this list exists to prevent.

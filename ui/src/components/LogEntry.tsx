@@ -65,6 +65,7 @@ import { isStreamInput } from '../remote-native/stream-input'
 import { normaliseTyped, oneLineTyped, upperTyped } from '../typedInput'
 import { IotaPrefillField, iotaInvalid, iotaToLog, useIotaIslandPick, useIotaPrefill } from './Iota'
 import { withIotaIsland } from '../features/iotaGroups'
+import { useQsyWipe } from '../features/qsyWipe'
 
 // ---------------------------------------------------------------------------
 // THE DYNAMIC ENTRY STRIP (spec §9) — Call plus one box per slot the session's role
@@ -884,8 +885,9 @@ export function LogEntry({
   // key lets it lapse, as every other key lets a removal lapse.
   const [esmLine, setEsmLine] = useState<{ text: string; alert: boolean; about?: string } | null>(null)
   const esmLineKey = useRef<Event | null>(null)
-  // The line Alt+W wiped (`pressWipe`, below), kept until any other key: what a second Alt+W puts back.
-  const wipedRef = useRef<{ call: string; fields: Record<string, string>; fill: FillState } | null>(null)
+  // The line Alt+W or Ctrl+W wiped (`pressWipe`, below), kept until any other key: what a second
+  // press puts back.
+  const wipedRef = useRef<{ line: LogDraft; fields: Record<string, string>; fill: FillState } | null>(null)
   const pressWipeRef = useRef<() => void>(() => {})
   // The call Alt+M marks with (`features/freqMarkers.ts`).
   const markCallRef = useRef(logCall)
@@ -1002,14 +1004,12 @@ export function LogEntry({
     const call = newest?.call.toUpperCase()
     setEsmLine((l) => (l && l.about !== undefined && l.about === call ? l : null))
   }, [newestKey, fdLogLen])
-  // Ctrl+D, Alt+W and Ctrl+O from anywhere in the cockpit showing this strip — only while its host
-  // is on screen, since the RTTY, PSK and JS8 strips stay mounted when hidden.
+  // Ctrl+D and Ctrl+O from anywhere in the cockpit showing this strip — only while its host is on
+  // screen, since the RTTY, PSK and JS8 strips stay mounted when hidden. (The wipe keys are every
+  // strip's: their listener is below.)
   useEffect(() => {
     if (!removable || !active) return
     const onKey = (e: KeyboardEvent) => {
-      // Every key but Alt+W itself (a bare modifier is not a key) ends the chance to put back a line
-      // Alt+W wiped: it comes back only if nothing new has been typed in since.
-      if (!isModifierKey(e) && !isWipeKey(e)) wipedRef.current = null
       if (isRemoveKey(e)) {
         // This strip's key while it shows: the browser's own (a bookmark, or delete-next-character
         // in a macOS text box) never runs.
@@ -1032,15 +1032,9 @@ export function LogEntry({
       setRemoveArmed(null)
       setRemoveNote(null)
       if (e !== esmLineKey.current) setEsmLine(null)
-      // The strip's own keys while it shows (`features/contestKeys.ts`), held from the webview: a
-      // Mac's Option+W would type ∑ into the box, and Ctrl+O is a browser's Open. Held down, each is
-      // one press.
-      if (isWipeKey(e)) {
-        e.preventDefault()
-        // Pressed in a contact's edit, it is that edit's moment, not the entry line's.
-        if (e.target instanceof Element && e.target.closest('.contest-edit')) return
-        if (!e.repeat) pressWipeRef.current()
-      } else if (isOperatorBoxKey(e)) {
+      // The strip's own keys while it shows (`features/contestKeys.ts`), held from the webview:
+      // Ctrl+O is a browser's Open. Held down, each is one press.
+      if (isOperatorBoxKey(e)) {
         e.preventDefault()
         if (!e.repeat) askForOperatorBox()
       } else if (isMarkKey(e)) {
@@ -1052,6 +1046,37 @@ export function LogEntry({
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [removable, active])
+  // ⭐ ALT+W AND CTRL+W, THE WIPE (`pressWipe`), on EVERY strip while its host is on screen — the
+  // contest strip's, and the everyday line of Phone, CW, the keyboard modes and Satellites (operator
+  // request: "say you are not going to get someone worked and move up the band"). Not on the Remote
+  // page, whose forms all stay mounted. Held from the webview: a Mac's Option+W would type ∑ into
+  // the box. Held down, it is one press. Alt+W fires wherever the cursor is, as it always has;
+  // Ctrl+W typed into a text box that is not this line's is left to that box, so the wipe never
+  // takes a key from a box where it means something else. Nothing here keys, stops or holds back
+  // a transmission.
+  useEffect(() => {
+    if (remoteMode || !active) return
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target instanceof Element ? e.target : null
+      const othersBox =
+        target != null &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || (target as HTMLElement).isContentEditable) &&
+        target.closest('.log-entry') == null
+      const wipe = isWipeKey(e) && !(e.ctrlKey && othersBox)
+      // Every key but the wipe itself (a bare modifier is not a key) ends the chance to put back a
+      // line it wiped: it comes back only if nothing new has been typed in since.
+      if (!wipe) {
+        if (!isModifierKey(e)) wipedRef.current = null
+        return
+      }
+      e.preventDefault()
+      // Pressed in a contact's edit, it is that edit's moment, not the entry line's.
+      if (target?.closest('.contest-edit')) return
+      if (!e.repeat) pressWipeRef.current()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [remoteMode, active])
   // The one the band map's right-click reads (another window, so a shared key): this strip's call,
   // while it is on screen.
   useEffect(() => {
@@ -1567,8 +1592,8 @@ export function LogEntry({
     (!l.parkFor.hunt && l.parkRef.trim() !== '') ||
     l.rstSent != null ||
     l.rstRcvd != null
-  const setLineAside = (context: LineContext) => {
-    setBandCleared({ line: currentLine(), context, fdFields, fill: fillRef.current })
+  const setLineAside = (context: LineContext, qsy = false) => {
+    setBandCleared({ line: currentLine(), context, qsy, fdFields, fill: fillRef.current })
     // As Clear does (the serial in flight released, Enter Sends Message at a new contact), and every
     // box with it, as Alt+W's wipe does. No caret move: the operator is at the band control.
     reset(false)
@@ -1590,6 +1615,37 @@ export function LogEntry({
     setLineAside(context)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snap.bandChangeTick])
+  // ⭐ A QSY SETS THE UN-LOGGED LINE ASIDE TOO, when the operator has asked for it (Settings ▸
+  // Logbook ▸ Log line, `features/qsyWipe`; N1MM Logger+'s "QSYing wipes the call"). The line's
+  // contact is anchored at the dial where the line first held something; a move of more than
+  // `qsyWipeHz` from there — 3 kHz on phone, a voice's width, and 1 kHz on CW and the digital modes,
+  // where a station 1 kHz away is another station — sets it aside as a band change does, with
+  // Restore, which logs it on the frequency it was made on. A band change is the effect's above.
+  // Only on a strip that clears on a band change (never Satellites, whose dial follows Doppler), and
+  // never while transmitting: a transmission on the new frequency makes it the contact's, so the
+  // line is anchored there. Never a contact being logged or edited, nor one for another radio (the
+  // override). The FT screens have no such line: their contact is sequenced, and nothing here
+  // reaches it.
+  const [qsyWipe] = useQsyWipe()
+  const qsyWipeHz = fdMode === 'PH' ? 3000 : 1000
+  const qsyAnchor = useRef<{ band: string; dialMhz: number; context: LineContext } | null>(null)
+  useEffect(() => {
+    const radio = snap.radio
+    if (!qsyWipe || !clearCallOnBandChange || remoteMode || !lineHasContent(currentLine())) {
+      qsyAnchor.current = null
+      return
+    }
+    const anchor = qsyAnchor.current
+    if (!anchor || anchor.band !== radio.band || isOnAir(radio)) {
+      qsyAnchor.current = { band: radio.band, dialMhz: radio.dialMhz, context: draftContext ?? lineContextNow() }
+      return
+    }
+    if (committing.current || overrideOpen || editing) return
+    // To the hertz, so float noise in the MHz never decides a move of exactly the threshold.
+    if (Math.round(Math.abs(radio.dialMhz - anchor.dialMhz) * 1e6) <= qsyWipeHz) return
+    qsyAnchor.current = null
+    setLineAside(anchor.context, true)
+  })
   useEffect(() => {
     // Off the bands on a listen (WWV) the line is still the one being made on the band left: a
     // band change after the listen sets it aside with that band and frequency, not with none. A
@@ -1628,7 +1684,17 @@ export function LogEntry({
     setBandCleared(null)
     // Whatever the line holds now gives way, as Clear would clear it.
     reset(false)
-    const l = b.line
+    putLineBack(b.line, b.fdFields, b.fill)
+    // Logged on the band it was made on. (Off the bands, a listen, there is no band to log on, and
+    // the line logs on the radio's, as it always did.)
+    if (b.context.band) {
+      if (remoteMode) setRemoteDraftContext(b.context)
+      else setRestoredContext({ ...b.context, call: b.line.call })
+    }
+  }
+  /** Every box of `l` back in the line as it was (a set-aside line's Restore, a wipe's second
+   *  press), the contest strip's exchange boxes and their call-history marks with it. */
+  function putLineBack(l: LogDraft, fields: Record<string, string>, fill: FillState) {
     // The callbook fill belongs to this call again, so the call-change effect keeps it.
     enrichedForRef.current = l.enrichedFor
     setLogCall(l.call)
@@ -1656,18 +1722,12 @@ export function LogEntry({
     humanCallEditRef.current = false
     settledCallRef.current = true
     if (fdActive) {
-      setFdFields(b.fdFields)
-      setFill(b.fill)
-    }
-    // Logged on the band it was made on. (Off the bands, a listen, there is no band to log on, and
-    // the line logs on the radio's, as it always did.)
-    if (b.context.band) {
-      if (remoteMode) setRemoteDraftContext(b.context)
-      else setRestoredContext({ ...b.context, call: l.call })
+      setFdFields(fields)
+      setFill(fill)
     }
     // The CW macros' {HISNAME}/{HISSTATE} for this call again, which the clear emptied.
     if (!remoteMode && l.call.trim()) void setCwPeerInfo(l.call.trim(), l.name, l.state)
-    // …and the station takes the call up again, as Alt+W's put-back does.
+    // …and a contest strip's station takes the call up again, as the call box's commit does.
     if (fdActive && !remoteMode && l.call.trim()) void contestWorking(l.call.trim()).catch(() => {})
   }
 
@@ -2062,7 +2122,7 @@ export function LogEntry({
     const operators = logCall.trim() !== '' && (humanCallEditRef.current || settledCallRef.current)
     const keepsLine = operators && !fdActive && !overrideOpen && !committing.current
     // …and a line a band change set aside, while its Restore is on offer, with or without a line.
-    const aside = bandCleared && !fdActive ? { line: bandCleared.line, context: bandCleared.context } : undefined
+    const aside = bandCleared && !fdActive ? { line: bandCleared.line, context: bandCleared.context, qsy: bandCleared.qsy } : undefined
     writeLogDraft(
       draft,
       keepsLine || aside
@@ -2130,31 +2190,30 @@ export function LogEntry({
     onReset?.()
   }
 
-  // ⭐ ALT+W — WIPE THE LINE, AND PUT IT BACK (`features/contestKeys.ts`: typing Alt+W again
-  // reverses it). The wipe clears the call as Clear does — the serial in flight
-  // released, Enter Sends Message at a new contact — and every box as well, a report back to its
-  // default, keeping what the line held. A second Alt+W, with no other key between and the line
-  // still as the wipe left it, puts back the call, the boxes and their call-history marks, and takes
-  // the station's serial number up again, as the call box's commit does. What went out to the call
-  // is not put back: Enter Sends Message starts that contact over, as after Clear.
+  // ⭐ ALT+W OR CTRL+W — WIPE THE LINE, AND PUT IT BACK (`features/contestKeys.ts`: the same key
+  // again reverses it). The wipe clears the call as Clear does — on a contest strip the serial in
+  // flight released, Enter Sends Message at a new contact — and every box as well, a report back to
+  // its default, keeping what the line held. A second press, with no other key between and the line
+  // still as the wipe left it, puts back the call and every box (`putLineBack`), a contest strip's
+  // call-history marks with them, and a contest strip's station takes its serial number up again,
+  // as the call box's commit does. What went out to the call is not put back: Enter Sends Message
+  // starts that contact over, as after Clear.
   const pressWipe = () => {
-    // A contact's edit (Ctrl+Y) has the line's place, and the line waits for it as typed: Alt+W
+    // A contact's edit (Ctrl+Y) has the line's place, and the line waits for it as typed: the wipe
     // wipes nothing while the edit is open.
     if (editRows.length > 0) return
     const wiped = wipedRef.current
     wipedRef.current = null
-    const blank =
-      logCall.trim() === '' &&
-      sentRstValue === sentRstDefault &&
-      fdReceives.every((f) => fdValue(f) === (f.kind === 'rst' ? rstDefault : ''))
+    const blank = fdActive
+      ? logCall.trim() === '' &&
+        sentRstValue === sentRstDefault &&
+        fdReceives.every((f) => fdValue(f) === (f.kind === 'rst' ? rstDefault : ''))
+      : !lineHasContent(currentLine())
     if (wiped && blank) {
-      setLogCall(wiped.call)
-      setFdFields(wiped.fields)
-      setFill(wiped.fill)
-      if (wiped.call.trim()) void contestWorking(wiped.call.trim()).catch(() => {})
+      putLineBack(wiped.line, wiped.fields, wiped.fill)
       return
     }
-    wipedRef.current = { call: logCall, fields: fdFields, fill: fillRef.current }
+    wipedRef.current = { line: currentLine(), fields: fdFields, fill: fillRef.current }
     reset()
     setFdFields({})
   }
@@ -3018,15 +3077,23 @@ export function LogEntry({
     if (decision.log) await logIt()
     esmCaret(decision.caret)
   }
-  // The band change's notice (`bandCleared`), in both layouts.
+  // The band change's (or a QSY's) notice (`bandCleared`), in both layouts. A QSY's names the
+  // frequency the line logs on; a frequency is a wire value, not translated.
   const bandClearedNotice = bandCleared && (
     <p className="le-contest-resume le-band-cleared" role="status">
-      {bandCleared.line.call.trim()
-        ? t('logEntry.bandCleared', {
-            call: bandCleared.line.call.trim().toUpperCase(),
-            band: bandCleared.context.band || snap.radio.band,
-          })
-        : t('logEntry.bandCleared.noCall', { band: bandCleared.context.band || snap.radio.band })}{' '}
+      {bandCleared.qsy
+        ? bandCleared.line.call.trim()
+          ? t('logEntry.qsyCleared', {
+              call: bandCleared.line.call.trim().toUpperCase(),
+              freq: bandCleared.context.freqMhz.toFixed(3),
+            })
+          : t('logEntry.qsyCleared.noCall', { freq: bandCleared.context.freqMhz.toFixed(3) })
+        : bandCleared.line.call.trim()
+          ? t('logEntry.bandCleared', {
+              call: bandCleared.line.call.trim().toUpperCase(),
+              band: bandCleared.context.band || snap.radio.band,
+            })
+          : t('logEntry.bandCleared.noCall', { band: bandCleared.context.band || snap.radio.band })}{' '}
       {restoreBlocked && <>{t('logEntry.bandCleared.contestBand', { band: bandCleared.context.band })} </>}
       <button type="button" className="export-btn" onClick={restoreBandCleared} disabled={restoreBlocked}>
         {t('logEntry.bandCleared.restore')}

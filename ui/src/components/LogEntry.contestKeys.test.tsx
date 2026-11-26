@@ -178,6 +178,17 @@ describe('Alt+W — wipe the log line, and put it back', () => {
     expect(lineNow()).toEqual(['K9AAA', '599', ''])
   })
 
+  it('Ctrl+W, N1MM’s other wipe key, wipes and puts back the same way', async () => {
+    render(<Strip />)
+    type(callBox(), 'K9AAA')
+    type(qthBox(), 'COOK')
+    const CTRL_W = { key: 'w', code: 'KeyW', ctrlKey: true }
+    expect(await press(CTRL_W)).toBe(false)
+    expect(lineNow()).toEqual(['', '599', ''])
+    expect(await press(CTRL_W)).toBe(false)
+    expect(lineNow()).toEqual(['K9AAA', '599', 'COOK'])
+  })
+
   it('releases the serial number in flight, and the line put back takes the station’s number up again', async () => {
     render(<Strip />)
     type(callBox(), 'K9AAA')

@@ -6133,6 +6133,8 @@ export const EN = {
   'logEntry.bandCleared.noCall': 'Band changed: the log line was set aside. Restore puts it back, to log on {{band}}.',
   'logEntry.bandCleared.restore': 'Restore',
   'logEntry.bandCleared.contestBand': 'A contest contact logs on the band the radio is on: go back to {{band}} to restore it.',
+  'logEntry.qsyCleared': 'You moved off {{freq}} MHz: the log line for {{call}} was set aside. Restore puts it back, to log on {{freq}} MHz.',
+  'logEntry.qsyCleared.noCall': 'You moved off {{freq}} MHz: the log line was set aside. Restore puts it back, to log on {{freq}} MHz.',
   'fieldDay.log.remove': 'Remove',
   'fieldDay.log.remove.ask': 'Remove {{contact}}? Click Remove again.',
   'fieldDay.log.remove.title': 'Take this contact out of the contest log. It is kept under Removed and can be restored. Click twice: the first click asks.',
@@ -10717,6 +10719,10 @@ export const EN = {
   // `settings.dataFolder.snapshots.*`, `settings.confirmations.qrz/hamqth/callbookCache.*`): an id
   // is an invariant token, and the rows only moved.
   'settings.logbookDisplay.legend': 'Logbook display',
+  'settings.logLine.legend': 'Log line',
+  'settings.logLine.qsyWipe.label': 'Wipe an unlogged call when I QSY',
+  'settings.logLine.qsyWipe.aria': 'Set an unlogged contact aside when the dial moves off its frequency',
+  'settings.logLine.qsyWipe.hint': 'On the Phone, CW, RTTY, PSK, JTTY and JS8 screens a band change always sets an unlogged contact in the log line aside, with Restore. On: moving the dial more than 3 kHz on phone, or more than 1 kHz on CW and the digital modes, does too. Never while you transmit. Alt+W or Ctrl+W wipes the line by hand.',
   'settings.logbookHistory.legend': 'Deleted contacts',
   'settings.callbook.legend': 'Callbook lookups',
 

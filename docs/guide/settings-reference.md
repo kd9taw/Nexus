@@ -1955,6 +1955,23 @@ lists a logged contact is checked against. The services you upload to are on
   always opens its station card; turn this on and resting the pointer on a call for
   half a second opens it too. Remembered per computer, in every window.
 
+### Log line
+
+**Wipe an unlogged call when I QSY** — off by default. On the Phone, CW, RTTY, PSK,
+JTTY and JS8 screens, a band change always sets an unlogged contact in the log line
+aside, with **Restore** to put it back. Turn this on and moving the dial off the
+contact's frequency does the same: more than 3 kHz on phone, more than 1 kHz on CW
+and the digital modes. Restore puts the line back to log on the frequency it was
+made on. It never acts while you transmit, and if you transmit on the new frequency
+the contact belongs there. A contact being logged or edited, or typed for another
+radio, is left alone, and the Satellites and FT screens are never touched (a
+satellite's dial follows Doppler; an FT contact is sequenced). N1MM Logger+ has the
+same idea as "QSYing wipes the call & spots QSO in bandmap". To wipe the
+line by hand, press **Alt+W** or **Ctrl+W** on any screen with a log line; press it
+again right after to put the line back. Remembered per computer, in every window.
+
+_Undocumented so far._
+
 ### Deleted contacts
 
 **Keep deleted contacts for (days)** — the logbook keeps a full copy of every
