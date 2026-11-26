@@ -616,6 +616,8 @@ export interface BestTimesView {
   call: string
   entity?: string
   basis?: BestBasis
+  /** The operator's own grid the answer was worked out from (present with an answer). */
+  myGrid?: string
   km?: number
   bearing?: number
   answer?: BestTimes

@@ -297,6 +297,10 @@ pub(crate) struct BestTimesView {
     entity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     basis: Option<Basis>,
+    /// The operator's own grid the answer was worked out from, so the basis line names both ends
+    /// (a bare "grid FK52" reads as either station's).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    my_grid: Option<String>,
     /// Short-path distance (km) and bearing (degrees true) to the point the answer rests on.
     #[serde(skip_serializing_if = "Option::is_none")]
     km: Option<f64>,
@@ -328,6 +332,7 @@ impl BestTimesView {
             entity: propagation::dxcc::resolve(&call).map(|i| i.entity.to_string()),
             call,
             basis: None,
+            my_grid: None,
             km: None,
             bearing: None,
             answer: None,
@@ -439,6 +444,7 @@ fn answer(
         bearing: me.map(|me| bearing_deg(me, placed.at)),
         call: placed.call,
         basis: Some(placed.basis),
+        my_grid: Some(station.mygrid.trim().to_string()),
         answer: Some(answer),
         engine: station.prop_engine.clone(),
         engine_fallback: pred.engine_fallback,
@@ -702,6 +708,8 @@ mod tests {
         assert_eq!(v.state, "answer");
         // The gain the answer assumed travels with it.
         assert_eq!(v.ant_gain_dbi, Some(0.0));
+        // So does the operator's own grid, for the basis line's "from your grid … to their grid …".
+        assert_eq!(v.my_grid.as_deref(), Some(MYGRID));
         assert!(v.answer.as_ref().is_some_and(|a| a.per_mode));
         assert!(!crate::path_grades::holds_outlook_for(MYGRID, "JO21"));
         // Positive control: the same prediction handed to the grading keep, as `get_path_outlook`
