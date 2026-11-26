@@ -337,17 +337,10 @@ function arcDeg(lon1: number, lat1: number, lon2: number, lat2: number): number 
 /** What a map of kind `kind` drawn with `proj` on a `width` × `height` canvas can show. */
 export function visibleRegion(kind: 'globe' | 'aeqd' | 'world', proj: GeoProjection, width: number, height: number): Region {
   if (kind === 'world') {
-    const corners = [[0, 0], [width, 0], [0, height], [width, height]].map((p) => proj.invert?.(p as [number, number]) ?? null)
-    if (corners.some((c) => !c)) return { kind: 'rect', west: -180, south: -90, east: 180, north: 90 }
-    const lons = corners.map((c) => c![0])
-    const lats = corners.map((c) => c![1])
-    return {
-      kind: 'rect',
-      west: Math.max(-180, Math.min(...lons)),
-      east: Math.min(180, Math.max(...lons)),
-      south: Math.max(-90, Math.min(...lats)),
-      north: Math.min(90, Math.max(...lats)),
-    }
+    // The flat map's own painter draws per copy (`equirectCopies`); one rectangle holds every copy's
+    // part only when there is a single copy on screen.
+    const copies = equirectCopies(proj, width, height)
+    return copies.length === 1 ? copies[0].region : { kind: 'rect', west: -180, south: -90, east: 180, north: 90 }
   }
   const [cx, cy] = proj.translate()
   const reach = Math.max(...[[0, 0], [width, 0], [0, height], [width, height]].map(([x, y]) => Math.hypot(x - cx, y - cy)))
@@ -357,6 +350,46 @@ export function visibleRegion(kind: 'globe' | 'aeqd' | 'world', proj: GeoProject
   // shows more than its near hemisphere. Azimuthal equidistant: d / scale radians, up to the antipode.
   const radius = kind === 'globe' ? (reach >= s ? 90 : Math.asin(reach / s) / RAD) : Math.min(180, reach / s / RAD)
   return { kind: 'cap', lon: -lambda, lat: -phi, radius: radius + 0.5 }
+}
+
+/** One copy of the flat map's world (see `equirectCopies`). */
+export interface EquirectCopy {
+  /** Canvas x of this copy's longitude 0 and y of latitude 0: x = tx + k·lon, y = ty − k·lat. */
+  tx: number
+  ty: number
+  /** The canvas columns this copy owns; the painter clips to them. */
+  clipX0: number
+  clipX1: number
+  /** The part of the stored world (lon −180…180) this copy shows on screen. */
+  region: Region
+}
+
+/** The flat map turned to put the operator's longitude in the middle (`makeProjection` rotates it):
+ *  the stored world runs from −180 to 180, so a seam anywhere else needs it drawn twice, once each
+ *  side of the seam, each copy clipped to its own columns. Unturned, it is the one copy it always
+ *  was. Copies with nothing on screen are left out, so a zoomed view draws only what it can see. */
+export function equirectCopies(proj: GeoProjection, width: number, height: number): EquirectCopy[] {
+  const k = pxPerDegree(proj)
+  const [tx, ty] = proj.translate()
+  const lambda = proj.rotate()[0]
+  const left = Math.max(0, tx - 180 * k)
+  const right = Math.min(width, tx + 180 * k)
+  const south = Math.max(-90, (ty - height) / k)
+  const north = Math.min(90, ty / k)
+  const out: EquirectCopy[] = []
+  for (const o of [lambda, lambda - 360, lambda + 360]) {
+    const x0 = Math.max(left, tx + (o - 180) * k)
+    const x1 = Math.min(right, tx + (o + 180) * k)
+    if (x1 - x0 < 1e-6) continue
+    out.push({
+      tx: tx + o * k,
+      ty,
+      clipX0: x0,
+      clipX1: x1,
+      region: { kind: 'rect', west: Math.max(-180, (x0 - tx) / k - o), east: Math.min(180, (x1 - tx) / k - o), south, north },
+    })
+  }
+  return out
 }
 
 const tileReach = new WeakMap<BasemapTile, { lon: number; lat: number; r: number }>()
