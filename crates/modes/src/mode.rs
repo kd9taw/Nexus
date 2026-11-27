@@ -2323,12 +2323,19 @@ impl Mode for Msk144Mode {
         _ap_cq_only: bool,
         _activity: bool,
     ) -> Vec<Decode> {
-        // ⭐ frame_time_ms IS the nutc the C ABI needs. mskrtd uses it as the
-        // period label: it is the UTC field of the decoder's output line and one
-        // half of the duplicate-suppressor reset (`nutc00 != nutc0 || tsec <
-        // tsec0`). Seconds are distinct per period at every supported period
-        // (5 s minimum) and monotonic, which is all mskrtd compares.
-        let nutc = (frame_time_ms / 1000) as i32;
+        // ⭐ nutc IS THE PERIOD LABEL, AS WSJT-X's SIX-DIGIT UTC `hhmmss`. mskrtd uses
+        // it twice: one half of the duplicate-suppressor reset (`nutc00 != nutc0 ||
+        // tsec < tsec0`), and the UTC field of its output line, printed `i6.6`
+        // (mskrtd.f90 format 1021) and read back by the C ABI. The radio loop's
+        // `frame_time_ms` counts from the Unix epoch, so its seconds are ten digits:
+        // printed `i6.6` they are six asterisks, the line no longer reads back, and
+        // every live decode was dropped (#579) while every test, labelling small
+        // periods, decoded. The time of day, in WSJT-X's own `hhmmss` form (`fastSink`,
+        // mainwindow.cpp), keeps the label distinct per period at every supported
+        // period. It is the boundary that ends the period, where WSJT-X labels its
+        // start: the label is never shown, only compared.
+        let secs = frame_time_ms.div_euclid(1000).rem_euclid(86_400);
+        let nutc = ((secs / 3600) * 10_000 + (secs / 60 % 60) * 100 + secs % 60) as i32;
         msk144::decode_frame(
             iwave,
             self.period_s,

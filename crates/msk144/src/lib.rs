@@ -31,7 +31,12 @@
 //!
 //! Passing a distinct value per period is still required — it is the UTC field of
 //! the decoder's output line and the other half of the reset condition. Pass the
-//! period's UTC, or any per-period-distinct value.
+//! period's UTC as `hhmmss`, as WSJT-X does.
+//!
+//! ⚠️ SIX DIGITS AT MOST. `mskrtd` prints the label `i6.6` (format 1021) and the C
+//! ABI reads that line back; a label of seven or more digits prints as asterisks,
+//! the read fails, and the decode is dropped without a word. Unix seconds are ten
+//! digits.
 //!
 //! # Thread safety
 //! Not thread-safe; serializes behind [`tempo_fast_sys::MODEM_LOCK`] — the single
@@ -246,8 +251,8 @@ const MAX_DECODES: usize = 100;
 /// `iwave` must hold [`nmax`]`(period_s)` int16 samples at 12 kHz. `period_s` must
 /// be one of [`PERIODS`] (5/10/15/30; 15 is the 6 m workhorse).
 ///
-/// `nutc` labels the period and **must differ between periods** — see the module
-/// docs.
+/// `nutc` labels the period and **must differ between periods**, in `0..=999_999`
+/// (WSJT-X's UTC `hhmmss`) — see the module docs.
 ///
 /// `nfa..=nfb` is **accepted for ABI uniformity and otherwise ignored.** MSK144
 /// does not search a band: the signal is 1000 Hz wide and always centred on
@@ -279,6 +284,12 @@ pub fn decode_frame(
     assert!(
         period_supported(period_s),
         "MSK144 period {period_s}s is not supported (must be one of {PERIODS:?})"
+    );
+    // A label mskrtd cannot print `i6.6` loses every decode in silence (see the module
+    // docs): loud in a debug build, where a test can catch it.
+    debug_assert!(
+        (0..=999_999).contains(&nutc),
+        "MSK144 period label {nutc} does not fit mskrtd's six-digit UTC field"
     );
     let need = nmax(period_s);
     assert!(
@@ -607,6 +618,14 @@ mod tests {
     fn a_buffer_sized_for_the_wrong_period_panics() {
         let iwave = vec![0i16; nmax(15)];
         let _ = decode_frame(&iwave, 30, 1, 200, 2900, 3, "", "", 1500);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "six-digit UTC field")]
+    fn a_label_of_seven_digits_panics_in_a_debug_build() {
+        let iwave = vec![0i16; nmax(15)];
+        let _ = decode_frame(&iwave, 15, 1_000_000, 200, 2900, 3, "", "", 1500);
     }
 
     #[test]
