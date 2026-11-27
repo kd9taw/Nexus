@@ -245,9 +245,10 @@ bench-road-switch = ["tempo-client/bench-road-switch"]
 # panic-backtrace machinery (gimli) retaining ~68 MB parsing the binary's debug
 # info after a caught panic; with no DWARF there is nothing to parse, and the
 # installers shrink. The symbol table stays, so panic messages still name
-# functions. Dev builds keep full debug info.
+# functions.
 [profile.release]
 strip = "debuginfo"
+
 # ⭐ MEASURED, NOT ASSUMED: 87.3 MB -> 55.2 MB on the windows-gnu build, same commit, profile the
 # only difference. That is 32 MB off what an operator installs, and most of what the cpal 0.18
 # upgrade cost — that upgrade swapped `windows-sys` for the full `windows` crate family to reach
@@ -261,3 +262,9 @@ strip = "debuginfo"
 # builds only.
 lto = true
 codegen-units = 1
+
+# Dev and test builds keep line tables only (file:line in backtraces), not full DWARF: it
+# mirrors the workspace's dev profile, which says why. Override locally for a debugger session:
+# CARGO_PROFILE_DEV_DEBUG=true cargo build.
+[profile.dev]
+debug = "line-tables-only"
