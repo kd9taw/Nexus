@@ -115,11 +115,15 @@ fn apply(
     assert_eq!(active, engine_lock(&s.engine).settings().active_radio);
 }
 
-/// Ten attempts. A full run of this binary refused about one selection in three runs over a held
-/// modem (measured 2026-09-17, 28 guard acquisitions a run). Each attempt after the first waits
-/// for the mutex to be momentarily free, so a decode that holds it for the length of its work is
-/// waited out rather than retried straight through.
-const GESTURE_ATTEMPTS: usize = 10;
+/// How long a case keeps issuing a gesture the worker refused over a modem held elsewhere: a
+/// time, not a count. Each attempt after the first waits for the mutex to be momentarily free,
+/// but the worker takes it only after its handoff I/O, and on a loaded machine the decodes and
+/// encodes of the tests running beside this one (FT streaming, slot and window tests) take it
+/// back within that I/O again and again. Measured 2026-11-27, this group beside those tests on 8
+/// shared CPUs: ten attempts all lost in 5 runs of 9; with this patience 10 runs of 10 passed,
+/// the slowest gesture winning on its 26th attempt after 8 s. Those tests finish; a case that
+/// keeps trying this long outlasts them.
+const GESTURE_PATIENCE: Duration = Duration::from_secs(120);
 
 /// How many selections this thread's worker has refused over a modem held elsewhere.
 fn modem_busy_refusals() -> usize {
@@ -161,10 +165,17 @@ fn apply_gesture(
     mut gesture: impl FnMut(&mut Station) -> Completion,
     mut open: impl FnMut(&Transport) -> (Rig, Option<CatDaemon>, Option<bool>),
 ) -> Completion {
-    for attempt in 0..GESTURE_ATTEMPTS {
-        if attempt > 0 {
+    let started = Instant::now();
+    for attempt in 1.. {
+        if attempt > 1 {
+            assert!(
+                started.elapsed() < GESTURE_PATIENCE,
+                "the modem mutex was held elsewhere on all {} attempts in {GESTURE_PATIENCE:?}",
+                attempt - 1
+            );
             wait_for_free_modem();
         }
+        ptt_read_again(s);
         let refusals = modem_busy_refusals();
         let receipt = gesture(s);
         apply(s, pool, &mut open);
@@ -172,7 +183,22 @@ fn apply_gesture(
             return receipt;
         }
     }
-    panic!("the modem mutex was held elsewhere on all {GESTURE_ATTEMPTS} attempts");
+    unreachable!()
+}
+
+/// The PTT reading a selection is judged on, taken again with the value it already holds. A
+/// selection is refused on one a second old (`remote_radio_link`); the live loop reads the radio
+/// every second, so in the app it never is, but nothing reads here between the station's setup,
+/// the case's own handoff I/O, a refused attempt and the wait for the modem, which a loaded
+/// machine stretches past a second. The value is kept, so a case that set it still has it.
+fn ptt_read_again(s: &mut Station) {
+    let read = s
+        .state
+        .remote_read(&s.engine)
+        .expect("the loop owns the active radio's transport");
+    let mut e = engine_lock(&s.engine);
+    let keyed = e.remote_monitor_observation().radio.rig_keyed;
+    e.remote_observe_ptt(Some(&read), keyed);
 }
 
 #[test]
@@ -1585,6 +1611,7 @@ fn workspace_return_retains_the_original_connection_and_confirms_before_native_c
         "busy",
         "save_failed",
     ] {
+        let started = Instant::now();
         let mut attempt = 0;
         loop {
             if attempt > 0 {
@@ -1694,8 +1721,8 @@ fn workspace_return_retains_the_original_connection_and_confirms_before_native_c
             // `apply_gesture` issues a gesture again.
             if scenario != "busy" && modem_busy_refusals() != refusals {
                 assert!(
-                    attempt < GESTURE_ATTEMPTS,
-                    "{scenario}: the modem mutex was held elsewhere on all {GESTURE_ATTEMPTS} attempts"
+                    started.elapsed() < GESTURE_PATIENCE,
+                    "{scenario}: the modem mutex was held elsewhere on all {attempt} attempts in {GESTURE_PATIENCE:?}"
                 );
                 continue;
             }
