@@ -237,6 +237,45 @@ fn cw_word_window_ms(text: &str, wpm: u32) -> f64 {
     tempo_core::cw::morse_duration_ms(text, wpm) + 7.0 * 1200.0 / wpm.clamp(5, 60) as f64
 }
 
+/// How much longer than the last dial read took a read between CW words must have before the next
+/// word is due, to be asked at all ([`cw_dial_read`]).
+const CW_DIAL_READ_SLACK_MS: f64 = 40.0;
+
+/// A dial read the radio loop may ask this tick ([`cw_dial_read`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct DialRead {
+    /// The read a CW word owes (`RadioLoop::cw_dial_owed`): asked at once, off the cadence.
+    owed: bool,
+    /// The deadline (ms) the read must end by; `None` = the link's own.
+    deadline_ms: Option<u64>,
+}
+
+/// Whether the dial may be read this tick, and by when, while Nexus's own CW is `sending`
+/// (`left_ms` to the next word's due time; the last dial read took `last_read_ms`; the link's
+/// deadline `link_ms`). Not sending: the ordinary read. A word OWES a read once it has gone: that
+/// one is asked at once with the link's deadline, and the next word waits for it, so the licence
+/// gate never keys a word on a dial older than the word before it. Any other read only when the
+/// last one says it will come back before the next word is due, and it must END by then: on a
+/// slow link a read that straddled that time handed the next word over late.
+fn cw_dial_read(
+    sending: bool,
+    owed: bool,
+    left_ms: f64,
+    last_read_ms: f64,
+    link_ms: u64,
+) -> Option<DialRead> {
+    if !sending || owed {
+        return Some(DialRead {
+            owed,
+            deadline_ms: None,
+        });
+    }
+    (left_ms >= last_read_ms + CW_DIAL_READ_SLACK_MS).then(|| DialRead {
+        owed: false,
+        deadline_ms: Some(((left_ms - TX_METER_OVER_END_SLACK_MS) as u64).min(link_ms)),
+    })
+}
+
 /// The radio's Beta setting for the Flex client's CW, Tune and ATU (`flex_native_unbenched`) where
 /// the client serves the radio ([`flex_client_ip`]); `None` on every other radio, so the setting
 /// restarts nothing there.
@@ -4979,6 +5018,11 @@ struct RadioLoop {
     /// without Nexus's PTT, so nothing else in this loop sees their over; the transmit meters
     /// are read and the engine shows the over as on the air until then. 0.0 = none.
     cw_keying_until: f64,
+    /// The last CW word handed to a keyer owes a dial read before the next may go
+    /// ([`cw_dial_read`]): the licence gate keys every word against the dial.
+    cw_dial_owed: bool,
+    /// How long (ms) the fast reader's last dial read took: whether one fits before a CW word.
+    dial_read_ms: f64,
     /// What the engine was last told of [`Self::cw_keying_until`] (0.0 = no word), so it hears
     /// each word's window once, and its end.
     cw_keying_told: f64,
@@ -5952,6 +5996,8 @@ impl RadioLoop {
             last_winkeyer_wpm: 0, // 0 = unset → the open pushes the speed
             cw_busy_until: 0.0,
             cw_keying_until: 0.0,
+            cw_dial_owed: false,
+            dial_read_ms: 0.0,
             cw_keying_told: 0.0,
             tx_hold_told: 0.0,
             tx_hold_told_at: None,
@@ -13673,23 +13719,18 @@ impl RadioLoop {
             // ⛔ THE DIAL IS STILL READ WHILE NEXUS'S OWN CW IS SENDING, because the licence gate
             // keys every word against it ([`Engine::poll_cw_word`]): a knob turned out of the
             // privileges mid-macro must drop the rest of the message, and only this read tells the
-            // engine of the turn. But only when it can END before the next word is due
-            // (`cw_busy_until`), by the rule a transmit meter read keeps to an over's end
-            // ([`tx_meter_read_plan`]), so on wfview's virtual port it never holds a word up.
-            // `Some(deadline)`: the dial may be read, by that deadline (`None` = the link's own).
-            let dial_read = if cw_keying {
-                let left = self.cw_busy_until - now_in_tick(now, tick_started);
-                tx_meter_read_plan(
-                    false,
-                    Some(left),
-                    rig.slow_transport(),
-                    rig.transport_deadline_ms(),
-                    raw_alc_over_deadline_ms(rig),
-                )
-                .map(|plan| Some(plan.deadline))
-            } else {
-                Some(None)
-            };
+            // engine of the turn. ONCE AFTER EVERY WORD, OWED (`cw_dial_owed`): the next word is
+            // held until that read has come back ([`cw_dial_read`]), however slow the link, so
+            // no word keys on a dial older than the word before it. Between, on the fast cadence,
+            // only a read the last one says will come back before the next word is due, by then.
+            let dial_read = cw_dial_read(
+                cw_keying,
+                self.cw_dial_owed,
+                self.cw_busy_until - now_in_tick(now, tick_started),
+                self.dial_read_ms,
+                rig.transport_deadline_ms(),
+            );
+            let cadence_due = now - self.last_freq_poll >= FREQ_POLL_MS;
 
             // Fast dial-only mirror: the dial is the one value that must track a manual VFO knob in
             // real time (a 1–2 s lag made live tuning feel unusable; pure fast polling tracks it in
@@ -13697,8 +13738,8 @@ impl RadioLoop {
             // stamps last_freq_poll, so never a double read), never right after an app retune (that
             // branch defers it), under the same TX-safety + CAT-health gates. A read miss here is
             // ignored — the 750 ms heavy poll stays the authoritative CAT health probe / breaker.
-            if !retuned
-                && self.tx_until_ms.is_none()
+            let mut dial_readable = false;
+            if self.tx_until_ms.is_none()
                 && !self.tuning_keyed
                 && !self.manual_ptt_applied
                 // ⚠️ AND NOT MIC-KEYED, exactly as the heavy poll above (field report,
@@ -13719,14 +13760,26 @@ impl RadioLoop {
                 // both readers would gate away the way out.
                 && !self.operator_keyed()
                 && self.cat_ok != Some(false)
-                && self.freq_misses == 0 // a heavy-poll miss pauses fast reads until it recovers
-                // …and while Nexus's own CW is sending, only by the next word (`dial_read`).
-                && dial_read.is_some()
-                && now - self.last_freq_poll >= FREQ_POLL_MS
+                && self.freq_misses == 0
+            // a heavy-poll miss pauses fast reads until it recovers
+            {
+                dial_readable = true;
+            }
+            if !retuned
+                && dial_readable
+                // …and while Nexus's own CW is sending, the read a word owes at once, the others
+                // on the cadence and only by the next word (`dial_read`).
+                && dial_read.is_some_and(|r| r.owed || cadence_due)
             {
                 self.last_freq_poll = now;
                 let remote_read = self.remote_read(engine);
-                if let Ok(hz) = rig.read_freq_within(dial_read.flatten()) {
+                let asked = Instant::now();
+                let read = rig.read_freq_within(dial_read.and_then(|r| r.deadline_ms));
+                self.dial_read_ms = asked.elapsed().as_secs_f64() * 1000.0;
+                // The owed read has come back, with a dial or without one: a link that answers no
+                // dial keys the next word as it always did, and the gate judges the dial it has.
+                self.cw_dial_owed = false;
+                if let Ok(hz) = read {
                     {
                         let mut eng = engine_lock(engine);
                         eng.remote_observe_cat(remote_read.as_ref(), Some(true));
@@ -13752,6 +13805,12 @@ impl RadioLoop {
                         }
                     }
                 }
+            }
+            // No dial read can go out now (the link is down, or a key this reader stands down
+            // for): the next word is not held for one, and keys on the dial the engine has, as it
+            // always did.
+            if !dial_readable {
+                self.cw_dial_owed = false;
             }
 
             // Fast CAT S-meter mirror (display liveliness, 2026-08-01): STRENGTH used to ride
@@ -14225,7 +14284,11 @@ impl RadioLoop {
             // …and not while the loop doesn't own the operator's radio ([`Self::may_key`]):
             // not polling HOLDS the word in the engine's queue, so the macro resumes on the
             // radio it was typed for instead of keying the one being switched away from.
-            let ready = now >= self.cw_busy_until && self.may_key();
+            // ⛔ …and not before the dial read the last word owes has come back (`cw_dial_owed`):
+            // the licence gate keys this word against the dial, and a knob turned out of the
+            // privileges during the last word must drop it, as it did when the dial was read on
+            // every tick.
+            let ready = now >= self.cw_busy_until && self.may_key() && !self.cw_dial_owed;
             // THE RADIO'S CW SPEED IS FOLLOWED, NEVER FOUGHT (Nexus's Flex client, once its CW is
             // switched on). The radio's keyer sends each word at the speed it reports, and another
             // program can change that speed (SmartSDR, a Maestro). A change the radio reports to a
@@ -14516,6 +14579,9 @@ impl RadioLoop {
                 // Hold the next word until this one finishes keying + a word space (7 dits),
                 // so only ONE word is buffered in the rig at a time.
                 self.cw_busy_until = now + cw_word_window_ms(&text, wpm);
+                // …and until the dial has been read once since this one went (`cw_dial_owed`), on
+                // every keyer but the soundcard's, whose over the dial is never read in, as ever.
+                self.cw_dial_owed = !soundcard;
                 let mut handled = false;
                 // WinKeyer hardware keyer: open the serial port on demand (reopen if the
                 // configured port changed) and stream the word to it. On open failure,
@@ -56512,31 +56578,86 @@ mod tests {
         }
     }
 
-    /// ⛔ THE VFO SPUN OUT OF THE PRIVILEGES MID-MACRO DROPS THE REST, ON THAT SLOW LINK TOO. The
-    /// licence gate keys every word against the dial the engine knows, and only the dial read
-    /// tells it of a knob turn: with the receive reads paused for the whole message, the rest of
-    /// an 8-word macro keyed out of band. The read goes on while the radio sends, by the next
-    /// word's due time, so at most a word or two already handed over go out after the turn.
+    /// ⛔ THE VFO SPUN OUT OF THE PRIVILEGES MID-MACRO DROPS THE REST, ON A SLOW LINK TOO, AS
+    /// STRICTLY AS WHEN THE DIAL WAS READ ON EVERY TICK. The licence gate keys every word against
+    /// the dial the engine knows, and only the dial read tells it of a knob turn: with the receive
+    /// reads paused for the whole message the rest keyed out of band, and with only the reads that
+    /// fit between words a short word got none. Each word now owes a read the next one waits for,
+    /// so after the turn nothing but the word already handed over goes out, at every speed and
+    /// round trip here.
+    fn vfo_turn_mid_macro_keys_nothing_after_the_word_in_flight(rtt_ms: u64) {
+        for wpm in [20, 30, 40] {
+            let (frames, turned) = cw_over_slow_vsp(
+                Duration::from_millis(rtt_ms),
+                "CQ CQ CQ DE KD9TAW KD9TAW KD9TAW K",
+                wpm,
+                5_000,
+                |keyed, _, radio| {
+                    if keyed >= 1 {
+                        radio.lock().unwrap().main_hz = 14_400_000; // above 20 m
+                    }
+                    keyed >= 1
+                },
+            );
+            let words = vsp_words(&frames);
+            let turned = turned.expect("premise: the first word keyed");
+            let after: Vec<_> = words.iter().filter(|(at, _)| *at > turned).collect();
+            assert!(
+                after.is_empty(),
+                "{rtt_ms} ms link, {wpm} WPM: keyed after the VFO left the band: {after:?}"
+            );
+        }
+    }
+
     #[test]
-    fn a_vfo_turned_out_of_the_privileges_mid_macro_drops_the_rest_over_a_slow_virtual_port() {
-        let (frames, turned) = cw_over_slow_vsp(
-            Duration::from_millis(100),
-            "CQ CQ CQ DE KD9TAW KD9TAW KD9TAW K",
-            20,
-            14_000,
-            |keyed, _, radio| {
-                if keyed >= 1 {
-                    radio.lock().unwrap().main_hz = 14_400_000; // above 20 m
-                }
-                keyed >= 1
-            },
+    fn a_vfo_turned_out_of_the_privileges_mid_macro_drops_the_rest_on_a_20_ms_link() {
+        vfo_turn_mid_macro_keys_nothing_after_the_word_in_flight(20);
+    }
+
+    #[test]
+    fn a_vfo_turned_out_of_the_privileges_mid_macro_drops_the_rest_on_a_100_ms_link() {
+        vfo_turn_mid_macro_keys_nothing_after_the_word_in_flight(100);
+    }
+
+    #[test]
+    fn a_vfo_turned_out_of_the_privileges_mid_macro_drops_the_rest_on_a_250_ms_link() {
+        vfo_turn_mid_macro_keys_nothing_after_the_word_in_flight(250);
+    }
+
+    /// The dial read between CW words: off CW the ordinary read; the read a word owes at once,
+    /// with the link's own deadline; any other only when the last read says it fits before the
+    /// next word, and then bounded by that word's due time, less the end slack.
+    #[test]
+    fn a_dial_read_between_cw_words_fits_before_the_next_word_or_is_not_asked() {
+        let plain = |owed| {
+            Some(DialRead {
+                owed,
+                deadline_ms: None,
+            })
+        };
+        assert_eq!(cw_dial_read(false, false, -5.0, 900.0, 1_000), plain(false));
+        assert_eq!(
+            cw_dial_read(true, true, -5.0, 900.0, 1_000),
+            plain(true),
+            "owed: at once"
         );
-        let words = vsp_words(&frames);
-        let turned = turned.expect("premise: the first word keyed");
-        let after = words.iter().filter(|(at, _)| *at > turned).count();
-        assert!(
-            after <= 2,
-            "{after} words keyed after the VFO left the band: {words:?}"
+        assert_eq!(
+            cw_dial_read(true, false, 500.0, 250.0, 1_000),
+            Some(DialRead {
+                owed: false,
+                deadline_ms: Some(480),
+            }),
+            "fits: ends by the next word"
+        );
+        assert_eq!(
+            cw_dial_read(true, false, 5_000.0, 250.0, 1_000).and_then(|r| r.deadline_ms),
+            Some(1_000),
+            "never past the link's own deadline"
+        );
+        assert_eq!(
+            cw_dial_read(true, false, 280.0, 250.0, 1_000),
+            None,
+            "would straddle"
         );
     }
 
