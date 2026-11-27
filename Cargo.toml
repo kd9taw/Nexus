@@ -66,6 +66,15 @@ significant_drop_in_scrutinee = "warn"
 [profile.release]
 strip = "debuginfo"
 
+# Dev and test builds keep line tables only, not full DWARF: backtraces and panics still name
+# file:line, but each test binary shrinks to a fraction of its size. Full debug info made every
+# test-binary link write several hundred MB, and a few `cargo test` runs linking at once
+# saturated the disk on a dev box while the CPUs sat idle. `cargo test` inherits this profile.
+# For a debugger session that needs locals, override it locally:
+# CARGO_PROFILE_DEV_DEBUG=true cargo build.
+[profile.dev]
+debug = "line-tables-only"
+
 # Optimize the DSP crates under `cargo test`. They are sample-loop code, and unoptimized
 # they dominate CI wall clock: the 15 SSTV TX↔RX loopback cases each ran over a minute,
 # pushing `cargo test --workspace` past an hour and starving the clippy + per-crate gates
