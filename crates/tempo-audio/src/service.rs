@@ -23151,6 +23151,7 @@ mod tests {
     mod jtty_transmit;
     mod late_key;
     mod meter_deadline;
+    mod msk144_live;
     mod omnirig_coverage;
     mod pc_mic;
     mod po_derived;
