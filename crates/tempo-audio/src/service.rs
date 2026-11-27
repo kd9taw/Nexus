@@ -5501,6 +5501,10 @@ struct RadioLoop {
     /// the guards, like `cur_dial`, never a second authority. Read through
     /// [`RadioLoop::operator_keyed`] and never on its own.
     sat_inferred_keyed: bool,
+    /// The same inference for a TERRESTRIAL split (`Engine::split_inferred_keyed`): the rig
+    /// answered a dial read with the split's TX frequency. Mirrored and read exactly as the
+    /// flag above.
+    split_inferred_keyed: bool,
     /// A tracked satellite pass is UP (`Engine::sat_pass_engaged`), mirrored on
     /// the same tick as the flag above. Only the PTT-poll cadence reads it.
     sat_pass_engaged: bool,
@@ -6099,6 +6103,7 @@ impl RadioLoop {
             rig_keyed: false,
             ptt_diag: ptt_diag::PttDiag::default(),
             sat_inferred_keyed: false,
+            split_inferred_keyed: false,
             sat_pass_engaged: false,
             last_ptt_poll: 0.0,
             key_watch_until: None,
@@ -6216,12 +6221,25 @@ impl RadioLoop {
     /// reported — a rig answering with the pass's transmit leg is transmitting,
     /// and that evidence is live rather than up to a second old
     /// (`Engine::sat_note_keyed_leg` derives it; this loop only mirrors it).
+    /// `split_inferred_keyed` is that evidence for a terrestrial split.
     ///
     /// Deliberately NOT folded into `manual_ptt_applied` or the slot-TX flags:
     /// those are keying WE did, and several paths must still behave differently
     /// for the two.
     fn operator_keyed(&self) -> bool {
-        self.rig_keyed || self.sat_inferred_keyed
+        self.rig_keyed || self.sat_inferred_keyed || self.split_inferred_keyed
+    }
+
+    /// After a dial reading went to `Engine::observe_rig_freq`: did the engine hold it as a
+    /// standing split's TX frequency, the rig transmitting (`Engine::split_inferred_keyed`)?
+    /// Then the receive VFO is still where it was, so `last_dial` goes back to `dial_before`:
+    /// left on the TX frequency, the dial-keep would see the engine's dial differ from it and
+    /// push the receive dial at the rig's selected VFO, which while keyed is the transmit one.
+    fn split_tx_held(&mut self, eng: &Engine, dial_before: u64) {
+        self.split_inferred_keyed = eng.split_inferred_keyed();
+        if self.split_inferred_keyed {
+            self.last_dial = dial_before;
+        }
     }
 
     /// Which kind of CAT link the radio is on, for `crate::txextras` and the COMP write's pace.
@@ -10523,6 +10541,7 @@ impl RadioLoop {
                 // the fast dial read and the PTT poll further down the tick) are
                 // answering from this tick's truth.
                 self.sat_inferred_keyed = eng.sat_inferred_keyed();
+                self.split_inferred_keyed = eng.split_inferred_keyed();
                 self.sat_pass_engaged = eng.sat_pass_engaged();
                 // For the PTT method line only (`ptt_diag`).
                 self.ptt_diag.share = (eng.cat_share_port(), eng.settings().cat_broker_ptt);
@@ -12506,9 +12525,13 @@ impl RadioLoop {
                                 );
                             }
                         }
+                        // While a split TX reading is held as the rig transmitting, every
+                        // reading goes to the engine, an unchanged one included: the receive
+                        // VFO coming back is what releases that belief (`split_tx_held`).
                         let adopt = !self.fake_it_transient(hz)
                             && !self.read_outside_coverage(hz, engine)
-                            && hz != self.last_dial;
+                            && (hz != self.last_dial || self.split_inferred_keyed);
+                        let dial_before = self.last_dial;
                         if adopt {
                             self.last_dial = hz;
                         }
@@ -12523,6 +12546,7 @@ impl RadioLoop {
                                 eng.observe_rig_freq_after_vfo_select(hz, tx_on_a);
                             } else if adopt {
                                 eng.observe_rig_freq(hz);
+                                self.split_tx_held(&eng, dial_before);
                             }
                         }
                         // Read the radio's frequency-range table ONCE per CAT confirmation, so the
@@ -13745,9 +13769,12 @@ impl RadioLoop {
                             eng.remote_observe_dial(remote_read.as_ref(), Some(hz));
                         }
                     }
+                    // As in the heavy poll: every reading reaches the engine while a split TX
+                    // reading is held (`split_tx_held`).
                     let adopt = !self.fake_it_transient(hz)
                         && !self.read_outside_coverage(hz, engine)
-                        && hz != self.last_dial;
+                        && (hz != self.last_dial || self.split_inferred_keyed);
+                    let dial_before = self.last_dial;
                     if adopt {
                         self.last_dial = hz;
                     }
@@ -13760,6 +13787,7 @@ impl RadioLoop {
                             eng.observe_rig_freq_after_vfo_select(hz, tx_on_a);
                         } else if adopt {
                             eng.observe_rig_freq(hz);
+                            self.split_tx_held(&eng, dial_before);
                         }
                     }
                 }
@@ -17241,6 +17269,12 @@ impl RadioLoop {
                         // (`Engine::sat_note_keyed_leg`), and a poll that merely
                         // confirms "still off" is exactly the answer that must.
                         let mut eng = engine_lock(engine);
+                        // A fresh "off" while a split TX reading is held means the NEXT reading
+                        // of that frequency is a knob turned onto it. Make that reading the very
+                        // next one, so the rig has the least time to key again in between.
+                        if !on && eng.split_inferred_keyed() {
+                            self.last_freq_poll = 0.0;
+                        }
                         eng.observe_rig_ptt_read(on);
                         if on != self.rig_keyed {
                             self.rig_keyed = on;
@@ -17265,6 +17299,7 @@ impl RadioLoop {
                             }
                         }
                         self.sat_inferred_keyed = eng.sat_inferred_keyed();
+                        self.split_inferred_keyed = eng.split_inferred_keyed();
                     }
                 }
             } else if keyed_now && self.rig_keyed {
@@ -17447,6 +17482,14 @@ impl RadioLoop {
                 self.rig_keyed = false;
                 self.log_foreign_ptt(false, now, "the CAT link went down");
                 engine_lock(engine).observe_rig_ptt(false);
+            }
+            // …and so do the keys inferred from the frequency, the satellite and the split one:
+            // left standing, either holds the CAT rebuild off (`cat_rebuild_due`) for good.
+            if self.cat_ok == Some(false) && (self.sat_inferred_keyed || self.split_inferred_keyed)
+            {
+                self.sat_inferred_keyed = false;
+                self.split_inferred_keyed = false;
+                engine_lock(engine).clear_inferred_keyed();
             }
         }
 
@@ -52139,6 +52182,300 @@ mod tests {
             "control: the steer was WITHHELD, not dropped — it reaches the rig on the first \
              tick after the radio says it is receiving, which is what makes the guard a \
              deferral rather than a lost correction: {back_traffic:?}"
+        );
+    }
+
+    /// A terrestrial split at the radio loop: RX 14.025, TX 14.027, on a rigctld stub whose
+    /// dial (`f`) and PTT answer (`t`) the test moves. `ptt`: 0 off, 1 keyed, 2 no answer at all.
+    struct SplitScene {
+        engine: Arc<Mutex<Engine>>,
+        state: RadioLoop,
+        backend: MockBackend,
+        rig: Rig,
+        log: Arc<Mutex<Vec<String>>>,
+        dial: Arc<std::sync::atomic::AtomicU64>,
+        ptt: Arc<std::sync::atomic::AtomicU64>,
+        tick: f64,
+    }
+
+    impl SplitScene {
+        fn new(ptt: u64) -> Self {
+            use std::io::{BufRead, BufReader, Write};
+            use std::sync::atomic::{AtomicU64, Ordering};
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
+            let log = Arc::new(Mutex::new(Vec::<String>::new()));
+            let dial = Arc::new(AtomicU64::new(14_025_000));
+            let ptt = Arc::new(AtomicU64::new(ptt));
+            let (log2, dial2, ptt2) = (Arc::clone(&log), Arc::clone(&dial), Arc::clone(&ptt));
+            std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    let Ok(mut stream) = stream else { break };
+                    let Ok(r) = stream.try_clone() else { continue };
+                    let mut reader = BufReader::new(r);
+                    let mut line = String::new();
+                    loop {
+                        line.clear();
+                        match reader.read_line(&mut line) {
+                            Ok(0) | Err(_) => break,
+                            Ok(_) => {}
+                        }
+                        let l = line.trim().to_string();
+                        log2.lock().unwrap().push(l.clone());
+                        let p = ptt2.load(Ordering::SeqCst);
+                        let reply = if l == "f" {
+                            format!("{}\n", dial2.load(Ordering::SeqCst))
+                        } else if l == "t" && p < 2 {
+                            format!("{p}\n")
+                        } else {
+                            "RPRT 0\n".to_string()
+                        };
+                        if stream.write_all(reply.as_bytes()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            });
+            let mut scene = Self {
+                engine: Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0))),
+                state: loop_state(),
+                backend: MockBackend::new(),
+                rig: Rig::rigctld(&addr),
+                log,
+                dial,
+                ptt,
+                tick: 0.0,
+            };
+            // The scene: the loop follows the rig onto 14.025, then split goes up.
+            scene.run(4);
+            scene.engine.lock().unwrap().request_split(Some(14.027));
+            scene.run(4);
+            assert_eq!(scene.dial_mhz(), 14.025, "scene: the dial followed the rig");
+            assert_eq!(scene.split(), Some(14.027), "scene: split is up");
+            assert!(
+                scene.traffic().iter().any(|l| l.starts_with("S 1")),
+                "scene: the split reached the rig: {:?}",
+                scene.traffic()
+            );
+            scene.log.lock().unwrap().clear();
+            scene
+        }
+        fn run(&mut self, n: usize) {
+            let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
+            let mut station = StationSinks::new();
+            for _ in 0..n {
+                self.tick += 400.0;
+                self.state
+                    .step(
+                        &self.engine,
+                        &mut self.backend,
+                        &mut self.rig,
+                        &sinks,
+                        self.tick,
+                        &mut ra,
+                        &mut rr,
+                        &mut station,
+                    )
+                    .unwrap();
+            }
+        }
+        /// The rig's dial reads `hz` from now on, and the wire log starts afresh.
+        fn rig_reads(&mut self, hz: u64) {
+            self.dial.store(hz, std::sync::atomic::Ordering::SeqCst);
+            self.log.lock().unwrap().clear();
+        }
+        fn rig_ptt(&self, p: u64) {
+            self.ptt.store(p, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn traffic(&self) -> Vec<String> {
+            self.log.lock().unwrap().clone()
+        }
+        fn pushed(&self, hz: u64) -> bool {
+            let f = format!("F {hz}");
+            self.traffic().contains(&f)
+        }
+        fn dial_mhz(&self) -> f64 {
+            self.engine.lock().unwrap().settings().dial_mhz
+        }
+        fn split(&self) -> Option<f64> {
+            self.engine.lock().unwrap().split_tx_mhz()
+        }
+        fn inferred_keyed(&self) -> bool {
+            self.engine.lock().unwrap().split_inferred_keyed()
+        }
+    }
+
+    #[test]
+    fn a_rig_keyed_at_its_own_mic_in_terrestrial_split_keeps_the_split() {
+        // The terrestrial twin of the V/V field report above. Split is up (RX 14.025, TX 14.027)
+        // and the operator keys from the RADIO's mic or paddle: Nexus did not ask, and the PTT
+        // poll runs about once a second, so `rig_keyed` is still false. Keyed and in split, an
+        // Icom reports its TRANSMIT VFO, so a dial read in that window comes back 14.027. Taken
+        // as a knob QSY, that cleared the split mid-over, and the dial-keep then had a dial to
+        // push at the rig's selected VFO, which while keyed is the transmit one.
+        //
+        // This stub never answers `t`, so the frequency is all the loop has: what releases the
+        // belief here is the receive VFO coming back.
+        let mut s = SplitScene::new(2);
+
+        s.rig_reads(14_027_000);
+        s.run(8);
+        let keyed = s.traffic();
+        assert!(
+            keyed.iter().any(|l| l.trim() == "f"),
+            "scene: the loop really did read the transmit VFO: {keyed:?}"
+        );
+        assert_eq!(
+            s.split(),
+            Some(14.027),
+            "a dial reading of the split's own TX frequency is the rig transmitting, not a \
+             knob QSY: the split stands"
+        );
+        assert!(
+            !keyed.iter().any(|l| l.starts_with("S 0")),
+            "nothing hands the rig back to simplex mid-over: {keyed:?}"
+        );
+        assert_eq!(s.dial_mhz(), 14.025, "the receive dial is not moved");
+        assert!(
+            !keyed.iter().any(|l| l.starts_with("F ")),
+            "and no dial goes out at the rig's selected VFO, which while keyed is the \
+             transmit one: {keyed:?}"
+        );
+        assert!(s.inferred_keyed(), "the reading is taken as the rig keyed");
+
+        // ---- UNKEY: the rig reports its receive VFO again. ----
+        s.rig_reads(14_025_000);
+        s.run(8);
+        let back = s.traffic();
+        assert_eq!(
+            s.split(),
+            Some(14.027),
+            "the receive VFO coming back is no QSY"
+        );
+        assert!(!back.iter().any(|l| l.starts_with("S 0")), "{back:?}");
+        assert_eq!(s.dial_mhz(), 14.025);
+        assert!(
+            !s.inferred_keyed(),
+            "and that reading is what releases the belief on a rig with no PTT read-back"
+        );
+
+        // ---- POSITIVE CONTROL: a real knob turn, away from both frequencies, is a QSY and
+        // clears the split exactly as before. ----
+        s.rig_reads(14_030_000);
+        s.run(8);
+        assert_eq!(s.dial_mhz(), 14.030, "control: the dial follows the knob");
+        assert_eq!(
+            s.split(),
+            None,
+            "control: a knob QSY still clears the split"
+        );
+        assert!(
+            s.traffic().iter().any(|l| l.starts_with("S 0")),
+            "control: and simplex reaches the rig: {:?}",
+            s.traffic()
+        );
+    }
+
+    #[test]
+    fn a_real_over_keyed_at_the_radio_keeps_the_split_and_pushes_nothing_while_keyed() {
+        // The same over on a rig whose PTT read answers: keyed, then unkeyed.
+        let mut s = SplitScene::new(0);
+        s.rig_ptt(1);
+        s.rig_reads(14_027_000);
+        s.run(8);
+        let keyed = s.traffic();
+        assert!(
+            !keyed
+                .iter()
+                .any(|l| l.starts_with("F ") || l.starts_with("S 0")),
+            "nothing goes out at a keyed rig: {keyed:?}"
+        );
+        assert_eq!(s.split(), Some(14.027));
+        s.rig_ptt(0);
+        s.rig_reads(14_025_000);
+        s.run(8);
+        assert!(
+            !s.traffic().iter().any(|l| l.starts_with("S 0")),
+            "{:?}",
+            s.traffic()
+        );
+        assert_eq!(
+            s.split(),
+            Some(14.027),
+            "the split stands through the unkey"
+        );
+        assert_eq!(s.dial_mhz(), 14.025);
+        assert!(!s.inferred_keyed());
+    }
+
+    #[test]
+    fn a_small_knob_nudge_in_split_is_a_knob_move_not_snapped_back() {
+        // A few hertz off the receive dial is the operator's hand on the knob, not the receive
+        // VFO reported back: the dial follows it, and nothing pushes the old dial at the rig.
+        let mut s = SplitScene::new(0);
+        s.rig_reads(14_025_005);
+        s.run(10);
+        assert!(
+            !s.pushed(14_025_000),
+            "the knob nudge is not yanked back: {:?}",
+            s.traffic()
+        );
+        assert_eq!(s.dial_mhz(), 14.025005, "the dial follows the knob");
+        assert_eq!(s.split(), None, "a knob QSY clears the split, as any other");
+    }
+
+    #[test]
+    fn a_knob_turned_onto_the_split_tx_frequency_is_a_knob_move_once_the_ptt_says_unkeyed() {
+        // The one reading the frequency alone cannot tell from a keyed rig. The radio's PTT read
+        // can: a fresh "not transmitting" after it makes the TX frequency a knob turned onto it.
+        let mut s = SplitScene::new(0);
+        s.rig_reads(14_027_000);
+        s.run(10);
+        assert!(
+            !s.pushed(14_025_000),
+            "the knob is not yanked back to the old receive dial: {:?}",
+            s.traffic()
+        );
+        assert_eq!(s.dial_mhz(), 14.027, "the dial follows the knob");
+        assert!(
+            !s.inferred_keyed(),
+            "the PTT read released the keyed belief"
+        );
+        assert_eq!(s.split(), None, "and it is an ordinary knob QSY");
+    }
+
+    #[test]
+    fn a_cat_trip_releases_the_split_keyed_belief() {
+        // A belief read off the frequency must not outlive the link that gave it: it holds the
+        // CAT rebuild off, which waits for an unkeyed rig.
+        let mut s = SplitScene::new(2);
+        s.rig_reads(14_027_000);
+        s.run(4);
+        assert!(
+            s.inferred_keyed(),
+            "scene: the TX reading is held as the rig keyed"
+        );
+        s.rig = Rig::rigctld("127.0.0.1:1");
+        for _ in 0..40 {
+            if s.state.cat_ok == Some(false) {
+                break;
+            }
+            s.run(1);
+        }
+        assert_eq!(s.state.cat_ok, Some(false), "scene: the link tripped");
+        s.run(1);
+        assert!(
+            !s.state.operator_keyed() && !s.inferred_keyed(),
+            "the belief went with the link, in the loop and in the engine"
+        );
+        // The rebuild's own conditions, met: enough silent re-probes and the backoff spent.
+        s.state.cat_dead_probes = CAT_DEAD_PROBES_BEFORE_REBUILD;
+        s.state.cat_rebuild_at = 0.0;
+        let want = s.state.applied.clone();
+        let tick = s.tick;
+        assert!(
+            s.state.cat_rebuild_due(&want, tick, true),
+            "so the CAT rebuild is due, not held off by a key nobody can see"
         );
     }
 
