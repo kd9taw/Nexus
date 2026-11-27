@@ -24736,6 +24736,10 @@ fn restore_settings_bundle(
         }
         // #503: the QRZ keys of the station profiles the restore removes, or gives another call.
         forget_qrz_profile_keys_left_behind(&own, eng.settings(), &mut keychain);
+        // ...and the places of those keys' books, as a save that removes a profile drops them.
+        for id in qrz_profile_keys_left_behind(&own, eng.settings()) {
+            eng.forget_qrz_book(&qrz_logbook_profile_user(&id));
+        }
         // What waits for the operator now: what waited before, less every key removed or
         // replaced here, and each saved key for an address this station had none for (asked
         // before the hold, above).
@@ -32016,6 +32020,7 @@ fn set_station_profile_qrz_key_on(
     write(id, Some(key).filter(|k| !k.is_empty()))?;
     // #291: a different key can unlock a different book.
     forget_qrz_book_owner();
+    forget_qrz_book_place(engine, &qrz_logbook_profile_user(id));
     conn_log(
         "QRZ Logbook",
         "info",
@@ -40456,6 +40461,17 @@ fn qrz_logbook_key(engine: &SharedEngine) -> Result<Option<QrzBookKey>, String> 
     )
 }
 
+/// Forget where Sync from QRZ stands in `book`'s logbook (a keychain user) and save it, when the
+/// key kept under that user is saved again or cleared: a new key can open another book, whose
+/// logids and dates say nothing about this one's, so its next sync fetches the book whole.
+fn forget_qrz_book_place(engine: &SharedEngine, book: &str) {
+    let mut eng = engine_lock(engine);
+    eng.forget_qrz_book(book);
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("[qrz-sync] settings save failed: {e}")
+    });
+}
+
 /// #503: the call a station profile logs under now: the station's own call (`mycall`) for the
 /// profile the station is on, whose stored copy may not have caught up with it, else its own.
 fn station_profile_call<'a>(
@@ -41394,8 +41410,9 @@ fn set_qrz_logbook_key(
     let key = entered_credential(&key); // #224
     let entry = qrz_logbook_keychain()?;
     // #291: a different key can unlock a different book, so the owner learned for the old one
-    // (and whether this session already asked) no longer applies.
+    // (and whether this session already asked) no longer applies, nor does the sync's place in it.
     forget_qrz_book_owner();
+    forget_qrz_book_place(&state, QRZ_LOGBOOK_KEYCHAIN_USER);
     if key.is_empty() {
         clear_keychain_entry(&entry)?;
         conn_log(
@@ -41486,6 +41503,7 @@ fn set_upload_toggle(state: &SharedEngine, which: UploadToggle, on: bool) {
 fn clear_qrz_logbook_key(state: State<'_, SharedEngine>) -> Result<(), String> {
     let r = clear_keychain_entry(&qrz_logbook_keychain()?);
     if r.is_ok() {
+        forget_qrz_book_place(&state, QRZ_LOGBOOK_KEYCHAIN_USER);
         conn_log(
             "QRZ Logbook",
             "info",
@@ -41591,6 +41609,15 @@ fn keep_qrz_fetch_place(held: &Settings, form: &mut Settings) {
     form.qrz_last_sync_unix = held.qrz_last_sync_unix;
     form.qrz_sync_book = held.qrz_sync_book.clone();
     form.qrz_sync_books = held.qrz_sync_books.clone();
+    // A save that removes a profile, or gives its id another call (a reset), removes its key
+    // (`forget_qrz_profile_keys_left_behind`), and its book's place goes with it: a profile made
+    // later on that id starts its own book whole.
+    for id in qrz_profile_keys_left_behind(held, form) {
+        form.set_qrz_sync_place(
+            &qrz_logbook_profile_user(&id),
+            tempo_app::settings::QrzSyncPlace::default(),
+        );
+    }
 }
 
 /// Whether a finished eQSL InBox sync may move the cursor: only when its download is complete
@@ -43825,6 +43852,132 @@ mod qrz_paged_sync_tests {
             "Home's deltas from its fetch"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A profile for the tests below: its id, the first free one.
+    fn add_profile(engine: &SharedEngine, call: &str) -> String {
+        engine
+            .lock()
+            .unwrap()
+            .save_station_profile(tempo_app::settings::StationProfile {
+                name: call.into(),
+                call: call.into(),
+                grid: "EN43".into(),
+                ..Default::default()
+            })
+            .expect("saved")
+    }
+
+    /// A profile made after one was removed takes its id, and with it the name of the keychain
+    /// entry its key is kept under. It never takes the removed profile's place in that profile's
+    /// book: its first sync, the hourly one too, fetches its own book whole.
+    #[test]
+    fn a_profile_on_a_removed_profiles_id_fetches_its_whole_book() {
+        let (dir, engine) = crate::durable_command_tests::engine_on_store("qrz-reused-id", 0);
+        assert_eq!(add_profile(&engine, "W9XYZ/P"), "p1");
+        let first = other_book(7);
+        assert_eq!(sync_book(&engine, &first, PORTABLE, KEY_P, false), Ok(7));
+        assert!(place(&engine, PORTABLE).2 > 0, "on deltas");
+
+        crate::remove_station_profile_on(&engine, "p1", &|_| Ok(()))
+            .expect("removed")
+            .expect("its key forgotten");
+        assert_eq!(
+            add_profile(&engine, "W9XYZ/M"),
+            "p1",
+            "the id is taken again"
+        );
+        assert_eq!(
+            place(&engine, PORTABLE),
+            (0, 0, 0),
+            "nothing of the old book"
+        );
+        let second = FakeBook {
+            shift: 2_000,
+            ..FakeBook::of(5)
+        };
+        assert_eq!(sync_book(&engine, &second, PORTABLE, "m-key", true), Ok(5));
+        assert_eq!(*second.asked.borrow(), [0], "the new book, whole");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A new key for a profile can open another book: its place goes, and the next sync fetches
+    /// the book whole. Clearing the key does the same.
+    #[test]
+    fn a_profiles_key_changed_or_cleared_starts_its_book_over() {
+        let (dir, engine) = crate::durable_command_tests::engine_on_store("qrz-new-profile-key", 0);
+        let id = add_profile(&engine, "W9XYZ/P");
+        for (n, key) in ["another-key", ""].into_iter().enumerate() {
+            let book = FakeBook {
+                shift: 3_000 + 100 * n,
+                ..FakeBook::of(7)
+            };
+            assert_eq!(sync_book(&engine, &book, PORTABLE, KEY_P, false), Ok(7));
+            assert!(place(&engine, PORTABLE).2 > 0);
+            crate::set_station_profile_qrz_key_on(&engine, &id, key, &|_, _| Ok(()))
+                .expect("written");
+            assert_eq!(place(&engine, PORTABLE), (0, 0, 0), "key {key:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The station-wide key's book starts over when that key is saved again or cleared.
+    #[test]
+    fn the_station_keys_book_starts_over_with_a_new_key() {
+        let (dir, engine) = crate::durable_command_tests::engine_on_store("qrz-new-station-key", 0);
+        let book = FakeBook::of(7);
+        assert_eq!(sync_book(&engine, &book, HOME, KEY, false), Ok(7));
+        assert!(place(&engine, HOME).2 > 0);
+        crate::forget_qrz_book_place(&engine, HOME);
+        assert_eq!(place(&engine, HOME), (0, 0, 0));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A reset (or any save) that leaves a profile's book behind, the profile gone or logging
+    /// under another call, drops that book's place with the key: a profile made later on the
+    /// same id starts its own book whole.
+    #[test]
+    fn a_save_that_removes_a_profile_drops_its_books_place() {
+        let (_dir, engine) = crate::durable_command_tests::engine_on_store("qrz-reset", 0);
+        let id = add_profile(&engine, "W9XYZ/P");
+        let p1 = tempo_app::settings::qrz_profile_book(&id);
+        let mut held = engine.lock().unwrap().settings().clone();
+        held.set_qrz_sync_place(
+            &p1,
+            tempo_app::settings::QrzSyncPlace {
+                last_sync_unix: 1_790_000_000,
+                ..Default::default()
+            },
+        );
+        let mut reset = crate::Settings::default();
+        crate::keep_qrz_fetch_place(&held, &mut reset);
+        assert_eq!(
+            reset.qrz_sync_place(&p1).last_sync_unix,
+            0,
+            "the profile is gone"
+        );
+
+        let mut recalled = held.clone();
+        recalled
+            .station_profiles
+            .iter_mut()
+            .find(|p| p.id == id)
+            .unwrap()
+            .call = "W9XYZ/M".into();
+        crate::keep_qrz_fetch_place(&held, &mut recalled);
+        assert_eq!(
+            recalled.qrz_sync_place(&p1).last_sync_unix,
+            0,
+            "another call"
+        );
+
+        let mut kept = held.clone();
+        crate::keep_qrz_fetch_place(&held, &mut kept);
+        assert_eq!(
+            kept.qrz_sync_place(&p1).last_sync_unix,
+            1_790_000_000,
+            "unchanged"
+        );
     }
 
     fn set_high_water(engine: &SharedEngine, user: &str, unix: u64) {

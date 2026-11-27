@@ -9535,6 +9535,14 @@ impl Engine {
         self.settings.select_qrz_book(book);
     }
 
+    /// Forget where the sync stands in `book`'s QRZ logbook (persisted by the caller): its key
+    /// changed, or its profile is gone, so the next sync with that keychain user fetches its book
+    /// whole. The same narrow mutation as the cursors.
+    pub fn forget_qrz_book(&mut self, book: &str) {
+        self.settings
+            .set_qrz_sync_place(book, crate::settings::QrzSyncPlace::default());
+    }
+
     /// Record the sound card each TX audio device is on ([`Settings::tx_card_models`], persisted by
     /// the caller), as `tempo_audio::notify_sound::tx_card_models_after` works it out after a save.
     /// The narrow write, for the same reason as [`set_qrz_sync_cursor`](Self::set_qrz_sync_cursor).

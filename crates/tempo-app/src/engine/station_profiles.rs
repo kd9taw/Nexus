@@ -180,7 +180,11 @@ impl Engine {
         if next.station_profiles.len() == before {
             return Err("No such station profile.".into());
         }
-        self.adopt_station_profiles(next)
+        self.adopt_station_profiles(next)?;
+        // A profile made later takes the first free id, this one's, and its key's keychain entry
+        // with it: it must start its own QRZ book whole, never from this one's place.
+        self.forget_qrz_book(&crate::settings::qrz_profile_book(id));
+        Ok(())
     }
 
     /// Take `next`'s profiles and active id, and its flat station fields when they changed. A change
