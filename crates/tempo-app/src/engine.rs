@@ -4939,6 +4939,10 @@ pub struct Engine {
     /// The rig is transmitting, inferred from a dial reading of a standing TERRESTRIAL split's
     /// transmit frequency — see [`Engine::split_inferred_keyed`].
     split_inferred_keyed: bool,
+    /// A fresh PTT read said the rig is NOT transmitting while `split_inferred_keyed` stood: the
+    /// next reading of the split's TX frequency is a knob turned onto it, not a keyed rig. Spent
+    /// by the next dial reading, whatever it says ([`Engine::rig_freq_read`]).
+    split_tx_read_unkeyed: bool,
     /// The operator took the MODE back during a pass (they picked a sideband by
     /// hand). While set, [`Engine::sat_tx_mode`] says nothing at all: we never
     /// re-assert a sideband over the top of a choice the operator just made.
@@ -8169,6 +8173,7 @@ impl Engine {
             sat_alt_uplinks: Vec::new(),
             sat_inferred_keyed: false,
             split_inferred_keyed: false,
+            split_tx_read_unkeyed: false,
             sat_mode_released: false,
             split_tx_mhz: None,
             tx_split_confirmed_hz: None,
@@ -10821,6 +10826,9 @@ impl Engine {
         // `rig_dial_seen`.
         let link_opened = !self.rig_dial_seen;
         self.rig_dial_seen = true;
+        // Every reading replaces the split's keyed belief (the arm below the satellite one).
+        let split_was_keyed = std::mem::take(&mut self.split_inferred_keyed);
+        let split_tx_unkeyed = std::mem::take(&mut self.split_tx_read_unkeyed);
         // Where the dial was, for a contact a band change below ends (`on_band_change`).
         let made_on = self.made_on_now();
         // A knob move DURING A PASS, inside the transponder, is not a QSY — it
@@ -10863,20 +10871,21 @@ impl Engine {
         //
         // So the split's TX frequency coming back is the rig transmitting: nothing is adopted,
         // the split stands, and the loop stands its dial reader and dial pushes down on it
-        // ([`Self::split_inferred_keyed`]). The receive dial coming back (the unkey) is no QSY
-        // either. A VFO select is its own arm and is left exactly as it was.
-        self.split_inferred_keyed = false;
+        // ([`Self::split_inferred_keyed`]). The receive dial coming back while that belief stands
+        // (the unkey) is no QSY either.
+        //
+        // Two readings stay knob moves: any other frequency, a nudge of a few hertz included, and
+        // the TX frequency read after a fresh PTT read said the rig is not transmitting
+        // ([`Self::observe_rig_ptt_read`]): that is a knob turned onto it. A VFO select is its own
+        // arm and is left exactly as it was.
         if !vfo_select {
-            if let Some(tx_hz) = self.split_tx_on_rig_hz() {
-                let dial_hz = (self.settings.dial_mhz * 1e6).round() as u64;
-                let near = |f: u64| f.abs_diff(hz) <= SPLIT_VFO_READ_TOLERANCE_HZ;
-                if near(tx_hz) && !near(dial_hz) {
-                    self.split_inferred_keyed = true;
-                    return;
-                }
-                if near(dial_hz) {
-                    return;
-                }
+            if self.split_tx_reading(hz) && !split_tx_unkeyed {
+                self.split_inferred_keyed = true;
+                return;
+            }
+            let dial_hz = (self.settings.dial_mhz * 1e6).round() as u64;
+            if split_was_keyed && dial_hz.abs_diff(hz) <= SPLIT_VFO_READ_TOLERANCE_HZ {
+                return;
             }
         }
         // A knob QSY returns the rig to simplex, exactly like an app-commanded retune
@@ -12947,6 +12956,11 @@ impl Engine {
     /// returns to simplex. Marks the request dirty so `take_split_request` picks it up.
     pub fn request_split(&mut self, tx_mhz: Option<f64>) {
         self.remote_actuation.revoke();
+        if tx_mhz.is_none() {
+            // No split, so no split TX frequency for a keyed rig to report.
+            self.split_inferred_keyed = false;
+            self.split_tx_read_unkeyed = false;
+        }
         self.split_tx_mhz = tx_mhz;
         self.split_dirty = true;
         // A NEW request retires the old acknowledgement immediately — the rig has not answered
@@ -15335,7 +15349,10 @@ impl Engine {
         {
             return;
         }
-        let keyed = self.rig_keyed || self.sat_inferred_keyed || owner.is_some();
+        let keyed = self.rig_keyed
+            || self.sat_inferred_keyed
+            || self.split_inferred_keyed
+            || owner.is_some();
         let now = now_unix_secs();
         let extends_open_over = self
             .measured_over
@@ -19648,6 +19665,7 @@ impl Engine {
             || self.tx_owner().is_some()
             || self.rig_keyed
             || self.sat_inferred_keyed
+            || self.split_inferred_keyed
         {
             return None;
         }
@@ -25750,6 +25768,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// channel's Doppler correction confirms its writes by it ([`aprs_iss`]).
     pub fn rig_freq_read(&mut self, hz: u64) {
         self.aprs_iss_rig_read(hz);
+        // A fresh "not transmitting" speaks only for the reading right after it: a reading of
+        // anything but the split's TX frequency spends it here, whether or not the loop goes on
+        // to hand it to `observe_rig_freq` (an unchanged dial never reaches it).
+        if !self.split_tx_reading(hz) {
+            self.split_tx_read_unkeyed = false;
+        }
     }
 
     /// The radio loop pushed a dial and the rig ACKNOWLEDGED it — confirm a
@@ -26407,10 +26431,29 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// The rig is transmitting, inferred from the frequency it reported: the last dial reading
     /// was a standing terrestrial split's TX frequency, which a keyed rig in split reports
     /// ([`Self::observe_rig_freq`]). The terrestrial twin of [`Self::sat_inferred_keyed`],
-    /// read by the radio loop beside it and released the same two ways: by any other reading,
-    /// or by a fresh PTT read that says off ([`Self::observe_rig_ptt_read`]).
+    /// read by the radio loop beside it. Released by any other reading, by a fresh PTT read
+    /// that says off ([`Self::observe_rig_ptt_read`]), by a CAT trip
+    /// ([`Self::clear_inferred_keyed`]) and by the split ending ([`Self::request_split`]).
     pub fn split_inferred_keyed(&self) -> bool {
         self.split_inferred_keyed
+    }
+
+    /// The CAT link went down: both keys inferred from the frequency go with it, the satellite
+    /// one and the split one. A dead link says nothing about whether the rig is transmitting, and
+    /// a belief left standing would hold the radio loop's CAT rebuild off, which waits for an
+    /// unkeyed rig. The radio loop calls this where it drops its polled `rig_keyed` on a trip.
+    pub fn clear_inferred_keyed(&mut self) {
+        self.sat_inferred_keyed = false;
+        self.split_inferred_keyed = false;
+        self.split_tx_read_unkeyed = false;
+    }
+
+    /// Is `hz` the TX frequency of the split standing now, as a keyed rig reports it, and not
+    /// also the receive dial? See [`Self::split_tx_on_rig_hz`].
+    fn split_tx_reading(&self, hz: u64) -> bool {
+        let near = |f: u64| f.abs_diff(hz) <= SPLIT_VFO_READ_TOLERANCE_HZ;
+        let dial_hz = (self.settings.dial_mhz * 1e6).round() as u64;
+        self.split_tx_on_rig_hz().is_some_and(near) && !near(dial_hz)
     }
 
     /// The frequency the radio transmits on under the split standing now, as a dial read would
@@ -26438,7 +26481,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
     pub fn observe_rig_ptt_read(&mut self, on: bool) {
         if !on {
             self.sat_inferred_keyed = false;
-            self.split_inferred_keyed = false;
+            // A split TX reading this read says was not a keyed rig: the next one is a knob.
+            self.split_tx_read_unkeyed = std::mem::take(&mut self.split_inferred_keyed);
+        } else {
+            self.split_tx_read_unkeyed = false;
         }
     }
 
