@@ -60,6 +60,137 @@ pub fn expand_home_with(port: String, home: Option<&std::ffi::OsStr>) -> String 
     }
 }
 
+/// What a serial port was when it last worked: the USB facts that survive Windows renumbering
+/// it (another USB socket, a hub, a driver reinstall, an update's restart), so a saved port that
+/// is no longer there can be found again under its new name
+/// ([`crate::settings::Settings::follow_moved_ports`]).
+///
+/// `serial` is the device's own USB serial number, `""` when it has none (Windows' generated
+/// stand-in and a factory default a whole production run shares are kept but never count as one,
+/// [`Self::serial_key`]). `interface` is which port of a multi-port chip this is: the FT-891's
+/// CP2105 shows its Enhanced and Standard COM ports with the SAME VID, PID and serial number, and
+/// only the interface number tells them apart. It is never a key by itself: Linux numbers EVERY
+/// single-interface USB serial 0, and Windows says `MI_00` for any dual chip.
+/// `product` is the USB product string, or on Windows the device's friendly name with the
+/// ` (COMn)` it carries taken off ([`normalized_product`]), since that part is what changes.
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct PortIdentity {
+    pub vid: u16,
+    pub pid: u16,
+    pub serial: String,
+    pub product: String,
+    pub interface: Option<u8>,
+}
+
+impl PortIdentity {
+    /// The serial number when it can tell one device from another. Not one:
+    /// - Windows' stand-in for a device with none, the first piece of the instance id it made up
+    ///   for that USB socket (`"5"` out of `5&2C3A…`): it changes when the device moves and is
+    ///   shared by unrelated devices, so a serial that short is not one;
+    /// - a factory default every chip of a run carries: Silicon Labs' `0001` on generic CP210x
+    ///   cables (and any other zeros-and-a-digit value), and the `A50285BI` of cloned FTDI chips.
+    ///
+    /// What this cannot see: two cables whose serial numbers were rewritten to the SAME value
+    /// that is not on this list (a reseller's batch programmed alike). They read as one device.
+    /// At launch that is two candidates, so ambiguous and not followed, while both are plugged in;
+    /// with only the other one present it would be followed. The radio loop's follow also refuses
+    /// any port present while CAT worked, so a cable that sat beside the radio is still refused.
+    ///
+    /// Windows' FTDI driver writes the port letter (A–D) after an FTDI chip's serial number
+    /// (`…+A702TB52A\0000` reads as `A702TB52A`), so for FTDI's vendor id the factory check reads
+    /// the serial without one trailing letter: `A50285BIA` and `00000000A` are the clone and
+    /// all-zeros serials. The key itself keeps the letter, which is the same on every read.
+    pub(crate) fn serial_key(&self) -> Option<&str> {
+        let s = self.serial.trim();
+        let judged = match s.strip_suffix(['A', 'B', 'C', 'D', 'a', 'b', 'c', 'd']) {
+            Some(bare) if self.vid == FTDI_VID && !bare.is_empty() => bare,
+            _ => s,
+        };
+        let significant = judged.trim_start_matches('0');
+        let factory = (judged.bytes().all(|b| b.is_ascii_digit()) && significant.len() <= 1)
+            || FACTORY_SERIALS
+                .iter()
+                .any(|f| f.eq_ignore_ascii_case(judged));
+        (s.len() >= 4 && !factory).then_some(s)
+    }
+}
+
+/// Serial numbers shared by every chip of a production run, which identify no device
+/// ([`PortIdentity::serial_key`]).
+const FACTORY_SERIALS: &[&str] = &["A50285BI"];
+
+/// Future Technology Devices International's USB vendor id.
+const FTDI_VID: u16 = 0x0403;
+
+/// A product name without the ` (COM5)` Windows writes at the end of a serial device's friendly
+/// name: that part is the port name, which is exactly what changed.
+pub fn normalized_product(product: &str) -> String {
+    let p = product.trim();
+    if let Some(open) = p.rfind(" (") {
+        let tail = &p[open + 2..];
+        if let Some(inner) = tail.strip_suffix(')') {
+            if looks_like_com(inner) {
+                return p[..open].trim_end().to_string();
+            }
+        }
+    }
+    p.to_string()
+}
+
+fn looks_like_com(s: &str) -> bool {
+    s.len() > 3
+        && s[..3].eq_ignore_ascii_case("com")
+        && s.as_bytes()[3..].iter().all(u8::is_ascii_digit)
+}
+
+/// A serial port present on this computer now, with its USB identity when it is a USB port.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PresentPort {
+    pub name: String,
+    pub identity: Option<PortIdentity>,
+}
+
+/// Where a saved port's device is now, judged on its identity alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Refound {
+    /// Exactly one present port is that device.
+    At(String),
+    /// Several present ports could be it, or the identity is too thin to tell (no serial number
+    /// of its own): Nexus does not guess.
+    Ambiguous(Vec<String>),
+    /// Nothing here is that device.
+    NotFound,
+}
+
+/// Find the device `was` among the ports present now. Unambiguous only on the device's own
+/// serial number ([`PortIdentity::serial_key`]); the interface number then picks the right port
+/// of a multi-port chip, whose ports share one serial. VID and PID alone, with or without an
+/// interface number (two identical cables, or a radio and its twin), are never enough. Product
+/// names, when both sides have one, must agree as well.
+pub fn refind(was: &PortIdentity, present: &[PresentPort]) -> Refound {
+    let serial = was.serial_key();
+    let product = normalized_product(&was.product);
+    let hits: Vec<String> = present
+        .iter()
+        .filter_map(|p| p.identity.as_ref().map(|id| (p, id)))
+        .filter(|(_, id)| id.vid == was.vid && id.pid == was.pid)
+        .filter(|(_, id)| serial.is_none_or(|s| id.serial_key() == Some(s)))
+        .filter(|(_, id)| was.interface.is_none() || id.interface == was.interface)
+        .filter(|(_, id)| {
+            let theirs = normalized_product(&id.product);
+            product.is_empty() || theirs.is_empty() || theirs == product
+        })
+        .map(|(p, _)| p.name.clone())
+        .collect();
+    let keyed = serial.is_some();
+    match hits.len() {
+        0 => Refound::NotFound,
+        1 if keyed => Refound::At(hits[0].clone()),
+        _ => Refound::Ambiguous(hits),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

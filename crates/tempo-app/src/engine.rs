@@ -5530,6 +5530,11 @@ pub struct Engine {
     /// `None` for VOX (no CAT), `Some(true/false)` for a CAT/serial rig. Written
     /// by the radio loop when it (re)opens or probes the rig.
     cat_status: (Option<bool>, String),
+    /// What the launch's look at the port settings has to tell the CAT status, once
+    /// (`Settings::follow_moved_ports`): the ports it followed, and the words for the CAT port
+    /// when it is not on this computer. Taken by the radio loop's launch open
+    /// ([`Self::take_launch_port_notes`]).
+    launch_port_notes: crate::settings::port_follow::PortFollow,
     /// A silent CAT link turned transmit off and nothing has answered that yet
     /// ([`Self::say_tx_off_for_silent_cat`]).
     cat_silence_tx_off: bool,
@@ -8306,6 +8311,7 @@ impl Engine {
             cw_stream: tempo_core::cw_decode::CwStreamDecoder::new(tempo_fast::SAMPLE_RATE, 600.0),
             qso_audio: Vec::new(),
             cat_status: (None, String::new()),
+            launch_port_notes: Default::default(),
             cat_silence_tx_off: false,
             tx_alarms: Vec::new(),
             tx_alarm_seq: 0,
@@ -30970,6 +30976,18 @@ contact yourself."
     /// ([`Self::refuse_cat_reprobe`]). Read under the same lock as the answer.
     pub fn cat_reprobe_refused(&self) -> bool {
         self.cat_reprobe_refused
+    }
+
+    /// Hand the launch's port findings to the radio loop's first CAT status (set once, at launch,
+    /// before the loop starts).
+    pub fn set_launch_port_notes(&mut self, notes: crate::settings::port_follow::PortFollow) {
+        self.launch_port_notes = notes;
+    }
+
+    /// The launch's port findings, once: the radio loop's launch open puts them in front of its
+    /// CAT status ([`crate::settings::port_follow::launch_cat_detail`]).
+    pub fn take_launch_port_notes(&mut self) -> crate::settings::port_follow::PortFollow {
+        std::mem::take(&mut self.launch_port_notes)
     }
 
     /// Consume a pending re-probe request (returns true once per request).

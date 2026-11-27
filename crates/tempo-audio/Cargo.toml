@@ -62,7 +62,10 @@ tempo-core = { path = "../tempo-core" }
 # deny.toml's allowlist. Encode-only use: one 320x256-ish frame per ~2-minute transmission.
 png = "0.17"
 cpal = { version = "0.18", optional = true }
-serialport = { version = "4", optional = true }
+# `usbportinfo-interface`: which port of a multi-port chip a USB serial port is (the CP2105's
+# Enhanced vs Standard COM), so a renumbered port is followed to the right half
+# (`ports::present_ports`). A feature of the crate already here: compiles nothing new.
+serialport = { version = "4", optional = true, features = ["usbportinfo-interface"] }
 deepcw = { path = "../deepcw", optional = true }
 tempo-net = { path = "../tempo-net", optional = true }
 # SSTV RX decoder core (the `sstvrx` thread). Rides `device` like the rest of

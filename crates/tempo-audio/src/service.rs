@@ -3013,7 +3013,17 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     let init_ok = init_probe.ok;
     {
         let mut eng = engine_lock(&engine);
-        eng.set_cat_status(init_probe.ok, init_probe.detail);
+        // The launch's port findings lead the first status, once: a port Windows renumbered that
+        // was followed, or the CAT port not being on this computer when the open failed.
+        let notes = eng.take_launch_port_notes();
+        eng.set_cat_status(
+            init_probe.ok,
+            tempo_app::settings::port_follow::launch_cat_detail(
+                &notes,
+                init_probe.ok,
+                &init_probe.detail,
+            ),
+        );
         // Read-only-launch seed: the rig's OWN dial/mode become the app's belief, under
         // the same lock and BEFORE the loop starts — so the UI's first snapshot poll
         // already shows the rig's reality, and the band-edge chime's first-value
@@ -5558,10 +5568,16 @@ struct RadioLoop {
     cat_port_present: Option<bool>,
     /// The serial port the radio's settings name, as this tick read them (before any alias).
     cat_port_configured: String,
-    /// USB identity (vid, pid, product) of the configured serial port, captured while CAT
-    /// was healthy, so a rig that comes back under a NEW port name can be followed. Held with
-    /// the port it was captured on, and followed only while that is the configured port.
-    cat_port_identity: Option<(String, (u16, u16, String))>,
+    /// USB identity of the configured serial port ([`tempo_app::serial_port::PortIdentity`]:
+    /// VID, PID, serial number, product, interface), captured while CAT was healthy, so a rig
+    /// that comes back under a NEW port name can be followed. Held with the port it was captured
+    /// on, and followed only while that is the configured port, by the launch follow's rule
+    /// ([`alias_for`]).
+    cat_port_identity: Option<(String, tempo_app::serial_port::PortIdentity)>,
+    /// Every serial port present when that identity was captured, CAT working. The follow never
+    /// takes one of them: the radio coming back appears as a NEW port, while a cable that was
+    /// there all along (a PTT or CW-key interface of the same chip) never qualifies.
+    cat_port_neighbours: Vec<String>,
     /// (configured port, port actually in use) when the rig came back under a new name.
     cat_port_alias: Option<(String, String)>,
     /// A dial frequency the rig REFUSED (`RPRT <negative>`), or did not answer
@@ -6105,6 +6121,7 @@ impl RadioLoop {
             cat_port_present: None,
             cat_port_configured: String::new(),
             cat_port_identity: None,
+            cat_port_neighbours: Vec::new(),
             cat_port_alias: None,
             dial_giveup: None,
             dial_fail_count: 0,
@@ -6229,6 +6246,31 @@ impl RadioLoop {
         self.mode_fail_count = 0;
         self.mode_saw_reject = false;
         self.on_cat_link_back();
+        self.refresh_port_neighbours_in(crate::ports::present_ports);
+    }
+
+    /// The ports present now, CAT working, become the follow's neighbours
+    /// ([`Self::cat_port_neighbours`]): a cable plugged in since the identity was captured, while
+    /// CAT kept working, is "there all along" from here on. Here, once per recovered outage, and
+    /// not on every link-back (a successful SET), which would walk the ports on every dial write.
+    /// Only while the identity is the configured port's: there is nothing to follow otherwise.
+    fn refresh_port_neighbours_in(
+        &mut self,
+        ports: impl FnOnce() -> Vec<tempo_app::serial_port::PresentPort>,
+    ) {
+        if self
+            .cat_port_identity
+            .as_ref()
+            .is_none_or(|(port, _)| *port != self.cat_port_configured)
+        {
+            return;
+        }
+        let in_use = self.effective_port_name();
+        self.cat_port_neighbours = ports()
+            .into_iter()
+            .map(|p| p.name)
+            .filter(|n| *n != in_use)
+            .collect();
     }
 
     /// The lighter half, for the path where a SET just succeeded: the dial give-up and the
@@ -6258,11 +6300,14 @@ impl RadioLoop {
     /// operator changes to is captured afresh (a virtual port has no USB device, so it gets
     /// none), and an alias made for the old port goes with the old identity.
     fn remember_port_identity(&mut self) {
-        self.remember_port_identity_in(crate::ports::available_usb_ports);
+        self.remember_port_identity_in(crate::ports::present_ports);
     }
 
-    /// [`Self::remember_port_identity`] on a given USB walk, for the test.
-    fn remember_port_identity_in(&mut self, usb: impl FnOnce() -> Vec<crate::ports::UsbPort>) {
+    /// [`Self::remember_port_identity`] on a given port walk, for the test.
+    fn remember_port_identity_in(
+        &mut self,
+        ports: impl FnOnce() -> Vec<tempo_app::serial_port::PresentPort>,
+    ) {
         if self
             .cat_port_identity
             .as_ref()
@@ -6278,10 +6323,17 @@ impl RadioLoop {
             return;
         }
         self.cat_port_alias = None;
-        self.cat_port_identity = usb()
+        let ports = ports();
+        self.cat_port_neighbours = ports
+            .iter()
+            .filter(|p| p.name != name)
+            .map(|p| p.name.clone())
+            .collect();
+        self.cat_port_identity = ports
             .into_iter()
-            .find(|u| u.port_name == name)
-            .map(|u| (name, (u.vid, u.pid, u.product)));
+            .find(|p| p.name == name)
+            .and_then(|p| p.identity)
+            .map(|id| (name, id));
     }
 
     /// The serial port actually in use — the alias when the rig moved, else the configured one.
@@ -6420,22 +6472,20 @@ impl RadioLoop {
         }
     }
 
-    /// Before a rebuild: if the configured port is gone but exactly ONE port carries the
-    /// identity we remembered for it, follow the rig there. Anything ambiguous is left alone.
-    fn resolve_port_alias(&mut self, want: &Transport) -> Transport {
-        self.resolve_port_alias_in(
-            want,
-            crate::ports::available_usb_ports,
-            crate::ports::available_ports,
-        )
+    /// Before a rebuild: if the configured port is gone but exactly ONE port is unambiguously the
+    /// device we remembered for it, new since CAT worked, and named by no other setting (read from
+    /// the engine's settings here, so no caller can leave the keying cables out), follow the rig
+    /// there ([`alias_for`]). Anything ambiguous is left alone.
+    fn resolve_port_alias(&mut self, want: &Transport, engine: &Arc<Mutex<Engine>>) -> Transport {
+        self.resolve_port_alias_in(want, crate::ports::present_ports, engine)
     }
 
-    /// [`Self::resolve_port_alias`] on given walks, for the test.
+    /// [`Self::resolve_port_alias`] on a given port walk, for the test.
     fn resolve_port_alias_in(
         &mut self,
         want: &Transport,
-        usb: impl FnOnce() -> Vec<crate::ports::UsbPort>,
-        present: impl FnOnce() -> Vec<String>,
+        ports: impl FnOnce() -> Vec<tempo_app::serial_port::PresentPort>,
+        engine: &Arc<Mutex<Engine>>,
     ) -> Transport {
         let mut want = want.clone();
         if want.is_network() || want.is_icom_lan() || want.is_tci() || want.serial_port.is_empty() {
@@ -6450,9 +6500,16 @@ impl RadioLoop {
         else {
             return want;
         };
-        let present = present();
-        let usb = usb();
-        if let Some(actual) = alias_for(&want.serial_port, &identity, &usb, &present) {
+        let taken = engine_lock(engine)
+            .settings()
+            .port_names_besides(&self.cat_port_configured);
+        if let Some(actual) = alias_for(
+            &self.cat_port_configured,
+            &identity,
+            &ports(),
+            &taken,
+            &self.cat_port_neighbours,
+        ) {
             crate::civ::diag::note(&format!(
                 "CAT port {:?} is gone; the same USB device is at {actual:?} — following it",
                 want.serial_port
@@ -10841,8 +10898,9 @@ impl RadioLoop {
                     .and_then(crate::icomlan::IcomLanDaemon::loss);
                 self.rigctld_proc = None; // drop kills + reaps the old daemon (frees its port)
                 self.let_go_of_flex_monitor();
-                // A rig that came back under a NEW port name is followed by USB identity.
-                let open_want = self.resolve_port_alias(&want);
+                // A rig that came back under a NEW port name is followed by USB identity, never
+                // onto a port another setting names (a keying cable, a rotator, another radio).
+                let open_want = self.resolve_port_alias(&want, engine);
                 engine_lock(engine).remote_close_radio();
                 self.remote_connection = None;
                 self.remote_radio_id = Some(remote_want_radio);
@@ -22135,27 +22193,38 @@ fn typed_port_exists(port: &str) -> bool {
     cfg!(unix) && port.starts_with('/') && std::path::Path::new(port).exists()
 }
 
-/// The port to follow a rig to when `configured` is absent: exactly one present USB port
-/// carrying the remembered (vid, pid, product). Pure, for the test.
+/// The port to follow a rig to when `configured` is absent: the one present port that is
+/// unambiguously the remembered device, by the launch follow's rule
+/// ([`tempo_app::serial_port::refind`]: its own serial number, with the interface number only
+/// picking the right port of a multi-port chip whose ports share it; VID, PID and product alone,
+/// an interface number alone, a factory-default serial and Windows' one-digit stand-in are never
+/// enough), and that no other setting names (`taken`: a PTT, CW-key, WinKeyer or FSK cable, a
+/// rotator, an amplifier, another radio). A generic bridge's VID, PID and product are the same on
+/// every cable of its kind, so the old rule could follow CAT onto the PTT cable and open CAT on a
+/// keying line. And only a port that is new since CAT worked (`neighbours` are the ports that
+/// were present then): the radio coming back appears as a new port, while a cable that was there
+/// all along never qualifies. Never while the CONFIGURED port (the settings' name, not an alias)
+/// is present.
+///
+/// A macOS bridge that lists one port under two names (`cu.SLAB_USBtoUART` and
+/// `cu.usbserial-…`) matches twice here, so it is ambiguous and not followed: Nexus waits for the
+/// configured port instead. Pure, for the test.
 fn alias_for(
     configured: &str,
-    identity: &(u16, u16, String),
-    usb: &[crate::ports::UsbPort],
-    present: &[String],
+    identity: &tempo_app::serial_port::PortIdentity,
+    present: &[tempo_app::serial_port::PresentPort],
+    taken: &[String],
+    neighbours: &[String],
 ) -> Option<String> {
-    if present.is_empty() || present.iter().any(|p| p == configured) {
+    use tempo_app::serial_port::{refind, same_port, Refound};
+    if present.is_empty() || present.iter().any(|p| same_port(&p.name, configured)) {
         return None;
     }
-    let mut hits = usb
-        .iter()
-        .filter(|u| u.vid == identity.0 && u.pid == identity.1 && u.product == identity.2)
-        .filter(|u| present.contains(&u.port_name))
-        .map(|u| u.port_name.clone());
-    let first = hits.next()?;
-    if hits.next().is_some() {
-        return None; // two identical devices: not ours to guess
+    let ruled_out = |port: &str| taken.iter().chain(neighbours).any(|t| same_port(t, port));
+    match refind(identity, present) {
+        Refound::At(port) if !ruled_out(&port) => Some(port),
+        _ => None, // ambiguous, absent, there all along, or another setting's port
     }
-    Some(first)
 }
 
 /// The give-up sentence for a dial the radio refused. `why` is the backend's own reason when it
@@ -53973,78 +54042,303 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Following a rig to a NEW port name: exactly one present port with the remembered USB
-    /// identity, and nothing else — two identical devices are not ours to guess between.
+    /// An engine whose settings name no port besides CAT, for the port-follow tests below.
+    fn no_ports_set() -> Arc<Mutex<Engine>> {
+        Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)))
+    }
+    /// An engine whose settings key PTT on `port`.
+    fn ptt_on(port: &str) -> Arc<Mutex<Engine>> {
+        let engine = no_ports_set();
+        {
+            let mut e = engine.lock().unwrap();
+            let mut s = e.settings().clone();
+            s.ptt_serial_port = port.to_string();
+            e.apply_settings(s);
+        }
+        engine
+    }
+    /// One port of a port walk with its USB identity, for the port-follow tests below.
+    fn usb_dev(
+        name: &str,
+        (vid, pid): (u16, u16),
+        serial: &str,
+        interface: Option<u8>,
+        product: &str,
+    ) -> tempo_app::serial_port::PresentPort {
+        tempo_app::serial_port::PresentPort {
+            name: name.to_string(),
+            identity: Some(tempo_app::serial_port::PortIdentity {
+                vid,
+                pid,
+                serial: serial.to_string(),
+                product: product.to_string(),
+                interface,
+            }),
+        }
+    }
+    /// A port with no USB identity (a motherboard COM port, a virtual port).
+    fn plain_port(name: &str) -> tempo_app::serial_port::PresentPort {
+        tempo_app::serial_port::PresentPort {
+            name: name.to_string(),
+            identity: None,
+        }
+    }
+    /// The FTDX101D's CAT port: the Enhanced port (interface 0) of its CP2105 bridge.
+    fn ftdx101d(name: &str) -> tempo_app::serial_port::PresentPort {
+        usb_dev(
+            name,
+            (0x10c4, 0xea70),
+            "01A2B3C4",
+            Some(0),
+            "Silicon Labs Dual CP2105 USB to UART Bridge: Enhanced COM Port",
+        )
+    }
+    /// An IC-7300 (its CP2102 carries the radio's own serial number).
+    fn ic7300(name: &str) -> tempo_app::serial_port::PresentPort {
+        ic7300_sn(name, "IC7300-03001234")
+    }
+    fn ic7300_sn(name: &str, serial: &str) -> tempo_app::serial_port::PresentPort {
+        usb_dev(name, (0x10c4, 0xea60), serial, None, "IC-7300")
+    }
+    /// The identity a port walk gives `port`.
+    fn identity_at(
+        ports: &[tempo_app::serial_port::PresentPort],
+        port: &str,
+    ) -> tempo_app::serial_port::PortIdentity {
+        ports
+            .iter()
+            .find(|p| p.name == port)
+            .and_then(|p| p.identity.clone())
+            .expect("a USB port")
+    }
+
+    /// Following a rig to a NEW port name: exactly one present port that is unambiguously the
+    /// remembered device (its own serial number, the interface number only narrowing among
+    /// serial matches), and nothing else.
     #[test]
     fn alias_for_follows_exactly_one_matching_device() {
-        let usb = |name: &str, vid: u16, pid: u16, product: &str| crate::ports::UsbPort {
-            port_name: name.to_string(),
-            vid,
-            pid,
-            product: product.to_string(),
-            manufacturer: "Icom".to_string(),
-        };
-        let id = (0x10c4, 0xea60, "IC-7300".to_string());
+        let id = identity_at(&[ic7300("COM5")], "COM5");
         let ports = [
-            usb("COM7", 0x10c4, 0xea60, "IC-7300"),
-            usb("COM3", 0x0403, 0x6001, "Digirig"),
+            ic7300("COM7"),
+            usb_dev("COM3", (0x0403, 0x6001), "D30A1B2C", None, "Digirig"),
         ];
-        let present = |names: &[&str]| names.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(
-            alias_for("COM5", &id, &ports, &present(&["COM3", "COM7"])),
+            alias_for("COM5", &id, &ports, &[], &[]),
             Some("COM7".to_string())
         );
+        let mut with_com5 = ports.to_vec();
+        with_com5.push(plain_port("COM5"));
         assert_eq!(
-            alias_for("COM5", &id, &ports, &present(&["COM3", "COM5", "COM7"])),
+            alias_for("COM5", &id, &with_com5, &[], &[]),
             None,
             "configured port present: no alias"
         );
         assert_eq!(
-            alias_for("COM5", &id, &ports, &present(&["COM3"])),
+            alias_for("COM5", &id, &ports[1..], &[], &[]),
             None,
             "the device is not there"
         );
         assert_eq!(
-            alias_for("COM5", &id, &ports, &[]),
+            alias_for("COM5", &id, &[], &[], &[]),
             None,
             "an empty walk says nothing"
         );
-        let twins = [
-            usb("COM7", 0x10c4, 0xea60, "IC-7300"),
-            usb("COM8", 0x10c4, 0xea60, "IC-7300"),
-        ];
+        // Two radios of one model: each has its own serial number, so the remembered one is told
+        // from the other and followed.
+        let twins = [ic7300_sn("COM7", "IC7300-03009999"), ic7300("COM8")];
         assert_eq!(
-            alias_for("COM5", &id, &twins, &present(&["COM7", "COM8"])),
+            alias_for("COM5", &id, &twins, &[], &[]),
+            Some("COM8".to_string())
+        );
+        // With no serial number and no interface, VID/PID and product are all there is: two
+        // identical devices, or one, are never guessed at.
+        let thin = identity_at(&[ic7300_sn("COM5", "")], "COM5");
+        let bare = [ic7300_sn("COM7", ""), ic7300_sn("COM8", "")];
+        assert_eq!(
+            alias_for("COM5", &thin, &bare, &[], &[]),
             None,
-            "two identical rigs: not ours to guess"
+            "two identical rigs"
+        );
+        assert_eq!(
+            alias_for("COM5", &thin, &bare[..1], &[], &[]),
+            None,
+            "VID/PID alone"
         );
     }
 
-    /// One port of a USB walk, for the port-follow tests below.
-    fn usb_port(name: &str, vid: u16, pid: u16, product: &str) -> crate::ports::UsbPort {
-        crate::ports::UsbPort {
-            port_name: name.to_string(),
-            vid,
-            pid,
-            product: product.to_string(),
-            manufacturer: "Silicon Labs".to_string(),
-        }
+    /// ⭐ THE CABLE THAT IS NOT THE RADIO. CAT's port vanishes mid-session; what is left is a
+    /// generic bridge of the same chip: a PTT or CW-key cable. The old rule (VID, PID, product)
+    /// took it, and opened CAT on a keying line. It is a different device (its own serial
+    /// number, or the other interface of a dual chip), and it is a port another setting names:
+    /// either alone refuses it. On Linux and macOS the product is the bare USB product string;
+    /// on Windows it is the friendly name with its "(COMn)", which the rule sets aside.
+    #[test]
+    fn the_session_follow_never_takes_a_same_chip_keying_cable() {
+        let generic = "CP2102 USB to UART Bridge Controller";
+        let radio = identity_at(
+            &[usb_dev(
+                "/dev/ttyUSB0",
+                (0x10c4, 0xea60),
+                "0001A2B3",
+                None,
+                generic,
+            )],
+            "/dev/ttyUSB0",
+        );
+        let ptt_cable = [usb_dev(
+            "/dev/ttyUSB1",
+            (0x10c4, 0xea60),
+            "0001F9E8",
+            None,
+            generic,
+        )];
+        assert_eq!(
+            alias_for("/dev/ttyUSB0", &radio, &ptt_cable, &[], &[]),
+            None,
+            "another serial number: another device"
+        );
+        // Windows' one-digit stand-in serial, shared by both cables, is not a serial number.
+        let stand_in = |name: &str| usb_dev(name, (0x10c4, 0xea60), "5", None, generic);
+        assert_eq!(
+            alias_for(
+                "COM5",
+                &identity_at(&[stand_in("COM5")], "COM5"),
+                &[stand_in("COM9")],
+                &[],
+                &[]
+            ),
+            None,
+            "the stand-in serial follows nothing"
+        );
+        // The FT-891's own CP2105: CAT on Enhanced (0) gone, Standard (1) still here as PTT.
+        let enhanced = identity_at(&[ftdx101d("COM5")], "COM5");
+        let standard = [usb_dev(
+            "COM6",
+            (0x10c4, 0xea70),
+            "01A2B3C4",
+            Some(1),
+            "Silicon Labs Dual CP2105 USB to UART Bridge: Standard COM Port",
+        )];
+        assert_eq!(
+            alias_for("COM5", &enhanced, &standard, &[], &[]),
+            None,
+            "the other half"
+        );
+        // Even the radio itself, back on a name another setting already uses, is not taken.
+        let taken = ["COM9".to_string()];
+        assert_eq!(
+            alias_for("COM5", &enhanced, &[ftdx101d("com9")], &taken, &[]),
+            None,
+            "a port another setting names"
+        );
+        // The positive control: the radio itself, by its serial, on a free new name.
+        let back = [
+            ptt_cable[0].clone(),
+            usb_dev("/dev/ttyUSB2", (0x10c4, 0xea60), "0001A2B3", None, generic),
+        ];
+        assert_eq!(
+            alias_for(
+                "/dev/ttyUSB0",
+                &radio,
+                &back,
+                &["/dev/ttyUSB1".to_string()],
+                &[]
+            ),
+            Some("/dev/ttyUSB2".to_string()),
+            "the radio itself is followed"
+        );
+        // And on Windows, the same radio under a renumbered friendly name.
+        let friendly = |n: &str| {
+            usb_dev(
+                n,
+                (0x10c4, 0xea60),
+                "0001A2B3",
+                None,
+                &format!("Silicon Labs CP210x USB to UART Bridge ({n})"),
+            )
+        };
+        assert_eq!(
+            alias_for(
+                "COM5",
+                &identity_at(&[friendly("COM5")], "COM5"),
+                &[friendly("COM7")],
+                &[],
+                &[]
+            ),
+            Some("COM7".to_string())
+        );
     }
-    /// The FTDX101D's CAT port: the Enhanced port of its CP2105 bridge.
-    fn ftdx101d(name: &str) -> crate::ports::UsbPort {
-        usb_port(
-            name,
-            0x10c4,
-            0xea70,
-            "Silicon Labs Dual CP2105 USB to UART Bridge: Enhanced COM Port",
-        )
+
+    /// A port that was there while CAT worked is never the radio coming back: the radio
+    /// reappears as a NEW port. A cable carrying the very same identity (a clone with a copied
+    /// serial number) that sat beside the radio all along is not followed; the same identity on
+    /// a port that appeared since is. The other settings' ports come from the engine's own
+    /// settings, inside the follow, so a keying cable named there is refused.
+    #[test]
+    fn the_session_follow_takes_only_a_port_new_since_cat_worked() {
+        let mut state = loop_state();
+        state.applied.serial_port = "COM3".to_string();
+        state.cat_port_configured = "COM3".to_string();
+        state.remember_port_identity_in(|| vec![ic7300("COM3"), ic7300("COM9")]);
+        let want = state.applied.clone();
+        let opened = state.resolve_port_alias_in(&want, || vec![ic7300("COM9")], &no_ports_set());
+        assert_eq!(opened.serial_port, "COM3", "COM9 was there all along");
+        let opened = state.resolve_port_alias_in(&want, || vec![ic7300("COM12")], &no_ports_set());
+        assert_eq!(opened.serial_port, "COM12", "a port new since CAT worked");
+
+        let mut keyed = loop_state();
+        keyed.applied.serial_port = "COM3".to_string();
+        keyed.cat_port_configured = "COM3".to_string();
+        keyed.remember_port_identity_in(|| vec![ic7300("COM3")]);
+        let opened = keyed.resolve_port_alias_in(&want, || vec![ic7300("COM12")], &ptt_on("com12"));
+        assert_eq!(opened.serial_port, "COM3", "the settings key PTT on COM12");
     }
-    fn ic7300(name: &str) -> crate::ports::UsbPort {
-        usb_port(name, 0x10c4, 0xea60, "IC-7300")
+
+    /// A cable plugged in after the identity was captured, while CAT kept working, is a neighbour
+    /// once CAT recovers from an outage with it present: from then on it was "there all along"
+    /// and is never followed onto.
+    #[test]
+    fn the_follow_neighbours_refresh_when_cat_recovers() {
+        let mut state = loop_state();
+        state.applied.serial_port = "COM3".to_string();
+        state.cat_port_configured = "COM3".to_string();
+        state.remember_port_identity_in(|| vec![ic7300("COM3")]);
+        assert!(state.cat_port_neighbours.is_empty());
+        state.refresh_port_neighbours_in(|| vec![ic7300("COM3"), ic7300("COM12")]);
+        assert_eq!(state.cat_port_neighbours, vec!["COM12".to_string()]);
+        let want = state.applied.clone();
+        let opened = state.resolve_port_alias_in(&want, || vec![ic7300("COM12")], &no_ports_set());
+        assert_eq!(
+            opened.serial_port, "COM3",
+            "COM12 was there when CAT last recovered"
+        );
+        // No identity for the configured port: nothing to refresh.
+        let mut other = loop_state();
+        other.cat_port_configured = "COM9".to_string();
+        other.refresh_port_neighbours_in(|| vec![ic7300("COM12")]);
+        assert!(other.cat_port_neighbours.is_empty());
     }
-    /// A port walk that lists exactly `names`.
-    fn walk(names: &[&str]) -> Vec<String> {
-        names.iter().map(|s| s.to_string()).collect()
+
+    /// "Never while the saved port exists" is about the port the SETTINGS name, not the alias
+    /// in use: with the configured COM3 back, nothing is followed anywhere, even though the
+    /// alias's COM5 is gone and the radio shows up on COM6.
+    #[test]
+    fn the_session_follow_never_moves_while_the_configured_port_is_here() {
+        let mut state = loop_state();
+        state.applied.serial_port = "COM3".to_string();
+        state.cat_port_configured = "COM3".to_string();
+        state.remember_port_identity_in(|| vec![ic7300("COM3")]);
+        let mut want = state.applied.clone();
+        want.serial_port = "COM5".to_string(); // the alias the last follow made
+        let opened = state.resolve_port_alias_in(
+            &want,
+            || vec![plain_port("COM3"), ic7300("COM6")],
+            &no_ports_set(),
+        );
+        assert_eq!(
+            opened.serial_port, "COM5",
+            "no new follow while COM3 is here"
+        );
     }
 
     /// The operator moves CAT off the radio's own port. An FTDX101D answers on COM3; the
@@ -54054,22 +54348,22 @@ mod tests {
     /// so a later reopen of COM21 stays on COM21 too.
     #[test]
     fn a_port_the_operator_changes_to_is_opened_as_named_not_followed_back() {
-        let usb = || vec![ftdx101d("COM3")];
+        let walk = || vec![plain_port("COM1"), ftdx101d("COM3")];
         let mut state = loop_state();
         state.applied.serial_port = "COM3".to_string();
         state.cat_port_configured = "COM3".to_string();
         // CAT healthy on COM3. Then the operator types COM21 and saves; the walk lists COM3
         // but not COM21.
-        state.remember_port_identity_in(usb);
+        state.remember_port_identity_in(walk);
         state.cat_port_configured = "COM21".to_string();
         let mut want = state.applied.clone();
         want.serial_port = "COM21".to_string();
-        let opened = state.resolve_port_alias_in(&want, usb, || walk(&["COM1", "COM3"]));
+        let opened = state.resolve_port_alias_in(&want, walk, &no_ports_set());
         assert_eq!(opened.serial_port, "COM21", "the port the operator chose");
         assert_eq!(state.cat_port_alias, None);
         state.applied = opened;
-        state.remember_port_identity_in(usb); // CAT healthy on COM21
-        let opened = state.resolve_port_alias_in(&want, usb, || walk(&["COM1", "COM3"]));
+        state.remember_port_identity_in(walk); // CAT healthy on COM21
+        let opened = state.resolve_port_alias_in(&want, walk, &no_ports_set());
         assert_eq!(
             opened.serial_port, "COM21",
             "a reopen of the virtual port stays on it"
@@ -54077,9 +54371,10 @@ mod tests {
     }
 
     /// The case the follow exists for: the configured port is unchanged and the radio comes back
-    /// under a new name (replugged into another socket). Exactly one port carries its identity,
-    /// so Nexus follows it there; CAT answering there leaves the identity the configured port's,
-    /// so a second move is followed too. Two identical radios are never guessed between.
+    /// under a new name (replugged into another socket). Exactly one port is its device, so
+    /// Nexus follows it there; CAT answering there leaves the identity the configured port's,
+    /// so a second move is followed too. A port another setting names is never taken, and two
+    /// radios with nothing to tell them apart are never guessed between.
     #[test]
     fn a_replugged_radio_on_an_unchanged_port_is_still_followed() {
         let mut state = loop_state();
@@ -54087,8 +54382,11 @@ mod tests {
         state.cat_port_configured = "COM3".to_string();
         state.remember_port_identity_in(|| vec![ic7300("COM3")]);
         let want = state.applied.clone();
-        let opened =
-            state.resolve_port_alias_in(&want, || vec![ic7300("COM5")], || walk(&["COM1", "COM5"]));
+        let opened = state.resolve_port_alias_in(
+            &want,
+            || vec![plain_port("COM1"), ic7300("COM5")],
+            &no_ports_set(),
+        );
         assert_eq!(opened.serial_port, "COM5");
         assert_eq!(
             state.cat_port_alias,
@@ -54101,19 +54399,27 @@ mod tests {
         assert_eq!(again.serial_port, "COM5");
         let opened = state.resolve_port_alias_in(
             &again,
-            || vec![ic7300("COM6")],
-            || walk(&["COM1", "COM6"]),
+            || vec![plain_port("COM1"), ic7300("COM6")],
+            &no_ports_set(),
         );
         assert_eq!(opened.serial_port, "COM6", "moved again: still followed");
+
+        let mut keyed = loop_state();
+        keyed.applied.serial_port = "COM3".to_string();
+        keyed.cat_port_configured = "COM3".to_string();
+        keyed.remember_port_identity_in(|| vec![ic7300("COM3")]);
+        let opened = keyed.resolve_port_alias_in(&want, || vec![ic7300("COM7")], &ptt_on("COM7"));
+        assert_eq!(opened.serial_port, "COM3", "COM7 is another setting's port");
+        assert_eq!(keyed.cat_port_alias, None);
 
         let mut twins = loop_state();
         twins.applied.serial_port = "COM3".to_string();
         twins.cat_port_configured = "COM3".to_string();
-        twins.remember_port_identity_in(|| vec![ic7300("COM3")]);
+        twins.remember_port_identity_in(|| vec![ic7300_sn("COM3", "")]);
         let opened = twins.resolve_port_alias_in(
             &want,
-            || vec![ic7300("COM7"), ic7300("COM8")],
-            || walk(&["COM7", "COM8"]),
+            || vec![ic7300_sn("COM7", ""), ic7300_sn("COM8", "")],
+            &no_ports_set(),
         );
         assert_eq!(
             opened.serial_port, "COM3",
@@ -54134,7 +54440,7 @@ mod tests {
         state.remember_port_identity_in(|| vec![ic7300("COM3")]);
         let com3 = state.applied.clone();
         state.applied =
-            state.resolve_port_alias_in(&com3, || vec![ic7300("COM5")], || walk(&["COM5"]));
+            state.resolve_port_alias_in(&com3, || vec![ic7300("COM5")], &no_ports_set());
         assert_eq!(
             state.applied.serial_port, "COM5",
             "the follow this starts from"
@@ -54150,7 +54456,7 @@ mod tests {
             "the old port's alias does not move the new one"
         );
         let both = || vec![ic7300("COM5"), ftdx101d("COM8")];
-        state.applied = state.resolve_port_alias_in(&want, both, || walk(&["COM5", "COM8"]));
+        state.applied = state.resolve_port_alias_in(&want, both, &no_ports_set());
         assert_eq!(state.applied.serial_port, "COM8");
         assert_eq!(state.effective_port_name(), "COM8");
         state.remember_port_identity_in(both); // CAT healthy on COM8
@@ -54164,7 +54470,7 @@ mod tests {
         let opened = state.resolve_port_alias_in(
             &want,
             || vec![ic7300("COM5"), ftdx101d("COM9")],
-            || walk(&["COM5", "COM9"]),
+            &no_ports_set(),
         );
         assert_eq!(
             opened.serial_port, "COM9",
