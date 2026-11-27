@@ -46449,6 +46449,67 @@ mod tests {
         );
     }
 
+    /// A terrestrial split the rig acknowledged: RX 14.025, TX 14.027.
+    fn acked_split_engine() -> Engine {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.observe_rig_freq(14_025_000);
+        e.request_split(Some(14.027));
+        let _ = e.take_split_request();
+        e.rig_split_applied(14_027_000);
+        e
+    }
+
+    #[test]
+    fn a_ptt_off_read_with_no_split_tx_reading_before_it_arms_nothing() {
+        // "The next TX reading is a knob" is armed only by a PTT-off read that follows a TX
+        // reading. With none before it, the TX reading after it is still the rig keyed.
+        let mut e = acked_split_engine();
+        e.observe_rig_ptt_read(false);
+        e.observe_rig_freq(14_027_000);
+        assert_eq!(e.split_tx_mhz(), Some(14.027), "the split stands");
+        assert!(e.split_inferred_keyed(), "and the reading is the rig keyed");
+    }
+
+    #[test]
+    fn a_ptt_on_read_disarms_the_knob() {
+        // PTT off after a TX reading arms; the rig then reads keyed again: the next TX reading
+        // is the over, not a knob.
+        let mut e = acked_split_engine();
+        e.observe_rig_freq(14_027_000);
+        e.observe_rig_ptt_read(false);
+        e.observe_rig_ptt_read(true);
+        e.observe_rig_freq(14_027_000);
+        assert_eq!(e.split_tx_mhz(), Some(14.027), "the split stands");
+        assert!(e.split_inferred_keyed());
+    }
+
+    #[test]
+    fn a_receive_reading_spends_the_knob_arm() {
+        // The arm speaks for the reading right after it. A receive reading in between (the
+        // loop reads it but does not hand an unchanged dial on) spends it, so the TX reading
+        // after that is the rig keyed again.
+        let mut e = acked_split_engine();
+        e.observe_rig_freq(14_027_000);
+        e.observe_rig_ptt_read(false);
+        e.rig_freq_read(14_025_000);
+        e.rig_freq_read(14_027_000);
+        e.observe_rig_freq(14_027_000);
+        assert_eq!(e.split_tx_mhz(), Some(14.027), "the split stands");
+        assert!(e.split_inferred_keyed());
+    }
+
+    #[test]
+    fn the_armed_split_tx_reading_is_the_knob() {
+        // The control for the three above: armed and unspent, the TX reading is a knob QSY.
+        let mut e = acked_split_engine();
+        e.observe_rig_freq(14_027_000);
+        e.observe_rig_ptt_read(false);
+        e.rig_freq_read(14_027_000);
+        e.observe_rig_freq(14_027_000);
+        assert_eq!(e.split_tx_mhz(), None, "a knob QSY clears the split");
+        assert_eq!(e.settings().dial_mhz, 14.027);
+    }
+
     #[test]
     fn observe_rig_freq_mirrors_the_knob_into_the_snapshot() {
         let mut e = Engine::new("W9XYZ", "EN61", 0);

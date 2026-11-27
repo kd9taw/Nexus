@@ -52261,10 +52261,13 @@ mod tests {
             scene
         }
         fn run(&mut self, n: usize) {
+            self.run_every(n, 400.0);
+        }
+        fn run_every(&mut self, n: usize, ms: f64) {
             let (sinks, mut ra, mut rr) = (no_sinks(), mock_reopen_audio(), mock_reopen_rig());
             let mut station = StationSinks::new();
             for _ in 0..n {
-                self.tick += 400.0;
+                self.tick += ms;
                 self.state
                     .step(
                         &self.engine,
@@ -52442,6 +52445,61 @@ mod tests {
             "the PTT read released the keyed belief"
         );
         assert_eq!(s.split(), None, "and it is an ordinary knob QSY");
+    }
+
+    #[test]
+    fn an_app_retune_mid_over_sends_no_dial_to_the_keyed_rig() {
+        // Clicking a spot while the radio is keyed at its own mic: the rig's selected VFO is the
+        // transmit one, so the new dial must wait for the unkey. The keyed belief read off the
+        // frequency is what holds it (this stub never answers `t`).
+        let mut s = SplitScene::new(2);
+        s.rig_reads(14_027_000);
+        s.run(2);
+        assert!(s.inferred_keyed(), "scene: the rig is taken as keyed");
+        s.engine.lock().unwrap().set_frequency(14.030, "20m", "USB");
+        s.log.lock().unwrap().clear();
+        s.run(5);
+        assert!(
+            !s.traffic().iter().any(|l| l.starts_with("F ")),
+            "no dial goes out at the keyed rig's transmit VFO: {:?}",
+            s.traffic()
+        );
+    }
+
+    #[test]
+    fn a_ptt_off_read_after_a_split_tx_reading_reads_the_dial_at_once() {
+        // The knob arm speaks only for the reading right after the PTT read, so that reading is
+        // taken on the very next tick, not up to a dial interval later when the rig may have
+        // keyed again. At the loop's real 20 ms tick.
+        let mut s = SplitScene::new(2);
+        s.rig_reads(14_027_000);
+        s.run(4);
+        assert!(
+            s.inferred_keyed(),
+            "scene: the TX reading is held as the rig keyed"
+        );
+        s.rig_ptt(0);
+        let t1 = s.tick + 20.0;
+        // A dial was read a moment ago and the heavy poll is not due; the PTT poll is.
+        s.state.last_freq_poll = t1 - 20.0;
+        s.state.last_rig_poll = t1;
+        s.state.last_ptt_poll = t1 - RIG_PTT_POLL_MS;
+        s.log.lock().unwrap().clear();
+        s.run_every(1, 20.0);
+        assert!(
+            s.traffic().iter().any(|l| l == "t"),
+            "scene: the PTT read ran: {:?}",
+            s.traffic()
+        );
+        assert!(!s.inferred_keyed(), "scene: and released the belief");
+        s.log.lock().unwrap().clear();
+        s.run_every(1, 20.0);
+        assert!(
+            s.traffic().iter().any(|l| l == "f"),
+            "the dial is read on the next tick: {:?}",
+            s.traffic()
+        );
+        assert_eq!(s.dial_mhz(), 14.027, "and that reading is the knob");
     }
 
     #[test]
