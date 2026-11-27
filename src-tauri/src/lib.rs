@@ -46470,20 +46470,40 @@ fn qrz_push_qso_impl(
 /// QRZ answered `RESULT=OK` — and the only way out is the operator pressing the recovery button
 /// for that specific duplicate. It is deliberately not persisted: a delete authority that
 /// outlives the session it was earned in is a delete nobody is watching.
-static QRZ_CORRECT_MISS: std::sync::Mutex<Option<tempo_core::qrz::QrzMissRecovery>> =
+///
+/// It is held with the keychain user of the key the replace was sent with: the duplicate is in
+/// that key's book, so the delete goes there too, whatever profile the station is on by then.
+static QRZ_CORRECT_MISS: std::sync::Mutex<Option<(tempo_core::qrz::QrzMissRecovery, String)>> =
     std::sync::Mutex::new(None);
 
-/// The per-logbook API key, or the same sentence the push path uses when there is none.
+/// No key for the correction, in the same sentence the push path uses.
+const QRZ_CORRECT_NO_KEY: &str =
+    "No QRZ Logbook API key stored — set it in Settings ▸ Services ▸ Confirmations ▸ QRZ.";
+
+/// The per-logbook API key a correction of `record` is made with: the one its upload took
+/// ([`qrz_push_call_and_profiles`]), the key of the profile it was LOGGED under, else the
+/// station-wide key. Never simply the profile the station is on now: that key opens another
+/// call's book, where the contact is not, or worse, where a contact like it is.
 ///
-/// ⛔ The return value is a secret. It goes to `tempo_core::qrz_correct` and to the transport,
-/// and to nothing else — never to `conn_log`, never into an error, never into a stamp.
-fn qrz_correct_key(engine: &SharedEngine) -> Result<String, String> {
-    let key = qrz_logbook_key(engine)?.ok_or_else(|| {
-        "No QRZ Logbook API key stored — set it in Settings ▸ Services ▸ \
-         Confirmations ▸ QRZ."
-            .to_string()
-    })?;
-    Ok(key.key)
+/// ⛔ The key is a secret. It goes to `tempo_core::qrz_correct` and to the transport, and to
+/// nothing else — never to `conn_log`, never into an error, never into a stamp.
+fn qrz_correct_key(
+    engine: &SharedEngine,
+    record: &LoggedQso,
+    read: &dyn Fn(&str) -> Result<Option<String>, String>,
+) -> Result<QrzBookKey, String> {
+    // The engine lock is let go before the keychain is read: a keychain can wait on an unlock.
+    let (_, profiles) = qrz_push_call_and_profiles(engine_lock(engine).settings(), record);
+    pick_qrz_logbook_key(&profiles, read)?.ok_or_else(|| QRZ_CORRECT_NO_KEY.to_string())
+}
+
+/// The key kept under keychain user `user`, the one the replace that made a duplicate was sent
+/// with, for the delete that removes it ([`QRZ_CORRECT_MISS`]).
+fn qrz_correct_undo_key(
+    user: &str,
+    read: &dyn Fn(&str) -> Result<Option<String>, String>,
+) -> Result<String, String> {
+    read(user)?.ok_or_else(|| QRZ_CORRECT_NO_KEY.to_string())
 }
 
 /// Preview the correction of ONE contact: read QRZ's own copy, run every refusal, and give back
@@ -46497,7 +46517,7 @@ async fn qrz_correct_preview(
     let engine = state.inner().clone();
     // Blocking HTTP off the async executor (see qrz_push_qso).
     tauri::async_runtime::spawn_blocking(move || {
-        let key = qrz_correct_key(&engine)?;
+        let key = qrz_correct_key(&engine, &record, &read_keychain_secret)?.key;
         let rec: tempo_core::logbook::QsoRecord = record.into();
         let plan = tempo_core::qrz_correct::preview(
             &propagation::live::qrz::LogbookApi {
@@ -46529,7 +46549,7 @@ async fn qrz_correct_apply(
 ) -> Result<tempo_app::dto::QrzCorrectResultDto, String> {
     let engine = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let key = qrz_correct_key(&engine)?;
+        let QrzBookKey { user, key } = qrz_correct_key(&engine, &record, &read_keychain_secret)?;
         let rec: tempo_core::logbook::QsoRecord = record.into();
         let outcome = tempo_core::qrz_correct::apply(
             &propagation::live::qrz::LogbookApi {
@@ -46543,7 +46563,8 @@ async fn qrz_correct_apply(
         let mut can_recover = false;
         if let tempo_core::qrz_correct::Outcome::MissedAndDuplicated { recovery, .. } = &outcome {
             can_recover = recovery.is_some();
-            *QRZ_CORRECT_MISS.lock().unwrap_or_else(|e| e.into_inner()) = recovery.clone();
+            *QRZ_CORRECT_MISS.lock().unwrap_or_else(|e| e.into_inner()) =
+                recovery.clone().map(|r| (r, user));
         }
         // The sentence has already been through `scrub_key`, so it is safe to keep.
         let level = if outcome.is_success() {
@@ -46568,10 +46589,9 @@ async fn qrz_correct_apply(
 /// QRZ's delete is permanent and has no undo, so the authority is consumed: a second press finds
 /// the slot empty and refuses rather than aiming at whatever is there now.
 #[tauri::command]
-async fn qrz_correct_undo_miss(state: State<'_, SharedEngine>) -> Result<String, String> {
-    let engine = state.inner().clone();
+async fn qrz_correct_undo_miss() -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let recovery = QRZ_CORRECT_MISS
+        let (recovery, user) = QRZ_CORRECT_MISS
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take()
@@ -46581,7 +46601,15 @@ async fn qrz_correct_undo_miss(state: State<'_, SharedEngine>) -> Result<String,
                  logbook."
                     .to_string()
             })?;
-        let key = qrz_correct_key(&engine)?;
+        let key = match qrz_correct_undo_key(&user, &read_keychain_secret) {
+            Ok(key) => key,
+            Err(e) => {
+                // Nothing was sent: the duplicate is still there, so keep the authority.
+                *QRZ_CORRECT_MISS.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some((recovery, user));
+                return Err(e);
+            }
+        };
         let said = tempo_core::qrz_correct::recover_from_miss(
             &propagation::live::qrz::LogbookApi {
                 app_version: env!("CARGO_PKG_VERSION"),
@@ -46597,7 +46625,8 @@ async fn qrz_correct_undo_miss(state: State<'_, SharedEngine>) -> Result<String,
             Err(msg) => {
                 // The delete did not happen, so put the authority back — the duplicate is still
                 // there and the operator will want another go.
-                *QRZ_CORRECT_MISS.lock().unwrap_or_else(|e| e.into_inner()) = Some(recovery);
+                *QRZ_CORRECT_MISS.lock().unwrap_or_else(|e| e.into_inner()) =
+                    Some((recovery, user));
                 conn_log("QRZ Logbook", "error", msg.clone());
                 Err(msg)
             }
@@ -79912,6 +79941,102 @@ mod qrz_profile_key_tests {
             push_key(&engine, &club, &keys),
             Some((QRZ_LOGBOOK_KEYCHAIN_USER.into(), STATION_KEY.into()))
         );
+    }
+
+    /// The (keychain user, key) "Correct at QRZ" takes for `record` on `engine` now.
+    fn correct_key(
+        engine: &SharedEngine,
+        record: &LoggedQso,
+        read: &dyn Fn(&str) -> Result<Option<String>, String>,
+    ) -> Option<(String, String)> {
+        qrz_correct_key(engine, record, read)
+            .ok()
+            .map(|k| (k.user, k.key))
+    }
+
+    /// ⭐ "Correct at QRZ" reads and replaces a contact in the book it was uploaded to: the key of
+    /// the profile it was LOGGED under, whatever profile the station is on when the operator
+    /// presses it, and the same key its upload takes.
+    #[test]
+    fn correct_at_qrz_uses_the_key_of_the_profile_the_contact_was_logged_under() {
+        let (engine, park) = station_with_a_park_profile();
+        let keys = every_key(&park);
+        let at_the_park = LoggedQso::from(logged_under(Some("KD9TAW/P")));
+        let at_home = LoggedQso::from(logged_under(Some("KD9TAW")));
+        let club = LoggedQso::from(logged_under(Some("W9CLB")));
+        for on in [HOME_STATION_PROFILE.to_string(), park.clone()] {
+            engine_lock(&engine).switch_station_profile(&on).unwrap();
+            assert_eq!(
+                correct_key(&engine, &at_the_park, &keys),
+                key_of(&park, PARK_KEY),
+                "on {on}: the park contact is corrected in the park call's book"
+            );
+            assert_eq!(
+                correct_key(&engine, &at_home, &keys),
+                key_of(HOME_STATION_PROFILE, HOME_KEY),
+                "on {on}: the Home contact is corrected in Home's book"
+            );
+            assert_eq!(
+                correct_key(&engine, &club, &keys),
+                Some((QRZ_LOGBOOK_KEYCHAIN_USER.into(), STATION_KEY.into())),
+                "on {on}: a call no profile has is corrected with the station key"
+            );
+            for record in [&at_the_park, &at_home, &club] {
+                assert_eq!(
+                    correct_key(&engine, record, &keys),
+                    push_key(&engine, record, &keys),
+                    "on {on}: the correction and the upload agree on the book"
+                );
+            }
+        }
+    }
+
+    /// A profile with no key of its own corrects with the station key, as it uploads; with no key
+    /// at all the correction is refused in words, and a profile key that cannot be read is an
+    /// error, never a fall back to the station key.
+    #[test]
+    fn correct_at_qrz_falls_back_like_the_upload_and_never_past_an_unreadable_key() {
+        let (engine, park) = station_with_a_park_profile();
+        let at_the_park = LoggedQso::from(logged_under(Some("KD9TAW/P")));
+        let station_only = keychain(&[(QRZ_LOGBOOK_KEYCHAIN_USER, STATION_KEY)]);
+        assert_eq!(
+            correct_key(&engine, &at_the_park, &station_only),
+            Some((QRZ_LOGBOOK_KEYCHAIN_USER.into(), STATION_KEY.into()))
+        );
+        let none = keychain(&[]);
+        let refused = qrz_correct_key(&engine, &at_the_park, &none)
+            .err()
+            .expect("no key, no correction");
+        assert!(refused.contains("No QRZ Logbook API key"), "{refused}");
+        let park_user = qrz_logbook_profile_user(&park);
+        let locked = move |user: &str| {
+            if user == park_user {
+                Err("locked".to_string())
+            } else {
+                Ok(Some(STATION_KEY.to_string()))
+            }
+        };
+        assert!(qrz_correct_key(&engine, &at_the_park, &locked).is_err());
+    }
+
+    /// ⭐ The delete that removes a duplicate a missed replace made goes to the book the replace
+    /// went to: the key kept under the keychain user the replace was sent with, never the profile
+    /// the station has switched to since.
+    #[test]
+    fn the_duplicate_is_removed_with_the_key_the_replace_was_sent_with() {
+        let (engine, park) = station_with_a_park_profile();
+        let keys = every_key(&park);
+        let at_the_park = LoggedQso::from(logged_under(Some("KD9TAW/P")));
+        engine_lock(&engine).switch_station_profile(&park).unwrap();
+        let sent_with = qrz_correct_key(&engine, &at_the_park, &keys).expect("a key");
+        engine_lock(&engine)
+            .switch_station_profile(HOME_STATION_PROFILE)
+            .unwrap();
+        assert_eq!(
+            qrz_correct_undo_key(&sent_with.user, &keys).as_deref(),
+            Ok(PARK_KEY)
+        );
+        assert!(qrz_correct_undo_key(&sent_with.user, &keychain(&[])).is_err());
     }
 
     /// Two profiles with the same call: the one the station is on goes first when it has that
