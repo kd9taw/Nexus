@@ -68,7 +68,8 @@
 // never sees this window: the stream is the main window's picture.
 
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react'
-import { getSatTransponder, getWindowOnTop, setWindowOnTop, type FdRulesetDto, type WindowOnTop } from '../api'
+import { passHoldsDial } from '../features/qsyWipe'
+import { getSatTrackStatus, getSatTransponder, getWindowOnTop, setWindowOnTop, type FdRulesetDto, type WindowOnTop } from '../api'
 import { isFieldDay } from '../fdEvent'
 import { BOX_SCALE_MAX, BOX_SCALE_MIN, BOX_SCALE_STEP, boxScaleValue } from '../features/panelState'
 import { CONTEST_RECENT_SPLIT_MAX, CONTEST_RECENT_SPLIT_MIN } from '../features/paneSeam'
@@ -325,6 +326,7 @@ export function ContestLargeEntry({
   operatorAsk,
   onOperatorFocused,
   satellite,
+  dopplerTracking = false,
   barEnd,
   entryOnly = false,
 }: {
@@ -346,6 +348,9 @@ export function ContestLargeEntry({
   /** The bird whose transponder the engine holds, while one is held (the logger window's read of
    *  `getSatTransponder`); null while none is. Absent in the main window, which draws no such line. */
   satellite?: string | null
+  /** A satellite pass is up (`passHoldsDial`): App's pass poll in the main window, the logger
+   *  window's own beside its `satellite` read. */
+  dopplerTracking?: boolean
   /** What ends the bar after A− / A+: the logger window's pin. Absent in the main window. */
   barEnd?: ReactNode
   /** The entry alone: no last contacts under it (the logger window's `entry` layout). */
@@ -420,6 +425,12 @@ export function ContestLargeEntry({
             fdMode={m.fdMode}
             fdSubmode={m.fdSubmode}
             sharedEntry={sharedEntry}
+            // The QSY wipe, if the operator turned it on, as on the cockpits' strips — never while a
+            // satellite pass is up or its transponder held (the dial follows Doppler). While the
+            // logger window is open the two windows show ONE shared line, and only the logger
+            // window's strip runs the wipe (`LogEntry`), so one window sets it aside, with one
+            // notice and one Restore; the main window's line empties as it takes up the entry.
+            offerQsyWipe={satellite == null && !dopplerTracking}
             noCreditChip={
               <NoCreditChip fdActive={fdActive} ruleset={fdRuleset} activeMode={stationMode(section, snap.link.tier, keyboardMode)} />
             }
@@ -510,6 +521,18 @@ export function ContestLogger({
       ),
     [],
   )
+  // …and whether a pass is up at all (`passHoldsDial`), the main window's own guard for the QSY
+  // wipe, so both windows stand it down alike. A failed read keeps the last answer.
+  const [passUp, setPassUp] = useState(false)
+  useEffect(
+    () =>
+      pollSingleFlight('contest logger pass', 2_000, (owns) =>
+        getSatTrackStatus()
+          .then((tr) => owns() && setPassUp(passHoldsDial(tr)))
+          .catch(() => {}),
+      ),
+    [],
+  )
   return (
     <>
       {fd && (
@@ -525,6 +548,7 @@ export function ContestLogger({
           operatorAsk={operatorAsk}
           onOperatorFocused={() => setOperatorAsk(0)}
           satellite={satellite}
+          dopplerTracking={passUp}
           barEnd={
             <>
               <button

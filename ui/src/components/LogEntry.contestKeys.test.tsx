@@ -178,6 +178,46 @@ describe('Alt+W — wipe the log line, and put it back', () => {
     expect(lineNow()).toEqual(['K9AAA', '599', ''])
   })
 
+  it('Ctrl+W, N1MM’s other wipe key, wipes the line for good: nothing puts it back', async () => {
+    render(<Strip />)
+    type(callBox(), 'K9AAA')
+    type(qthBox(), 'COOK')
+    const CTRL_W = { key: 'w', code: 'KeyW', ctrlKey: true }
+    api.contestEntryReset.mockClear()
+    api.contestWorking.mockClear()
+    expect(await press(CTRL_W)).toBe(false)
+    expect(lineNow()).toEqual(['', '599', ''])
+    expect(api.contestEntryReset, 'the serial in flight is released').toHaveBeenCalledTimes(1)
+    expect(await press(CTRL_W)).toBe(false)
+    expect(lineNow()).toEqual(['', '599', ''])
+    expect(await press(ALT_W)).toBe(false)
+    expect(lineNow()).toEqual(['', '599', ''])
+    expect(api.contestWorking, 'and never taken up again').not.toHaveBeenCalled()
+  })
+
+  it('a QSY wipe on a contest strip says truthfully where Restore logs: where the radio is', async () => {
+    const { setQsyWipe } = await import('../features/qsyWipe')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      setQsyWipe(true)
+      const snapAt = (dialMhz: number) => ({ ...SNAP, radio: { ...SNAP.radio, dialMhz } }) as unknown as AppSnapshot
+      const strip = (dialMhz: number) => (
+        <LogEntry snap={snapAt(dialMhz)} mode="CW" defaultRst="599" exchange="terrestrial" titled={false} fieldDay={party()} fdMode="CW" clearCallOnBandChange />
+      )
+      const view = render(strip(14.025))
+      type(callBox(), 'K9AAA')
+      view.rerender(strip(14.03))
+      await act(async () => { vi.advanceTimersByTime(2500) })
+      expect(callBox().value).toBe('')
+      const text = document.querySelector('.le-band-cleared')?.textContent ?? ''
+      expect(text).toContain('radio')
+      expect(text, 'a contest contact is never logged on the pinned frequency').not.toContain('to log on 14.025')
+    } finally {
+      setQsyWipe(false)
+      vi.useRealTimers()
+    }
+  })
+
   it('releases the serial number in flight, and the line put back takes the station’s number up again', async () => {
     render(<Strip />)
     type(callBox(), 'K9AAA')

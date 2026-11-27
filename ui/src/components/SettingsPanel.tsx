@@ -333,6 +333,7 @@ import { FT_PALETTE_SCOPE, getWaterfallPalette, setWaterfallPalette } from '../w
 import { appearanceIn, withAppearance, type Appearance } from '../features/appearanceBackup'
 import { useLogbookGlobe } from '../features/logbookGlobe'
 import { useCallCardHover } from '../features/callCardHover'
+import { useQsyWipe } from '../features/qsyWipe'
 import type { FeaturesApi } from '../useFeatures'
 import { FEATURES, featureById, featureCategoryLabel, type FeatureCategory, type FeatureDef, type FeatureId } from '../features/registry'
 import { PROFILE_LIST } from '../features/profiles'
@@ -1367,6 +1368,7 @@ export function SettingsPanel({
   const [logbookGlobe, setLogbookGlobe] = useLogbookGlobe()
   // Browser-local like the globe: whether resting the pointer on a call opens its station card.
   const [callCardHover, setCallCardHover] = useCallCardHover()
+  const [qsyWipe, setQsyWipe] = useQsyWipe()
   // Browser-local too (txMeterStyle.ts): how the TX meters are drawn.
   const txMeterStyle = useTxMeterStyle()
   // APPEARANCE IN THE BACKUP (features/appearanceBackup.ts). The look on screen, as the backup
@@ -12561,6 +12563,22 @@ export function SettingsPanel({
                 </span>
               </label>
             </div>
+          </fieldset>
+          <fieldset className="settings-section" id="settings-log-line" {...fold('log-line')}>
+            <legend>{t('settings.logLine.legend')}</legend>
+            {/* The QSY wipe (features/qsyWipe): off by default, per operator, in every window. */}
+            <label className="settings-field">
+              <span className="settings-label">{t('settings.logLine.qsyWipe.label')}</span>
+              <span className="settings-input-row">
+                <input
+                  type="checkbox"
+                  checked={qsyWipe}
+                  onChange={(e) => setQsyWipe(e.target.checked)}
+                  aria-label={t('settings.logLine.qsyWipe.aria')}
+                />
+                <span className="settings-hint">{t('settings.logLine.qsyWipe.hint')}</span>
+              </span>
+            </label>
           </fieldset>
           <fieldset className="settings-section" id="settings-logbook-history" {...fold('logbook-history')}>
             <legend>{t('settings.logbookHistory.legend')}</legend>

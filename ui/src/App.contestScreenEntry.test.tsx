@@ -139,13 +139,16 @@ let rules: Record<string, unknown> = ILQP_RULES
 let settingsAnswer: Record<string, unknown> = {}
 /** The satellite the engine holds a transponder of (`get_sat_transponder`), when a case sets one. */
 let held: unknown = null
+/** The dial, when a case moves it, and the satellite track `sat_track_status` answers with. */
+let dial: number | null = null
+let track: unknown = null
 
 const snapshot = () => ({
   mycall: 'W9XYZ',
   mygrid: 'EN52',
   mode: fieldDay ? 'fieldDay' : 'Normal',
   radio: {
-    dialMhz: operatingMode === 'digital' ? 14.074 : 14.25,
+    dialMhz: dial ?? (operatingMode === 'digital' ? 14.074 : 14.25),
     band: '20m',
     catOk: true,
     sideband: 'USB',
@@ -183,6 +186,8 @@ function respond(cmd: string): unknown {
   if (cmd === 'get_journey') return { firsts: [], feats: [], ladders: [] }
   if (cmd === 'app_version') return '0.0.0-test'
   if (cmd === 'radio_launch_info') return { showPicker: false }
+  // Only a case that sets a satellite track answers with one (App's 2 s pass poll).
+  if (cmd === 'sat_track_status' && track) return track
   if (/^(get_band_plan|get_licensed_band_plan|log_operators|log_activations|get_all_spots|get_need_alerts|get_dxped_windows|get_sat_schedule|get_voice_messages|get_log|contest_removed|contest_unmerged|get_scp_calls|get_freq_markers)$/.test(cmd)) return []
   if (/^(get_propagation|get_feed_health|get_xray_now|sat_track_status|get_iss_pass|get_tle_status|get_kp_forecast|check_for_update|resolve_entity|contest_place|get_call_history)$/.test(cmd)) return null
   if (cmd === 'ask_log') throw new Error('no log in this test')
@@ -204,6 +209,8 @@ beforeEach(() => {
   fieldDay = ILQP
   rules = ILQP_RULES
   held = null
+  dial = null
+  track = null
   settingsAnswer = { ...defaultSettings, mycall: 'W9XYZ', mygrid: 'EN52', fdActive: true, fdEvent: 'ilqp' }
   window.__TAURI_INTERNALS__ = {
     invoke: async <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
@@ -1134,5 +1141,36 @@ describe('the entry pops out on its own', () => {
     await settle()
     expect(bridgeCalls.slice(again).filter((c) => c.cmd === 'open_panel_window')).toEqual([{ cmd: 'open_panel_window', args: { panel: 'contestlog' } }])
     expect(localStorage.getItem('nexus.contestLogger.layout')).toBe('full')
+  })
+})
+
+// ── the QSY wipe and a satellite pass, through App's own pass poll ─────────────────────────────
+describe('"Wipe an unlogged call when I QSY" on the main window\'s Contest screen', () => {
+  // In short steps: one long act() holds every snapshot App takes until it ends, so the line would
+  // see the moved dial only at the very end, with no time left to hold.
+  const realWait = async (ms: number) => {
+    for (let left = ms; left > 0; left -= 250) await act(async () => new Promise((r) => setTimeout(r, Math.min(250, left))))
+  }
+  const moveAndWait = async () => {
+    const host = await contestScreen()
+    const call = boxesIn(host)[0]
+    fireEvent.change(call, { target: { value: 'K9AAA' } })
+    await realWait(1000)
+    dial = 14.26
+    await realWait(4000)
+    return call
+  }
+
+  it('a held QSY sets the line aside when no pass is up', async () => {
+    localStorage.setItem('nexus.logLine.qsyWipe', 'on')
+    const call = await moveAndWait()
+    expect(call.value).toBe('')
+  })
+
+  it('while App\'s pass poll reports a track, a moved dial leaves the line alone', async () => {
+    localStorage.setItem('nexus.logLine.qsyWipe', 'on')
+    track = { name: 'SO-50', state: 'tracking', mode: 'doppler-only', dopplerDownlink: true, dopplerUplink: false }
+    const call = await moveAndWait()
+    expect(call.value).toBe('K9AAA')
   })
 })

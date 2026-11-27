@@ -1,8 +1,10 @@
-// THE CONTEST LOG STRIP'S ALT+W AND CTRL+O (Ctrl+D, the third of its keys here, is
-// `contestRemoval.ts`'s):
+// THE LOG STRIP'S WIPE (ALT+W AND CTRL+W) AND THE CONTEST STRIP'S CTRL+O (Ctrl+D, the third of
+// its keys here, is `contestRemoval.ts`'s):
 //
-//   Alt+W wipes the log line and releases the serial number in flight, and a second Alt+W right
-//   after puts it back (`LogEntry` keeps the line it wiped);
+//   Alt+W or Ctrl+W, N1MM Logger+'s two wipe keys, wipe the log line — every log line, not only a
+//   contest strip's — and a contest strip releases the serial number in flight. As in N1MM, a
+//   second Alt+W right after puts the line back (`LogEntry` keeps the line it wiped), and Ctrl+W
+//   is irreversible;
 //   Ctrl+O sets the operator call: it takes the caret to the operator box.
 //
 // THE OPERATOR BOX IS NOT THE STRIP'S. It is the Contest screen's — on the title line of its large
@@ -23,9 +25,10 @@ type KeyChord = Pick<KeyboardEvent, 'key' | 'code' | 'altKey' | 'ctrlKey' | 'met
 const isLetter = (e: KeyChord, letter: string): boolean =>
   /^[a-z]$/i.test(e.key) ? e.key.toLowerCase() === letter : e.code === `Key${letter.toUpperCase()}`
 
-/** Alt+W, and nothing else held: Ctrl with Alt is AltGr, which types characters on many keyboards. */
+/** Alt+W or Ctrl+W, and nothing else held: Ctrl with Alt is AltGr, which types characters on many
+ *  keyboards, and Cmd+W closes a Mac's window. */
 export function isWipeKey(e: KeyChord): boolean {
-  return e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && isLetter(e, 'w')
+  return e.altKey !== e.ctrlKey && !e.metaKey && !e.shiftKey && isLetter(e, 'w')
 }
 
 /** Ctrl+O, and nothing else held. */

@@ -63,11 +63,14 @@ export interface LineContext {
   mode: string
 }
 
-/** A log line a BAND CHANGE set aside (operator ruling, 2026-10-26): every box as it stood, and
- *  the band, frequency and mode it was made on, which Restore logs it with. */
+/** A log line a BAND CHANGE set aside (operator ruling, 2026-10-26), or a QSY where the operator
+ *  asked for that too: every box as it stood, and the band, frequency and mode it was made on,
+ *  which Restore logs it with. */
 export interface BandClearedLine {
   line: LogDraft
   context: LineContext
+  /** Set aside by a QSY within the band ("Wipe an unlogged call when I QSY"), not a band change. */
+  qsy?: boolean
 }
 
 /** A line with nothing in it: the draft that keeps only a set-aside line. */
