@@ -69632,6 +69632,40 @@ mod tests {
         );
     }
 
+    /// Purging the log clears the resume point of a whole QRZ logbook fetch in EVERY key's book,
+    /// the one synced last and the others: their merged pages are gone with the log, so resuming
+    /// past them would never bring them back. The delta high-waters stay, as the one book's did.
+    #[test]
+    fn purging_the_log_clears_every_qrz_books_resume_point() {
+        use crate::settings::{qrz_profile_book, QrzSyncPlace, QRZ_STATION_BOOK};
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let (p1, p2) = (qrz_profile_book("p1"), qrz_profile_book("p2"));
+        e.set_qrz_fetch_cursor(QRZ_STATION_BOOK, 1_750, 1_790_000_000);
+        e.set_qrz_fetch_cursor(&p1, 2_500, 1_790_100_000);
+        e.set_qrz_sync_cursor(&p1, 1_789_000_000);
+        e.set_qrz_fetch_cursor(&p2, 3_000, 1_790_200_000);
+        e.import_adif(
+            "<EOH>\n<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8\
+             <QSO_DATE:8>20240101<TIME_ON:6>120000<EOR>\n",
+        );
+        assert_eq!(e.clear_logbook(), 1);
+        let s = e.settings();
+        assert_eq!(s.qrz_sync_place(QRZ_STATION_BOOK), QrzSyncPlace::default());
+        assert_eq!(
+            s.qrz_sync_place(&p1),
+            QrzSyncPlace {
+                last_sync_unix: 1_789_000_000,
+                ..Default::default()
+            },
+            "a book not synced last: its resume point goes, its high-water stays"
+        );
+        assert_eq!(s.qrz_sync_place(&p2), QrzSyncPlace::default());
+        assert!(
+            !s.qrz_sync_books.contains_key(&p2),
+            "an empty place is not kept"
+        );
+    }
+
     /// ★ The first LoTW download after the update asks for the whole history. A settings file
     /// from before it holds the cursor of a download that asked for the Settings call alone, and
     /// LoTW lets a cursor stand only for the identical query: asked of every call on the account,

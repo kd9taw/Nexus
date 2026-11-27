@@ -40472,6 +40472,19 @@ fn forget_qrz_book_place(engine: &SharedEngine, book: &str) {
     });
 }
 
+/// When the automatic QRZ sync last failed (Unix seconds; 0 = it has not, or one has landed
+/// since). Kept for this run only: a restart tries again at once.
+static QRZ_AUTO_SYNC_FAILED_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Whether the automatic QRZ sync is due: `hours` after the last sync that landed (`last_ok`, the
+/// book's high-water; 0 = never) and after the last that failed (`last_failed`; 0 = none). A book
+/// that cannot be synced, a key QRZ refuses or a book whose first fetch keeps failing, is tried
+/// again at the operator's interval, not at every five-minute tick of the thread.
+fn qrz_auto_sync_due(last_ok: u64, last_failed: u64, hours: u32, now: u64) -> bool {
+    let from = last_ok.max(last_failed);
+    from == 0 || now.saturating_sub(from) >= u64::from(hours) * 3_600
+}
+
 /// #503: the call a station profile logs under now: the station's own call (`mycall`) for the
 /// profile the station is on, whose stored copy may not have caught up with it, else its own.
 fn station_profile_call<'a>(
@@ -43852,6 +43865,89 @@ mod qrz_paged_sync_tests {
             "Home's deltas from its fetch"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The reviewer's repro: a profile removed mid-session and a new one added get the same id
+    /// (`next_station_profile_id`, the first not taken). The new profile's key opens another
+    /// book, which must start whole, not from the removed profile's place.
+    #[test]
+    fn rv_a_new_profile_on_a_removed_ones_id_starts_its_book_whole() {
+        let (dir, engine) = crate::durable_command_tests::engine_on_store("qrz-rv-reuse", 0);
+        let p = |call: &str| tempo_app::settings::StationProfile {
+            name: "Portable".into(),
+            call: call.into(),
+            grid: "EN43".into(),
+            ..Default::default()
+        };
+        let id = engine
+            .lock()
+            .unwrap()
+            .save_station_profile(p("W9XYZ/P"))
+            .unwrap();
+        assert_eq!(id, "p1");
+        let old = other_book(7);
+        assert_eq!(sync_book(&engine, &old, PORTABLE, KEY_P, false), Ok(7));
+        assert!(place(&engine, PORTABLE).2 > 0, "the old /P is on deltas");
+        // Back on Home's key (the station never left Home), then /P removed.
+        let home = FakeBook::of(3);
+        assert_eq!(sync_book(&engine, &home, HOME, KEY, false), Ok(3));
+        crate::remove_station_profile_on(&engine, "p1", &|_| Ok(()))
+            .unwrap()
+            .unwrap();
+        let id = engine
+            .lock()
+            .unwrap()
+            .save_station_profile(p("K1ABC/P"))
+            .unwrap();
+        assert_eq!(id, "p1", "the id is reused");
+        let fresh = FakeBook {
+            shift: 2_000,
+            ..FakeBook::of(5)
+        };
+        assert_eq!(sync_book(&engine, &fresh, PORTABLE, "new-key", true), Ok(5));
+        assert!(
+            fresh
+                .posted
+                .borrow()
+                .iter()
+                .all(|b| !b.contains("MODSINCE")),
+            "the new profile's book starts whole: {:?}",
+            fresh.posted.borrow()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The hourly sync is due `hours` after the last sync that landed AND after the last that
+    /// failed: a book that cannot be synced (a key QRZ refuses, a book never seeded) is tried at
+    /// the operator's interval, never at every five-minute tick.
+    #[test]
+    fn a_failed_automatic_sync_waits_the_interval_before_the_next() {
+        let now = 1_790_000_000;
+        assert!(
+            qrz_auto_sync_due(0, 0, 1, now),
+            "never synced, never failed"
+        );
+        assert!(
+            !qrz_auto_sync_due(now - 600, 0, 1, now),
+            "synced 10 min ago"
+        );
+        assert!(qrz_auto_sync_due(now - 3_600, 0, 1, now), "an hour on");
+        assert!(
+            !qrz_auto_sync_due(0, now - 300, 1, now),
+            "never synced, failed 5 min ago"
+        );
+        assert!(
+            !qrz_auto_sync_due(now - 7_200, now - 300, 1, now),
+            "a delta that failed 5 min ago"
+        );
+        assert!(
+            qrz_auto_sync_due(0, now - 3_600, 1, now),
+            "an hour after the failure"
+        );
+        assert!(
+            !qrz_auto_sync_due(0, now - 3_600, 3, now),
+            "the operator's interval"
+        );
     }
 
     /// A profile for the tests below: its id, the first free one.
@@ -55834,7 +55930,8 @@ fn start_on_the_logbook(
                 continue;
             }
             let now = now_unix().max(0) as u64;
-            if last > 0 && now.saturating_sub(last) < u64::from(hours) * 3_600 {
+            let failed = QRZ_AUTO_SYNC_FAILED_AT.load(std::sync::atomic::Ordering::Relaxed);
+            if !qrz_auto_sync_due(last, failed, hours, now) {
                 continue;
             }
             // HTTP off the engine lock (the lock is taken inside, around the merge).
@@ -55842,6 +55939,7 @@ fn start_on_the_logbook(
             // fetch to when it began, once its last page lands (`sync_qrz_with`).
             match sync_qrz_since(&sync_engine, true, false) {
                 Ok(r) => {
+                    QRZ_AUTO_SYNC_FAILED_AT.store(0, std::sync::atomic::Ordering::Relaxed);
                     // Quiet unless something actually changed — an hourly "0 new"
                     // line would bury the log it shares with everything else.
                     if r.added > 0 || r.newly_confirmed_any > 0 {
@@ -55854,6 +55952,7 @@ fn start_on_the_logbook(
                 // Leave the high-water ALONE on failure so the next run covers the
                 // same span — a network blip must not create a hole in the delta.
                 Err(f) => {
+                    QRZ_AUTO_SYNC_FAILED_AT.store(now, std::sync::atomic::Ordering::Relaxed);
                     // The CLASS is all stderr gets. This line used to print QRZ's own
                     // `FETCH REASON`, which on Linux lands in `~/.xsession-errors` (0644,
                     // until the next login) and which QRZ fills with the failing request —
