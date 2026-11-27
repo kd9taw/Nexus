@@ -50,6 +50,9 @@ const NEVER_IMPORT: readonly string[] = [
   // part-way through one, the next sync would start mid-book and never fetch the pages before.
   'qrzFetchAfterLogid',
   'qrzFetchStartedUnix',
+  // Whose QRZ book those places are in, and the other books' places: this machine's too.
+  'qrzSyncBook',
+  'qrzSyncBooks',
   'eqslLastSync',
   // The LoTW DOWNLOAD cursor — the third of the same family, and the one that was missing.
   // A cursor means "I already have everything up to here", which is true of the machine that

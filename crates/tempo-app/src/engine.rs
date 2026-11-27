@@ -9510,16 +9510,29 @@ impl Engine {
     /// whose heavyweight reset (mode back to Chat, TX + broadcast queues cleared)
     /// landed mid-QSO once an hour with nothing on screen saying why (#54 — the
     /// 1.0.5 "intermittent mode drift" field report).
-    pub fn set_qrz_sync_cursor(&mut self, unix: u64) {
-        self.settings.qrz_last_sync_unix = unix;
+    ///
+    /// `book` is the keychain user of the key the sync used: each key's book has its own place
+    /// ([`Settings::qrz_sync_place`]).
+    pub fn set_qrz_sync_cursor(&mut self, book: &str, unix: u64) {
+        let mut place = self.settings.qrz_sync_place(book);
+        place.last_sync_unix = unix;
+        self.settings.set_qrz_sync_place(book, place);
     }
 
-    /// Move the whole-book QRZ fetch's resume point (persisted by the caller), the same narrow
-    /// mutation as [`Self::set_qrz_sync_cursor`]: the next page's `AFTERLOGID` and when the fetch
-    /// began, or `(0, 0)` once its last page is merged.
-    pub fn set_qrz_fetch_cursor(&mut self, after_logid: u64, started_unix: u64) {
-        self.settings.qrz_fetch_after_logid = after_logid;
-        self.settings.qrz_fetch_started_unix = started_unix;
+    /// Move the whole-book QRZ fetch's resume point in `book` (persisted by the caller), the same
+    /// narrow mutation as [`Self::set_qrz_sync_cursor`]: the next page's `AFTERLOGID` and when the
+    /// fetch began, or `(0, 0)` once its last page is merged.
+    pub fn set_qrz_fetch_cursor(&mut self, book: &str, after_logid: u64, started_unix: u64) {
+        let mut place = self.settings.qrz_sync_place(book);
+        place.fetch_after_logid = after_logid;
+        place.fetch_started_unix = started_unix;
+        self.settings.set_qrz_sync_place(book, place);
+    }
+
+    /// Make `book` the QRZ logbook whose place Settings show, at the start of a sync that uses its
+    /// key ([`Settings::select_qrz_book`]). The same narrow mutation as the cursors.
+    pub fn select_qrz_book(&mut self, book: &str) {
+        self.settings.select_qrz_book(book);
     }
 
     /// Record the sound card each TX audio device is on ([`Settings::tx_card_models`], persisted by
@@ -38836,7 +38849,13 @@ contact yourself."
         self.settings.lotw_sweep_year = 0;
         self.settings.lotw_sweep_since.clear();
         self.settings.eqsl_last_sync.clear();
-        self.set_qrz_fetch_cursor(0, 0);
+        let book = self.settings.qrz_sync_book.clone();
+        self.set_qrz_fetch_cursor(&book, 0, 0);
+        self.settings.qrz_sync_books.retain(|_, place| {
+            place.fetch_after_logid = 0;
+            place.fetch_started_unix = 0;
+            *place != crate::settings::QrzSyncPlace::default()
+        });
         removed
     }
 
@@ -54485,7 +54504,7 @@ mod tests {
         // Re-arm, then the narrow path: cursor moves, QSO and queue survive.
         e.tx_queue.push_back("PJ4DX W9XYZ -10".into());
         assert!(e.snapshot().qso.is_some(), "harness: the QSO is still up");
-        e.set_qrz_sync_cursor(1_754_700_000);
+        e.set_qrz_sync_cursor(crate::settings::QRZ_STATION_BOOK, 1_754_700_000);
         assert_eq!(e.settings().qrz_last_sync_unix, 1_754_700_000);
         assert!(
             e.snapshot().qso.is_some(),
