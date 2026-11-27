@@ -46473,6 +46473,11 @@ fn qrz_push_qso_impl(
 ///
 /// It is held with the keychain user of the key the replace was sent with: the duplicate is in
 /// that key's book, so the delete goes there too, whatever profile the station is on by then.
+/// Only the keychain user is held, never the key: the key is read again at the delete. If that
+/// profile's key was changed in between, the delete goes with the new key, to the book that key
+/// opens, and still names only the one record QRZ reported adding. If the key was cleared, the
+/// delete is refused before anything is sent, never sent with the station-wide key, and the
+/// authority stays for another go.
 static QRZ_CORRECT_MISS: std::sync::Mutex<Option<(tempo_core::qrz::QrzMissRecovery, String)>> =
     std::sync::Mutex::new(None);
 
@@ -46549,38 +46554,50 @@ async fn qrz_correct_apply(
 ) -> Result<tempo_app::dto::QrzCorrectResultDto, String> {
     let engine = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let QrzBookKey { user, key } = qrz_correct_key(&engine, &record, &read_keychain_secret)?;
-        let rec: tempo_core::logbook::QsoRecord = record.into();
-        let outcome = tempo_core::qrz_correct::apply(
+        qrz_correct_apply_with(
+            &engine,
+            record,
+            selected,
+            &read_keychain_secret,
             &propagation::live::qrz::LogbookApi {
                 app_version: env!("CARGO_PKG_VERSION"),
             },
-            &key,
-            &rec,
-            selected,
-        );
-        let message = outcome.sentence();
-        let mut can_recover = false;
-        if let tempo_core::qrz_correct::Outcome::MissedAndDuplicated { recovery, .. } = &outcome {
-            can_recover = recovery.is_some();
-            *QRZ_CORRECT_MISS.lock().unwrap_or_else(|e| e.into_inner()) =
-                recovery.clone().map(|r| (r, user));
-        }
-        // The sentence has already been through `scrub_key`, so it is safe to keep.
-        let level = if outcome.is_success() {
-            "info"
-        } else {
-            "error"
-        };
-        conn_log("QRZ Logbook", level, message.clone());
-        Ok(tempo_app::dto::QrzCorrectResultDto {
-            ok: outcome.is_success(),
-            message,
-            can_recover,
-        })
+        )
     })
     .await
     .map_err(|e| format!("QRZ correction task failed: {e}"))?
+}
+
+/// [`qrz_correct_apply`]'s body, with the keychain reached through `read` and QRZ through `qrz`.
+fn qrz_correct_apply_with(
+    engine: &SharedEngine,
+    record: LoggedQso,
+    selected: usize,
+    read: &dyn Fn(&str) -> Result<Option<String>, String>,
+    qrz: &dyn tempo_core::qrz_correct::QrzLogbook,
+) -> Result<tempo_app::dto::QrzCorrectResultDto, String> {
+    let QrzBookKey { user, key } = qrz_correct_key(engine, &record, read)?;
+    let rec: tempo_core::logbook::QsoRecord = record.into();
+    let outcome = tempo_core::qrz_correct::apply(qrz, &key, &rec, selected);
+    let message = outcome.sentence();
+    let mut can_recover = false;
+    if let tempo_core::qrz_correct::Outcome::MissedAndDuplicated { recovery, .. } = &outcome {
+        can_recover = recovery.is_some();
+        *QRZ_CORRECT_MISS.lock().unwrap_or_else(|e| e.into_inner()) =
+            recovery.clone().map(|r| (r, user));
+    }
+    // The sentence has already been through `scrub_key`, so it is safe to keep.
+    let level = if outcome.is_success() {
+        "info"
+    } else {
+        "error"
+    };
+    conn_log("QRZ Logbook", level, message.clone());
+    Ok(tempo_app::dto::QrzCorrectResultDto {
+        ok: outcome.is_success(),
+        message,
+        can_recover,
+    })
 }
 
 /// Delete the duplicate a missed replace created — **the only delete this application can send
@@ -46591,49 +46608,55 @@ async fn qrz_correct_apply(
 #[tauri::command]
 async fn qrz_correct_undo_miss() -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let (recovery, user) = QRZ_CORRECT_MISS
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take()
-            .ok_or_else(|| {
-                "There is no duplicate for Nexus to remove. Nexus can only delete a record QRZ \
-                 reported adding during this session; anything else has to be removed in the QRZ \
-                 logbook."
-                    .to_string()
-            })?;
-        let key = match qrz_correct_undo_key(&user, &read_keychain_secret) {
-            Ok(key) => key,
-            Err(e) => {
-                // Nothing was sent: the duplicate is still there, so keep the authority.
-                *QRZ_CORRECT_MISS.lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some((recovery, user));
-                return Err(e);
-            }
-        };
-        let said = tempo_core::qrz_correct::recover_from_miss(
+        qrz_correct_undo_miss_with(
+            &read_keychain_secret,
             &propagation::live::qrz::LogbookApi {
                 app_version: env!("CARGO_PKG_VERSION"),
             },
-            &key,
-            &recovery,
-        );
-        match said {
-            Ok(msg) => {
-                conn_log("QRZ Logbook", "info", msg.clone());
-                Ok(msg)
-            }
-            Err(msg) => {
-                // The delete did not happen, so put the authority back — the duplicate is still
-                // there and the operator will want another go.
-                *QRZ_CORRECT_MISS.lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some((recovery, user));
-                conn_log("QRZ Logbook", "error", msg.clone());
-                Err(msg)
-            }
-        }
+        )
     })
     .await
     .map_err(|e| format!("QRZ correction task failed: {e}"))?
+}
+
+/// [`qrz_correct_undo_miss`]'s body, with the keychain reached through `read` and QRZ through
+/// `qrz`.
+fn qrz_correct_undo_miss_with(
+    read: &dyn Fn(&str) -> Result<Option<String>, String>,
+    qrz: &dyn tempo_core::qrz_correct::QrzLogbook,
+) -> Result<String, String> {
+    let (recovery, user) = QRZ_CORRECT_MISS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+        .ok_or_else(|| {
+            "There is no duplicate for Nexus to remove. Nexus can only delete a record QRZ \
+             reported adding during this session; anything else has to be removed in the QRZ \
+             logbook."
+                .to_string()
+        })?;
+    let key = match qrz_correct_undo_key(&user, read) {
+        Ok(key) => key,
+        Err(e) => {
+            // Nothing was sent: the duplicate is still there, so keep the authority.
+            *QRZ_CORRECT_MISS.lock().unwrap_or_else(|e| e.into_inner()) = Some((recovery, user));
+            return Err(e);
+        }
+    };
+    let said = tempo_core::qrz_correct::recover_from_miss(qrz, &key, &recovery);
+    match said {
+        Ok(msg) => {
+            conn_log("QRZ Logbook", "info", msg.clone());
+            Ok(msg)
+        }
+        Err(msg) => {
+            // The delete did not happen, so put the authority back — the duplicate is still
+            // there and the operator will want another go.
+            *QRZ_CORRECT_MISS.lock().unwrap_or_else(|e| e.into_inner()) = Some((recovery, user));
+            conn_log("QRZ Logbook", "error", msg.clone());
+            Err(msg)
+        }
+    }
 }
 
 // ----- ClubLog realtime QSO push --------------------------------------------
@@ -80037,6 +80060,102 @@ mod qrz_profile_key_tests {
             Ok(PARK_KEY)
         );
         assert!(qrz_correct_undo_key(&sent_with.user, &keychain(&[])).is_err());
+    }
+
+    /// A made-up QRZ: answers a fetch with `fetch` and a replace with `insert`, and keeps the key
+    /// each request was made with.
+    struct RecordingQrz {
+        fetch: String,
+        insert: String,
+        sent: RefCell<Vec<(&'static str, String)>>,
+    }
+
+    impl RecordingQrz {
+        /// The keys the requests named `what` were made with, in order.
+        fn keys(&self, what: &str) -> Vec<String> {
+            self.sent
+                .borrow()
+                .iter()
+                .filter(|(w, _)| *w == what)
+                .map(|(_, k)| k.clone())
+                .collect()
+        }
+    }
+
+    impl tempo_core::qrz_correct::QrzLogbook for RecordingQrz {
+        fn status(&self, _key: &str) -> Result<String, String> {
+            Ok("RESULT=OK&COUNT=5&START_DATE=2000-01-01&END_DATE=2030-12-31".into())
+        }
+        fn fetch_callsign(&self, key: &str, _call: &str) -> Result<String, String> {
+            self.sent.borrow_mut().push(("fetch", key.to_string()));
+            Ok(self.fetch.clone())
+        }
+        fn replace(&self, key: &str, _adif: &str) -> Result<String, String> {
+            self.sent.borrow_mut().push(("replace", key.to_string()));
+            Ok(self.insert.clone())
+        }
+        fn delete_missed_replace(
+            &self,
+            key: &str,
+            _recovery: &tempo_core::qrz::QrzMissRecovery,
+        ) -> Result<String, String> {
+            self.sent.borrow_mut().push(("delete", key.to_string()));
+            Ok("RESULT=OK&COUNT=1".into())
+        }
+    }
+
+    /// ⭐ End to end through the commands' bodies: a replace on the park profile that QRZ answers
+    /// with a new record (the miss), then a switch to Home, then the removal. With no key it is
+    /// refused, nothing is sent and the duplicate can still be removed; with only the station
+    /// key it is refused the same way, never sent with that key; with the keys back the delete
+    /// goes with the key the replace went with; and a second press is refused.
+    #[test]
+    fn the_removal_of_a_missed_replace_goes_to_the_replaces_book_after_a_switch() {
+        let (engine, park) = station_with_a_park_profile();
+        let keys = every_key(&park);
+        let mut rec = logged_under(Some("KD9TAW/P"));
+        rec.call = "W1AW".into();
+        rec.mode = "USB".into();
+        rec.freq_mhz = 14.250;
+        let copy = "<CALL:4>W1AW<BAND:3>20m<MODE:3>SSB<QSO_DATE:8>20260925<TIME_ON:6>120000\
+                    <STATION_CALLSIGN:8>KD9TAW/P<EOR>\n";
+        let qrz = RecordingQrz {
+            fetch: format!(
+                "RESULT=OK&COUNT=1&ADIF={}",
+                copy.replace('<', "&lt;").replace('>', "&gt;")
+            ),
+            insert: "RESULT=OK&COUNT=1&LOGID=130877825".into(),
+            sent: RefCell::new(Vec::new()),
+        };
+        engine_lock(&engine).switch_station_profile(&park).unwrap();
+        let replaced = qrz_correct_apply_with(&engine, LoggedQso::from(rec), 1, &keys, &qrz)
+            .expect("the replace runs");
+        assert!(replaced.can_recover, "{}", replaced.message);
+        engine_lock(&engine)
+            .switch_station_profile(HOME_STATION_PROFILE)
+            .unwrap();
+
+        assert!(qrz_correct_undo_miss_with(&keychain(&[]), &qrz).is_err());
+        assert!(qrz.keys("delete").is_empty(), "no key: nothing is sent");
+        let station_only = keychain(&[(QRZ_LOGBOOK_KEYCHAIN_USER, STATION_KEY)]);
+        assert!(qrz_correct_undo_miss_with(&station_only, &qrz).is_err());
+        assert!(
+            qrz.keys("delete").is_empty(),
+            "the park key gone: never sent with the station key"
+        );
+
+        qrz_correct_undo_miss_with(&keys, &qrz).expect("the authority was kept");
+        assert_eq!(qrz.keys("replace"), vec![PARK_KEY.to_string()]);
+        assert_eq!(
+            qrz.keys("delete"),
+            vec![PARK_KEY.to_string()],
+            "on Home, the delete still goes into the park call's book"
+        );
+        assert!(
+            qrz_correct_undo_miss_with(&keys, &qrz).is_err(),
+            "the authority is used up"
+        );
+        assert_eq!(qrz.keys("delete").len(), 1);
     }
 
     /// Two profiles with the same call: the one the station is on goes first when it has that
