@@ -131,15 +131,21 @@ describe('the QSY wipe on the Contest screen and in the logger window', () => {
     expect(callBox().value).toBe('K9AAA')
   })
 
-  it('a pass holds the wipe only while it is up (AOS to LOS) or Doppler drives a leg; an armed wait does not', () => {
-    const track = (state: string, dopplerDownlink = false, dopplerUplink = false) =>
-      ({ name: 'SO-50', state, mode: 'rotor-only', dopplerDownlink, dopplerUplink }) as unknown as Parameters<typeof passHoldsDial>[0]
-    expect(passHoldsDial(null)).toBe(false)
-    expect(passHoldsDial(track('armed')), 'armed, up to two days ahead').toBe(false)
-    expect(passHoldsDial(track('prepositioning')), 'the rotor slews; the dial is the operator\'s').toBe(false)
-    expect(passHoldsDial(track('tracking')), 'the pass is up').toBe(true)
-    expect(passHoldsDial(track('armed', true))).toBe(true)
-    expect(passHoldsDial(track('prepositioning', false, true))).toBe(true)
+  it('a pass holds the wipe while it is up (AOS to LOS), and Doppler only from 60 s before AOS', () => {
+    const NOW = 1_792_342_800
+    const track = (state: string, dopplerDownlink = false, dopplerUplink = false, aosIn = 3600) =>
+      ({ name: 'SO-50', state, mode: 'rotor-only', dopplerDownlink, dopplerUplink, aosUnix: NOW + aosIn, losUnix: NOW + aosIn + 600 }) as unknown as Parameters<typeof passHoldsDial>[0]
+    expect(passHoldsDial(null, NOW)).toBe(false)
+    expect(passHoldsDial(track('armed'), NOW), 'armed, up to two days ahead').toBe(false)
+    expect(passHoldsDial(track('prepositioning'), NOW), 'the rotor slews; the dial is the operator\'s').toBe(false)
+    expect(passHoldsDial(track('tracking'), NOW), 'the pass is up').toBe(true)
+    // The engine reports a Doppler leg from arming whenever a transponder is held: it counts only
+    // in the last minute before AOS, so the 2 s pass poll can never miss the AOS retune.
+    expect(passHoldsDial(track('armed', true), NOW), 'armed an hour ahead with a transponder held').toBe(false)
+    expect(passHoldsDial(track('armed', true, false, 172_800), NOW), 'two days ahead').toBe(false)
+    expect(passHoldsDial(track('armed', true, false, 60), NOW), 'a minute before AOS').toBe(true)
+    expect(passHoldsDial(track('prepositioning', false, true, 30), NOW)).toBe(true)
+    expect(passHoldsDial(track('prepositioning', false, false, 30), NOW), 'no Doppler leg: the dial is the operator\'s').toBe(false)
   })
 
   it('TWO WINDOWS, ONE LINE: only the logger window runs the wipe, so one notice, one Restore', async () => {

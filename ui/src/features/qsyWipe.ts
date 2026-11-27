@@ -53,10 +53,18 @@ export function useQsyWipe(): [boolean, (on: boolean) => void] {
   return [on, setQsyWipe]
 }
 
-/** Does a satellite pass hold the dial? While the pass is UP (`tracking`, AOS to LOS) or Doppler
- *  drives either leg. Not while a track is only armed — that can be two days ahead — or a rotor is
- *  slewing to the AOS azimuth with the dial left to the operator: the wipe works then as it always
- *  does. Read by App's pass poll for the main window's Contest screen, and the logger window's own. */
-export function passHoldsDial(track: SatTrackStatus | null): boolean {
-  return track != null && (track.state === 'tracking' || track.dopplerDownlink || track.dopplerUplink)
+/** Before AOS, a Doppler leg counts only this close to it: the engine reports a leg from the moment
+ *  a pass is armed whenever a transponder is held, and the pass poll answers every 2 s, so a minute
+ *  is enough that the AOS retune is never missed. */
+const DOPPLER_LEAD_S = 60
+
+/** Does a satellite pass hold the dial? While the pass is UP (`tracking`, AOS to LOS), or in the
+ *  last minute before AOS with Doppler set to drive a leg. Not while a track is only armed — that
+ *  can be two days ahead, transponder held or not — nor while a rotor slews to the AOS azimuth with
+ *  the dial left to the operator: the wipe works then as it always does. Read by App's pass poll
+ *  for the main window's Contest screen, and by the logger window's own. */
+export function passHoldsDial(track: SatTrackStatus | null, nowUnix = Date.now() / 1000): boolean {
+  if (track == null) return false
+  if (track.state === 'tracking') return true
+  return (track.dopplerDownlink || track.dopplerUplink) && nowUnix >= track.aosUnix - DOPPLER_LEAD_S && nowUnix <= track.losUnix
 }
