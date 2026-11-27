@@ -6226,6 +6226,31 @@ impl RadioLoop {
         self.mode_fail_count = 0;
         self.mode_saw_reject = false;
         self.on_cat_link_back();
+        self.refresh_port_neighbours_in(crate::ports::present_ports);
+    }
+
+    /// The ports present now, CAT working, become the follow's neighbours
+    /// ([`Self::cat_port_neighbours`]): a cable plugged in since the identity was captured, while
+    /// CAT kept working, is "there all along" from here on. Here, once per recovered outage, and
+    /// not on every link-back (a successful SET), which would walk the ports on every dial write.
+    /// Only while the identity is the configured port's: there is nothing to follow otherwise.
+    fn refresh_port_neighbours_in(
+        &mut self,
+        ports: impl FnOnce() -> Vec<tempo_app::serial_port::PresentPort>,
+    ) {
+        if self
+            .cat_port_identity
+            .as_ref()
+            .is_none_or(|(port, _)| *port != self.cat_port_configured)
+        {
+            return;
+        }
+        let in_use = self.effective_port_name();
+        self.cat_port_neighbours = ports()
+            .into_iter()
+            .map(|p| p.name)
+            .filter(|n| *n != in_use)
+            .collect();
     }
 
     /// The lighter half, for the path where a SET just succeeded: the dial give-up and the
@@ -22097,8 +22122,9 @@ fn typed_port_exists(port: &str) -> bool {
 
 /// The port to follow a rig to when `configured` is absent: the one present port that is
 /// unambiguously the remembered device, by the launch follow's rule
-/// ([`tempo_app::serial_port::refind`]: its serial number, or VID/PID plus the interface of a
-/// multi-port chip; VID, PID and product alone, and Windows' one-digit stand-in serial, are never
+/// ([`tempo_app::serial_port::refind`]: its own serial number, with the interface number only
+/// picking the right port of a multi-port chip whose ports share it; VID, PID and product alone,
+/// an interface number alone, a factory-default serial and Windows' one-digit stand-in are never
 /// enough), and that no other setting names (`taken`: a PTT, CW-key, WinKeyer or FSK cable, a
 /// rotator, an amplifier, another radio). A generic bridge's VID, PID and product are the same on
 /// every cable of its kind, so the old rule could follow CAT onto the PTT cable and open CAT on a
@@ -53959,7 +53985,8 @@ mod tests {
     }
 
     /// Following a rig to a NEW port name: exactly one present port that is unambiguously the
-    /// remembered device (its serial number, or VID/PID plus interface), and nothing else.
+    /// remembered device (its own serial number, the interface number only narrowing among
+    /// serial matches), and nothing else.
     #[test]
     fn alias_for_follows_exactly_one_matching_device() {
         let id = identity_at(&[ic7300("COM5")], "COM5");
@@ -54137,6 +54164,31 @@ mod tests {
         keyed.remember_port_identity_in(|| vec![ic7300("COM3")]);
         let opened = keyed.resolve_port_alias_in(&want, || vec![ic7300("COM12")], &ptt_on("com12"));
         assert_eq!(opened.serial_port, "COM3", "the settings key PTT on COM12");
+    }
+
+    /// A cable plugged in after the identity was captured, while CAT kept working, is a neighbour
+    /// once CAT recovers from an outage with it present: from then on it was "there all along"
+    /// and is never followed onto.
+    #[test]
+    fn the_follow_neighbours_refresh_when_cat_recovers() {
+        let mut state = loop_state();
+        state.applied.serial_port = "COM3".to_string();
+        state.cat_port_configured = "COM3".to_string();
+        state.remember_port_identity_in(|| vec![ic7300("COM3")]);
+        assert!(state.cat_port_neighbours.is_empty());
+        state.refresh_port_neighbours_in(|| vec![ic7300("COM3"), ic7300("COM12")]);
+        assert_eq!(state.cat_port_neighbours, vec!["COM12".to_string()]);
+        let want = state.applied.clone();
+        let opened = state.resolve_port_alias_in(&want, || vec![ic7300("COM12")], &no_ports_set());
+        assert_eq!(
+            opened.serial_port, "COM3",
+            "COM12 was there when CAT last recovered"
+        );
+        // No identity for the configured port: nothing to refresh.
+        let mut other = loop_state();
+        other.cat_port_configured = "COM9".to_string();
+        other.refresh_port_neighbours_in(|| vec![ic7300("COM12")]);
+        assert!(other.cat_port_neighbours.is_empty());
     }
 
     /// "Never while the saved port exists" is about the port the SETTINGS name, not the alias
