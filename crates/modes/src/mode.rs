@@ -2330,8 +2330,10 @@ impl Mode for Msk144Mode {
         // `frame_time_ms` counts from the Unix epoch, so its seconds are ten digits:
         // printed `i6.6` they are six asterisks, the line no longer reads back, and
         // every live decode was dropped (#579) while every test, labelling small
-        // periods, decoded. The time of day keeps the label distinct per period at
-        // every supported period, as WSJT-X's own (`fastSink`, mainwindow.cpp) does.
+        // periods, decoded. The time of day, in WSJT-X's own `hhmmss` form (`fastSink`,
+        // mainwindow.cpp), keeps the label distinct per period at every supported
+        // period. It is the boundary that ends the period, where WSJT-X labels its
+        // start: the label is never shown, only compared.
         let secs = frame_time_ms.div_euclid(1000).rem_euclid(86_400);
         let nutc = ((secs / 3600) * 10_000 + (secs / 60 % 60) * 100 + secs % 60) as i32;
         msk144::decode_frame(

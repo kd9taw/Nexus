@@ -42,10 +42,10 @@
 !   tsec0 is ALSO read at :212 and :230 as the third disjunct of both dupe tests.
 !   Only the stated mechanism was wrong, not the contract.
 
-! RX-ONLY, DELIBERATELY. There is no msk144 encode or gen_wave here. The Rust
-! ModeKind reports `Capabilities { tx: false }` so modes::tx_mode() refuses to
-! hand it to the transmit path. Adding TX means adding those entry points AND
-! flipping that flag AND passing the FT-mode TX hard gate.
+! TX SINCE 0.20.0: msk144_encode_msg below is the encode entry point; the Rust
+! crate builds the wave (msk144::gen_wave) and ModeKind::Msk144 reports
+! `Capabilities { tx: true }`. Any further MSK144 TX change passes the FT-mode
+! TX approval gate.
 !
 ! (genmsk_128_90 and genmsk40 ARE compiled in regardless: mskrtd's signal-quality
 ! and MSK40 paths call them to regenerate a candidate for comparison, so they are

@@ -285,6 +285,12 @@ pub fn decode_frame(
         period_supported(period_s),
         "MSK144 period {period_s}s is not supported (must be one of {PERIODS:?})"
     );
+    // A label mskrtd cannot print `i6.6` loses every decode in silence (see the module
+    // docs): loud in a debug build, where a test can catch it.
+    debug_assert!(
+        (0..=999_999).contains(&nutc),
+        "MSK144 period label {nutc} does not fit mskrtd's six-digit UTC field"
+    );
     let need = nmax(period_s);
     assert!(
         iwave.len() >= need,
@@ -612,6 +618,14 @@ mod tests {
     fn a_buffer_sized_for_the_wrong_period_panics() {
         let iwave = vec![0i16; nmax(15)];
         let _ = decode_frame(&iwave, 30, 1, 200, 2900, 3, "", "", 1500);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "six-digit UTC field")]
+    fn a_label_of_seven_digits_panics_in_a_debug_build() {
+        let iwave = vec![0i16; nmax(15)];
+        let _ = decode_frame(&iwave, 15, 1_000_000, 200, 2900, 3, "", "", 1500);
     }
 
     #[test]

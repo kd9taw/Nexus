@@ -44,8 +44,9 @@ fn decoded(frame_time_ms: i64) -> Vec<String> {
         .collect()
 }
 
-/// ⭐ The radio loop's label: 2025-11-27 12:00:15 UTC as Unix milliseconds, the boundary that
-/// ends the period. The ping decodes.
+/// ⭐ The radio loop's label: 2025-11-27 12:00:15 UTC as Unix milliseconds. The loop hands a
+/// decode the boundary that ENDS its audio period (the next period's start: the slot index it
+/// passes is the audio slot + 1). The ping decodes.
 #[test]
 fn a_ping_decodes_in_a_period_labelled_by_the_wall_clock() {
     let heard = decoded(1_764_244_815_000);
