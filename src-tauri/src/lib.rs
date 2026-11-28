@@ -45233,15 +45233,67 @@ mod upload_record_tests {
             PORTS.lock().unwrap_or_else(|e| e.into_inner())
         }
 
-        fn free_port() -> u16 {
-            let l = TcpListener::bind("127.0.0.1:0").unwrap();
-            l.local_addr().unwrap().port()
+        // The ports this test holds closed (`free_port`), each taken by `listen` when the test
+        // listens there. Per thread: each test runs on its own. (A plain comment: doc comments
+        // cannot attach through `thread_local!`.)
+        std::thread_local! {
+            static HELD: std::cell::RefCell<Vec<socket2::Socket>> =
+                const { std::cell::RefCell::new(Vec::new()) };
         }
 
+        /// A loopback port nothing answers on, held by this test for as long as it runs: bound and
+        /// never listened on, so a connect to it is refused as at a closed program's port, and no
+        /// other socket (another test's `:0` bind, an outgoing connection's own port) can be handed
+        /// it. A port the test let go could be: a later `listen` then failed with AddrInUse, or a
+        /// "closed" N3FJP was someone else's listener and took the contact.
+        fn free_port() -> u16 {
+            let s = unlistened();
+            s.bind(&std::net::SocketAddr::from(([127, 0, 0, 1], 0)).into())
+                .unwrap();
+            let port = s.local_addr().unwrap().as_socket().unwrap().port();
+            HELD.with(|held| held.borrow_mut().push(s));
+            port
+        }
+
+        fn unlistened() -> socket2::Socket {
+            use socket2::{Domain, Socket, Type};
+            Socket::new(Domain::IPV4, Type::STREAM, None).unwrap()
+        }
+
+        /// Listen on a port from [`free_port`], on the socket that holds it: it is never let go.
         fn listen(port: u16) -> TcpListener {
-            let l = TcpListener::bind(("127.0.0.1", port)).unwrap();
+            let s = HELD.with(|held| {
+                let mut held = held.borrow_mut();
+                let i = held
+                    .iter()
+                    .position(|s| {
+                        s.local_addr()
+                            .ok()
+                            .and_then(|a| a.as_socket())
+                            .map(|a| a.port())
+                            == Some(port)
+                    })
+                    .expect("a port from free_port, held closed");
+                held.swap_remove(i)
+            });
+            s.listen(128).unwrap();
+            let l: TcpListener = s.into();
             l.set_nonblocking(true).unwrap();
             l
+        }
+
+        /// The program at `l` closes: nothing answers there again, and the port is held as
+        /// [`free_port`] holds one, for a later [`listen`]. Bound again with SO_REUSEADDR, as std
+        /// binds its own listeners on Unix: a connection the listener took may still be closing
+        /// on the port, and without it that bind fails with AddrInUse.
+        fn close(l: TcpListener) {
+            let at = l.local_addr().unwrap();
+            drop(l);
+            let s = unlistened();
+            #[cfg(unix)]
+            s.set_reuse_address(true).unwrap();
+            s.bind(&at.into()).unwrap();
+            HELD.with(|held| held.borrow_mut().push(s));
         }
 
         /// What has come in, one entry a connection: the directive, empty for a connection check.
@@ -45440,7 +45492,7 @@ mod upload_record_tests {
             }
             got.extend(arrived(&dxkeeper));
             assert_eq!(calls(&got), names(0, 5));
-            drop(dxkeeper);
+            close(dxkeeper);
 
             now += 2;
             tick(&engine, port, &mut wait, now);
@@ -45601,7 +45653,7 @@ mod upload_record_tests {
 
             // The last one waiting, deleted: the wait ends, with no line that says it was delivered.
             let p = log(&engine, "K9WT");
-            drop(dxkeeper);
+            close(dxkeeper);
             pass(&engine, p, port, false, &mut wait);
             tick(&engine, port, &mut wait, now + 2);
             assert_eq!(wait.said, 1);
@@ -45835,10 +45887,7 @@ mod upload_record_tests {
         #[test]
         fn hrd_closed_with_several_queued_loses_none_and_sends_none_twice() {
             let _one = one_at_a_time();
-            let port = {
-                let probe = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-                probe.local_addr().unwrap().port()
-            };
+            let port = hrd_closed_port();
             let engine = engine(free_port());
             {
                 let mut e = crate::engine_lock(&engine);
@@ -45867,9 +45916,7 @@ mod upload_record_tests {
                 crate::drain_hrd(&engine);
             }
             let mut got = Vec::new();
-            let mut buf = [0u8; 4096];
-            while let Ok(n) = hrd.recv(&mut buf) {
-                let text = String::from_utf8_lossy(&buf[..n]).to_string();
+            for text in hrd_received(&hrd) {
                 let call = ["K1HRD", "K2HRD", "K3HRD"]
                     .into_iter()
                     .find(|c| text.contains(c))
@@ -45878,6 +45925,31 @@ mod upload_record_tests {
             }
             assert_eq!(got, ["K1HRD", "K2HRD", "K3HRD"], "each once, in order");
             assert_eq!(crate::engine_lock(&engine).snapshot().radio.hrd_queued, 0);
+        }
+
+        /// A loopback UDP port for an HRD Logbook that is closed until the test binds it. A UDP
+        /// port cannot be held closed (bound, it takes datagrams), so it is one below the kernel's
+        /// ephemeral range, where only a bind that names the port can land: one a `:0` bind let go
+        /// could be handed to any socket on this computer, which then took the "closed" sends.
+        fn hrd_closed_port() -> u16 {
+            crate::lan_client::tests::ports_below_the_ephemeral_range()
+                .find(|&port| std::net::UdpSocket::bind(("127.0.0.1", port)).is_ok())
+                .expect("a free port below the ephemeral range")
+        }
+
+        /// What a stand-in HRD Logbook received until its read timeout: the datagrams that carry a
+        /// contact. One that carries none is not the engine's: the port is one the system picked,
+        /// and a socket elsewhere may still be sending to whoever held it before.
+        fn hrd_received(hrd: &std::net::UdpSocket) -> Vec<String> {
+            let mut got = Vec::new();
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = hrd.recv(&mut buf) {
+                let text = String::from_utf8_lossy(&buf[..n]).to_string();
+                if text.to_ascii_uppercase().contains("<CALL:") {
+                    got.push(text);
+                }
+            }
+            got
         }
 
         /// ⛔ #529: THE TCP ADIF OUTPUT'S LOGGER CLOSED WITH SEVERAL CONTACTS QUEUED. The drain stops
@@ -45938,10 +46010,7 @@ mod upload_record_tests {
         #[test]
         fn after_a_purge_and_a_closed_hrd_every_surviving_contact_arrives_once_in_order() {
             let _one = one_at_a_time();
-            let port = {
-                let probe = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
-                probe.local_addr().unwrap().port()
-            };
+            let port = hrd_closed_port();
             let engine = engine(free_port());
             {
                 let mut e = crate::engine_lock(&engine);
@@ -45978,9 +46047,7 @@ mod upload_record_tests {
                 crate::drain_hrd(&engine);
             }
             let mut got = Vec::new();
-            let mut buf = [0u8; 4096];
-            while let Ok(n) = hrd.recv(&mut buf) {
-                let text = String::from_utf8_lossy(&buf[..n]).to_string();
+            for text in hrd_received(&hrd) {
                 let call = ["K4HRD", "K1HRD", "K2HRD", "K3HRD"]
                     .into_iter()
                     .find(|c| text.contains(c))
@@ -46022,11 +46089,7 @@ mod upload_record_tests {
             .unwrap();
             crate::engine_lock(&engine).log_qso(after);
             crate::drain_hrd(&engine);
-            let mut got = Vec::new();
-            let mut buf = [0u8; 4096];
-            while let Ok(n) = hrd.recv(&mut buf) {
-                got.push(String::from_utf8_lossy(&buf[..n]).to_string());
-            }
+            let got = hrd_received(&hrd);
             assert_eq!(got.len(), 1, "one datagram: {got:?}");
             assert!(got[0].contains("K2AFT"), "{got:?}");
         }
@@ -46076,8 +46139,8 @@ mod upload_record_tests {
             }
             assert_eq!(calls(&arrived(&dxkeeper)), ["K1RVS"]);
             assert_eq!(arrived(&n3fjp).len(), 0, "and no second copy");
-            drop(dxkeeper);
-            drop(n3fjp);
+            close(dxkeeper);
+            close(n3fjp);
 
             // The other way about: both closed. The service alone goes back on the queue.
             let p = log(&engine, "K2RVS");

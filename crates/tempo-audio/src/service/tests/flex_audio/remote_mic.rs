@@ -53,19 +53,26 @@ fn join(s: &FlexScene) -> Remote {
 }
 
 /// The operator holds PTT and talks for `ms`: each loop tick the page re-asserts its hold and
-/// sends a 20 ms frame, on the real clock.
+/// sends the 20 ms frames its microphone has made since the last, on the real clock. A browser's
+/// media clock runs in real time; one frame a tick would run slower than that by the tick's own
+/// work, and once that adds up past the lead-in every frame is late (M4) and the over ends with
+/// AudioGap (M2), as it must for a page that really does fall behind.
 fn talk(s: &mut FlexScene, r: &mut Remote, ms: u64) {
     let start = Instant::now();
+    let first = r.seq;
     while start.elapsed() < Duration::from_millis(ms) {
         let now = Instant::now();
         r.hold.hold(PRESS, now);
-        r.seq += 1;
-        let _ = r.feed.push(MicFrame {
-            seq: r.seq,
-            media: MIC.samples(20) * r.seq,
-            arrived: now,
-            samples: vec![0.5; MIC.samples(20) as usize],
-        });
+        let made = first + 1 + now.duration_since(start).as_millis() as u64 / 20;
+        while r.seq < made {
+            r.seq += 1;
+            let _ = r.feed.push(MicFrame {
+                seq: r.seq,
+                media: MIC.samples(20) * r.seq,
+                arrived: now,
+                samples: vec![0.5; MIC.samples(20) as usize],
+            });
+        }
         s.step(now_unix_ms());
         std::thread::sleep(Duration::from_millis(20));
     }
