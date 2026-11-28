@@ -6474,6 +6474,13 @@ export interface Settings {
   qrzFetchAfterLogid: number
   /** Unix seconds that download began. */
   qrzFetchStartedUnix: number
+  /** The keychain user of the QRZ Logbook key whose book the three places above are in. */
+  qrzSyncBook: string
+  /** The places in the other keys' QRZ books, by keychain user. */
+  qrzSyncBooks: Record<
+    string,
+    { lastSyncUnix: number; fetchAfterLogid: number; fetchStartedUnix: number }
+  >
   /** ClubLog account email (not a callsign); app-password is in the keychain. */
   clublogEmail: string
   /** ClubLog logbook callsign to upload into (empty → your callsign). */

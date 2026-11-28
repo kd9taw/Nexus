@@ -1339,6 +1339,50 @@ impl ContestBefore {
     }
 }
 
+/// The keychain user of the station-wide QRZ Logbook key, which names its book's place
+/// ([`Settings::qrz_sync_book`]). The same name the keychain entry is kept under.
+pub const QRZ_STATION_BOOK: &str = "qrz-logbook-key";
+
+/// The keychain user of station profile `profile_id`'s own QRZ Logbook key, which names its book's
+/// place ([`Settings::qrz_sync_books`]).
+pub fn qrz_profile_book(profile_id: &str) -> String {
+    format!("{QRZ_STATION_BOOK}.{profile_id}")
+}
+
+/// Where a QRZ sync stands in one logbook ([`Settings::qrz_sync_place`]): the delta high-water and
+/// a whole-book fetch's resume point, as [`Settings::qrz_last_sync_unix`],
+/// [`Settings::qrz_fetch_after_logid`] and [`Settings::qrz_fetch_started_unix`] describe them.
+/// All 0 = never synced.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct QrzSyncPlace {
+    pub last_sync_unix: u64,
+    pub fetch_after_logid: u64,
+    pub fetch_started_unix: u64,
+}
+
+impl QrzSyncPlace {
+    /// This place with what no sync could have written put back to "not yet": a time later than
+    /// a day past `now_unix` (a hand edit, or a clock that was wrong), which would ask QRZ only
+    /// for what changes after it, and half of a resume point (a logid with no start, or a start
+    /// with no logid). Each falls back to a whole-book fetch, which misses nothing.
+    pub fn checked(self, now_unix: u64) -> Self {
+        let soon = now_unix.saturating_add(86_400);
+        let fetch = self.fetch_after_logid > 0
+            && self.fetch_started_unix > 0
+            && self.fetch_started_unix <= soon;
+        QrzSyncPlace {
+            last_sync_unix: if self.last_sync_unix <= soon {
+                self.last_sync_unix
+            } else {
+                0
+            },
+            fetch_after_logid: if fetch { self.fetch_after_logid } else { 0 },
+            fetch_started_unix: if fetch { self.fetch_started_unix } else { 0 },
+        }
+    }
+}
+
 /// Everything the operator configures: identity, band/frequency, Field Day
 /// exchange, rig/PTT control, and network (WSJT-X UDP API + PSK Reporter).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -4138,6 +4182,16 @@ pub struct Settings {
     /// back to the start of the fetch and nothing QRZ changed while it ran is missed.
     #[serde(default)]
     pub qrz_fetch_started_unix: u64,
+    /// Whose QRZ logbook the three places above are in: the keychain user of the Logbook key the
+    /// last sync used. Each key opens its own book (#503 gave each station profile one), and a
+    /// place in one book means nothing in another, so each key keeps its own
+    /// ([`Self::qrz_sync_place`]): the book synced last here, the others in
+    /// [`Self::qrz_sync_books`]. Two profiles that use the same keychain entry (the station-wide
+    /// one) share one book and one place.
+    pub qrz_sync_book: String,
+    /// The places in the other QRZ books, by the keychain user of their key. A key with no place
+    /// has never synced here, and its next sync fetches its whole book.
+    pub qrz_sync_books: std::collections::BTreeMap<String, QrzSyncPlace>,
     /// ClubLog account email (NOT a callsign). The app-password lives in the OS
     /// keychain; the email (non-secret) and the api key live here.
     pub clublog_email: String,
@@ -7810,6 +7864,8 @@ impl Default for Settings {
             qrz_last_sync_unix: 0,
             qrz_fetch_after_logid: 0,
             qrz_fetch_started_unix: 0,
+            qrz_sync_book: QRZ_STATION_BOOK.to_string(),
+            qrz_sync_books: std::collections::BTreeMap::new(),
             clublog_email: String::new(),
             clublog_callsign: String::new(),
             clublog_api_key: String::new(),
@@ -9337,7 +9393,81 @@ impl Settings {
         // ⛔ A station profile id that names no profile is put back on one, with that profile's
         // call (`Settings::repair_active_station_profile`).
         s.repair_active_station_profile();
+        s.settle_qrz_sync_books(u64::try_from(now_unix).unwrap_or(0));
         s
+    }
+
+    /// Where the sync stands in `book`'s QRZ logbook (the keychain user of its key): never synced
+    /// when it has no place yet.
+    pub fn qrz_sync_place(&self, book: &str) -> QrzSyncPlace {
+        if book == self.qrz_sync_book {
+            QrzSyncPlace {
+                last_sync_unix: self.qrz_last_sync_unix,
+                fetch_after_logid: self.qrz_fetch_after_logid,
+                fetch_started_unix: self.qrz_fetch_started_unix,
+            }
+        } else {
+            self.qrz_sync_books.get(book).copied().unwrap_or_default()
+        }
+    }
+
+    /// Keep `place` as where the sync stands in `book`'s QRZ logbook.
+    pub fn set_qrz_sync_place(&mut self, book: &str, place: QrzSyncPlace) {
+        if book == self.qrz_sync_book {
+            self.qrz_last_sync_unix = place.last_sync_unix;
+            self.qrz_fetch_after_logid = place.fetch_after_logid;
+            self.qrz_fetch_started_unix = place.fetch_started_unix;
+        } else if place == QrzSyncPlace::default() {
+            self.qrz_sync_books.remove(book);
+        } else {
+            self.qrz_sync_books.insert(book.to_string(), place);
+        }
+    }
+
+    /// Make `book` the one whose place the `qrz_*` fields hold, the one a sync is using: the book
+    /// they held before keeps its place in [`Self::qrz_sync_books`].
+    pub fn select_qrz_book(&mut self, book: &str) {
+        if book == self.qrz_sync_book {
+            return;
+        }
+        let held = self.qrz_sync_place(&self.qrz_sync_book.clone());
+        let next = self.qrz_sync_books.remove(book).unwrap_or_default();
+        let before = std::mem::replace(&mut self.qrz_sync_book, book.to_string());
+        self.set_qrz_sync_place(&before, held);
+        self.set_qrz_sync_place(book, next);
+    }
+
+    /// The QRZ places as a load finds them, checked ([`Self::load_at`]).
+    ///
+    /// A file from before each key had its own place names no book: its one place was written
+    /// with the station-wide key ([`QRZ_STATION_BOOK`]), the only key any released build synced
+    /// with, and stays that key's. A place in the book of a profile that is gone goes with it,
+    /// and each place is held to what a sync could have written ([`QrzSyncPlace::checked`]).
+    fn settle_qrz_sync_books(&mut self, now_unix: u64) {
+        let live: Vec<String> = std::iter::once(QRZ_STATION_BOOK.to_string())
+            .chain(
+                self.station_profiles
+                    .iter()
+                    .map(|p| qrz_profile_book(&p.id)),
+            )
+            .collect();
+        if self.qrz_sync_book.is_empty() {
+            self.qrz_sync_book = QRZ_STATION_BOOK.to_string();
+        } else if !live.contains(&self.qrz_sync_book) {
+            self.qrz_sync_book = QRZ_STATION_BOOK.to_string();
+            let station = self
+                .qrz_sync_books
+                .remove(QRZ_STATION_BOOK)
+                .unwrap_or_default();
+            self.set_qrz_sync_place(QRZ_STATION_BOOK, station);
+        }
+        let current = self.qrz_sync_book.clone();
+        self.qrz_sync_books.retain(|book, place| {
+            *place = place.checked(now_unix);
+            *book != current && live.contains(book) && *place != QrzSyncPlace::default()
+        });
+        let place = self.qrz_sync_place(&current).checked(now_unix);
+        self.set_qrz_sync_place(&current, place);
     }
 
     /// These settings as the settings file and a settings backup store them: `licenseClass` the
@@ -18203,6 +18333,109 @@ mod tests {
 
     /// 2026-09-30 14:22:33 UTC, for the dated names of the files kept below.
     const KEPT_AT: i64 = 1_790_778_153;
+
+    /// The QRZ places a load finds are held to what a sync could have written: a book of a
+    /// profile that is gone goes, a time past tomorrow and half a resume point go back to "not
+    /// yet", and places left empty are not kept. A file that names no book (one from before
+    /// each key had its own place) has the station-wide key's.
+    #[test]
+    fn qrz_places_are_checked_on_load() {
+        let dir = std::env::temp_dir().join(format!("tempo_qrz_places_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let load = |doc: serde_json::Value| {
+            std::fs::write(&path, doc.to_string()).unwrap();
+            Settings::load_at(&path, KEPT_AT)
+        };
+        let now = KEPT_AT as u64;
+        let place = |last, after, began| QrzSyncPlace {
+            last_sync_unix: last,
+            fetch_after_logid: after,
+            fetch_started_unix: began,
+        };
+        let profiles = serde_json::json!([
+            { "id": "home", "name": "", "call": "W9XYZ" },
+            { "id": "p1", "name": "Portable", "call": "W9XYZ/P" },
+        ]);
+        let p1 = qrz_profile_book("p1");
+
+        // Older: one place, no book named.
+        let s = load(serde_json::json!({
+            "qrzLastSyncUnix": now - 3_600,
+            "qrzFetchAfterLogid": 1_750,
+            "qrzFetchStartedUnix": now - 60,
+            "stationProfiles": profiles,
+            "activeStationProfile": "p1",
+        }));
+        assert_eq!(s.qrz_sync_book, QRZ_STATION_BOOK);
+        assert_eq!(
+            s.qrz_sync_place(QRZ_STATION_BOOK),
+            place(now - 3_600, 1_750, now - 60)
+        );
+        assert_eq!(s.qrz_sync_place(&p1), QrzSyncPlace::default());
+
+        // Checked: /P's own place is in the future and half a resume point; Home's resume has
+        // no logid; a profile that is gone keeps nothing.
+        let s = load(serde_json::json!({
+            "qrzSyncBook": p1,
+            "qrzLastSyncUnix": now + 10 * 86_400,
+            "qrzFetchAfterLogid": 1_750,
+            "qrzFetchStartedUnix": 0,
+            "qrzSyncBooks": {
+                QRZ_STATION_BOOK: { "lastSyncUnix": now - 7_200, "fetchStartedUnix": now - 60 },
+                qrz_profile_book("p9"): { "lastSyncUnix": now - 60 },
+            },
+            "stationProfiles": profiles,
+            "activeStationProfile": "p1",
+        }));
+        assert_eq!(s.qrz_sync_book, p1);
+        assert_eq!(s.qrz_sync_place(&p1), QrzSyncPlace::default());
+        assert_eq!(s.qrz_sync_place(QRZ_STATION_BOOK), place(now - 7_200, 0, 0));
+        assert_eq!(s.qrz_sync_books.len(), 1, "{:?}", s.qrz_sync_books);
+
+        // The book last synced was a profile's that is gone: the station-wide key's place is
+        // the one shown.
+        let s = load(serde_json::json!({
+            "qrzSyncBook": qrz_profile_book("p9"),
+            "qrzLastSyncUnix": now - 60,
+            "qrzSyncBooks": {
+                QRZ_STATION_BOOK: { "lastSyncUnix": now - 7_200 },
+            },
+            "stationProfiles": profiles,
+        }));
+        assert_eq!(s.qrz_sync_book, QRZ_STATION_BOOK);
+        assert_eq!(s.qrz_last_sync_unix, now - 7_200);
+        assert!(s.qrz_sync_books.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A sync moving to another key's book leaves the one it was in with its place, and coming
+    /// back finds it.
+    #[test]
+    fn selecting_a_qrz_book_keeps_the_others_place() {
+        let mut s = Settings::default();
+        let p1 = qrz_profile_book("p1");
+        s.qrz_fetch_after_logid = 1_750;
+        s.qrz_fetch_started_unix = 1_790_000_000;
+        s.select_qrz_book(&p1);
+        assert_eq!(
+            (
+                s.qrz_fetch_after_logid,
+                s.qrz_fetch_started_unix,
+                s.qrz_last_sync_unix
+            ),
+            (0, 0, 0),
+            "/P has never synced"
+        );
+        s.qrz_last_sync_unix = 1_790_500_000;
+        s.select_qrz_book(QRZ_STATION_BOOK);
+        assert_eq!(
+            (s.qrz_fetch_after_logid, s.qrz_fetch_started_unix),
+            (1_750, 1_790_000_000)
+        );
+        assert_eq!(s.qrz_sync_place(&p1).last_sync_unix, 1_790_500_000);
+    }
 
     /// The settings files kept this run under `dir`, as the screen is told of them (the list is
     /// the whole process's, and tests run in parallel).

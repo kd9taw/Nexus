@@ -5326,6 +5326,12 @@ pub struct Engine {
     /// The turn the app takes to change a saved key a notice can ask about — see
     /// [`Self::key_changes`].
     key_changes: Arc<Mutex<()>>,
+    /// How many times each QRZ book's place was forgotten ([`Self::forget_qrz_book`]), by
+    /// keychain user: a sync takes its book's turn when it starts ([`Self::qrz_book_turn`]), and
+    /// the cursors it moves land only while the turn is the same. A key replaced, or a profile
+    /// removed, while a sync runs in its book then leaves nothing of the old book behind. Not
+    /// saved: no sync outlives the run.
+    qrz_book_turns: std::collections::BTreeMap<String, u64>,
     rig_tx_swr: Option<f32>,
     /// Consecutive keyed SWR readings above [`Settings::swr_stop_ratio`]. The cutoff fires at
     /// TWO, never one — see [`Self::observe_rig_tx_meters`]. Zeroed by a reading at or below
@@ -8271,6 +8277,7 @@ impl Engine {
             loop_tx_hold_until: None,
             ft_drive_at: None,
             key_changes: Arc::default(),
+            qrz_book_turns: std::collections::BTreeMap::new(),
             rig_tx_swr: None,
             swr_over_count: 0,
             rig_tx_alc: None,
@@ -9531,16 +9538,65 @@ impl Engine {
     /// whose heavyweight reset (mode back to Chat, TX + broadcast queues cleared)
     /// landed mid-QSO once an hour with nothing on screen saying why (#54 — the
     /// 1.0.5 "intermittent mode drift" field report).
-    pub fn set_qrz_sync_cursor(&mut self, unix: u64) {
-        self.settings.qrz_last_sync_unix = unix;
+    ///
+    /// `book` is the keychain user of the key the sync used: each key's book has its own place
+    /// ([`Settings::qrz_sync_place`]). `turn` is the book's turn when the sync started
+    /// ([`Self::qrz_book_turn`]): when the place was forgotten since, nothing is written.
+    pub fn set_qrz_sync_cursor(&mut self, book: &str, turn: u64, unix: u64) {
+        if self.qrz_book_turn(book) != turn {
+            return;
+        }
+        let mut place = self.settings.qrz_sync_place(book);
+        place.last_sync_unix = unix;
+        self.settings.set_qrz_sync_place(book, place);
     }
 
-    /// Move the whole-book QRZ fetch's resume point (persisted by the caller), the same narrow
-    /// mutation as [`Self::set_qrz_sync_cursor`]: the next page's `AFTERLOGID` and when the fetch
-    /// began, or `(0, 0)` once its last page is merged.
-    pub fn set_qrz_fetch_cursor(&mut self, after_logid: u64, started_unix: u64) {
-        self.settings.qrz_fetch_after_logid = after_logid;
-        self.settings.qrz_fetch_started_unix = started_unix;
+    /// Move the whole-book QRZ fetch's resume point in `book` (persisted by the caller), the same
+    /// narrow mutation as [`Self::set_qrz_sync_cursor`]: the next page's `AFTERLOGID` and when the
+    /// fetch began, or `(0, 0)` once its last page is merged. Written only on `turn`, as
+    /// [`Self::set_qrz_sync_cursor`] is.
+    pub fn set_qrz_fetch_cursor(
+        &mut self,
+        book: &str,
+        turn: u64,
+        after_logid: u64,
+        started_unix: u64,
+    ) {
+        if self.qrz_book_turn(book) != turn {
+            return;
+        }
+        let mut place = self.settings.qrz_sync_place(book);
+        place.fetch_after_logid = after_logid;
+        place.fetch_started_unix = started_unix;
+        self.settings.set_qrz_sync_place(book, place);
+    }
+
+    /// Make `book` the QRZ logbook whose place Settings show, at the start of a sync that uses its
+    /// key ([`Settings::select_qrz_book`]). The same narrow mutation as the cursors.
+    pub fn select_qrz_book(&mut self, book: &str) {
+        self.settings.select_qrz_book(book);
+    }
+
+    /// Forget where the sync stands in `book`'s QRZ logbook (persisted by the caller): its key
+    /// changed, or its profile is gone, so the next sync with that keychain user fetches its book
+    /// whole. The same narrow mutation as the cursors. A sync running in that book moves no
+    /// cursor of it from here on ([`Self::qrz_book_turn`]).
+    pub fn forget_qrz_book(&mut self, book: &str) {
+        self.settings
+            .set_qrz_sync_place(book, crate::settings::QrzSyncPlace::default());
+        *self.qrz_book_turns.entry(book.to_string()).or_default() += 1;
+    }
+
+    /// `book`'s turn: how many times its place was forgotten this run. A sync takes it as it
+    /// starts and hands it to the cursor setters.
+    pub fn qrz_book_turn(&self, book: &str) -> u64 {
+        self.qrz_book_turns.get(book).copied().unwrap_or(0)
+    }
+
+    /// Every book's turn ([`Self::qrz_book_turn`]), for a sync that does not yet know which book
+    /// its key opens: it takes them all before it reads the key.
+    pub fn qrz_book_turns(&self) -> std::collections::BTreeMap<String, u64> {
+        self.qrz_book_turns.clone()
     }
 
     /// Record the sound card each TX audio device is on ([`Settings::tx_card_models`], persisted by
@@ -38957,7 +39013,14 @@ contact yourself."
         self.settings.lotw_sweep_year = 0;
         self.settings.lotw_sweep_since.clear();
         self.settings.eqsl_last_sync.clear();
-        self.set_qrz_fetch_cursor(0, 0);
+        let book = self.settings.qrz_sync_book.clone();
+        let turn = self.qrz_book_turn(&book);
+        self.set_qrz_fetch_cursor(&book, turn, 0, 0);
+        self.settings.qrz_sync_books.retain(|_, place| {
+            place.fetch_after_logid = 0;
+            place.fetch_started_unix = 0;
+            *place != crate::settings::QrzSyncPlace::default()
+        });
         removed
     }
 
@@ -54667,7 +54730,7 @@ mod tests {
         // Re-arm, then the narrow path: cursor moves, QSO and queue survive.
         e.tx_queue.push_back("PJ4DX W9XYZ -10".into());
         assert!(e.snapshot().qso.is_some(), "harness: the QSO is still up");
-        e.set_qrz_sync_cursor(1_754_700_000);
+        e.set_qrz_sync_cursor(crate::settings::QRZ_STATION_BOOK, 0, 1_754_700_000);
         assert_eq!(e.settings().qrz_last_sync_unix, 1_754_700_000);
         assert!(
             e.snapshot().qso.is_some(),
@@ -69784,6 +69847,40 @@ mod tests {
             ),
             (0, ""),
             "and a year-by-year download starts over"
+        );
+    }
+
+    /// Purging the log clears the resume point of a whole QRZ logbook fetch in EVERY key's book,
+    /// the one synced last and the others: their merged pages are gone with the log, so resuming
+    /// past them would never bring them back. The delta high-waters stay, as the one book's did.
+    #[test]
+    fn purging_the_log_clears_every_qrz_books_resume_point() {
+        use crate::settings::{qrz_profile_book, QrzSyncPlace, QRZ_STATION_BOOK};
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        let (p1, p2) = (qrz_profile_book("p1"), qrz_profile_book("p2"));
+        e.set_qrz_fetch_cursor(QRZ_STATION_BOOK, 0, 1_750, 1_790_000_000);
+        e.set_qrz_fetch_cursor(&p1, 0, 2_500, 1_790_100_000);
+        e.set_qrz_sync_cursor(&p1, 0, 1_789_000_000);
+        e.set_qrz_fetch_cursor(&p2, 0, 3_000, 1_790_200_000);
+        e.import_adif(
+            "<EOH>\n<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8\
+             <QSO_DATE:8>20240101<TIME_ON:6>120000<EOR>\n",
+        );
+        assert_eq!(e.clear_logbook(), 1);
+        let s = e.settings();
+        assert_eq!(s.qrz_sync_place(QRZ_STATION_BOOK), QrzSyncPlace::default());
+        assert_eq!(
+            s.qrz_sync_place(&p1),
+            QrzSyncPlace {
+                last_sync_unix: 1_789_000_000,
+                ..Default::default()
+            },
+            "a book not synced last: its resume point goes, its high-water stays"
+        );
+        assert_eq!(s.qrz_sync_place(&p2), QrzSyncPlace::default());
+        assert!(
+            !s.qrz_sync_books.contains_key(&p2),
+            "an empty place is not kept"
         );
     }
 

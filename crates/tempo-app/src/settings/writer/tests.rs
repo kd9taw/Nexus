@@ -209,7 +209,7 @@ fn race(hand_over: &(dyn Fn(Settings) + Sync), settle: &dyn Fn(), path: &Path) {
                 for _ in 0..25 {
                     let mut eng = engine_lock(&engine);
                     let next = eng.settings().qrz_last_sync_unix + 1;
-                    eng.set_qrz_sync_cursor(next);
+                    eng.set_qrz_sync_cursor(crate::settings::QRZ_STATION_BOOK, 0, next);
                     hand_over(eng.settings().clone());
                 }
             });
@@ -307,7 +307,7 @@ fn synchronous_saves_and_queued_snapshots_land_in_order() {
                 for i in 0..50u64 {
                     let mut eng = engine_lock(engine);
                     let next = eng.settings().qrz_last_sync_unix + 1;
-                    eng.set_qrz_sync_cursor(next);
+                    eng.set_qrz_sync_cursor(crate::settings::QRZ_STATION_BOOK, 0, next);
                     if (i + t) % 3 == 0 {
                         w.save_now(eng.settings()).expect("the synchronous save");
                     } else {
@@ -564,7 +564,7 @@ fn the_engine_lock_is_free_while_the_change_is_being_written() {
         let (w, engine) = (Arc::clone(&w), Arc::clone(&engine));
         std::thread::spawn(move || {
             let mut eng = engine_lock(&engine);
-            eng.set_qrz_sync_cursor(7);
+            eng.set_qrz_sync_cursor(crate::settings::QRZ_STATION_BOOK, 0, 7);
             let saved = w.queue(eng.settings().clone(), |_| {});
             drop(eng);
             let _ = returned.send(());
