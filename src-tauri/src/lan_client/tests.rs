@@ -220,7 +220,7 @@ pub(crate) fn listener_below_the_ephemeral_range(ip: std::net::Ipv4Addr) -> std:
 }
 
 /// 64 ports drawn at random below the kernel's ephemeral range, for a test to try in turn.
-fn ports_below_the_ephemeral_range() -> impl Iterator<Item = u16> {
+pub(crate) fn ports_below_the_ephemeral_range() -> impl Iterator<Item = u16> {
     use std::hash::BuildHasher;
     let low = std::fs::read_to_string("/proc/sys/net/ipv4/ip_local_port_range")
         .ok()

@@ -1254,15 +1254,37 @@ mod tests {
         let hub = Arc::new(Hub::default());
         let mut m = Manager::new(hub.clone(), "test");
         m.tick(&engine);
+        // Only the station's own datagrams: the tool's port is one the system picked, and a socket
+        // elsewhere in the process may still be sending to whoever held it before.
+        let station = hub
+            .udp
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|u| u.socket.local_addr().unwrap())
+            .expect("the UDP side is on");
+        let from_station = || {
+            let until = Instant::now() + WAIT;
+            let mut buf = [0u8; 65_536];
+            while Instant::now() < until {
+                let (n, from) = tool.recv_from(&mut buf).ok()?;
+                if from == station {
+                    return Some(
+                        serde_json::from_slice::<Value>(&buf[..n]).expect("a JSON datagram"),
+                    );
+                }
+            }
+            None
+        };
         let mut p = Program::connect(port);
         p.sentinel(1);
-        while datagram(&tool).is_some_and(|(d, _)| d["type"] != "STATION.CALLSIGN") {}
+        while from_station().is_some_and(|d| d["type"] != "STATION.CALLSIGN") {}
         hub.closing();
         let last = p.line().expect("the closing line");
         assert_eq!(last["type"], "STATION.CLOSING");
         assert_eq!(last["params"]["REASON"], "User closed application");
-        let (a, _) = datagram(&tool).unwrap();
-        let (b, _) = datagram(&tool).unwrap();
+        let a = from_station().unwrap();
+        let b = from_station().unwrap();
         assert_eq!(
             (&a["type"], &b["type"]),
             (&Value::from("STATION.CLOSING"), &Value::from("CLOSE"))

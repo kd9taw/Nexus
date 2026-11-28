@@ -5510,6 +5510,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "socket2",
  "street-map",
  "tauri",
  "tauri-build",

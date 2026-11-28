@@ -219,6 +219,10 @@ tauri = { version = "2", features = ["protocol-asset", "test"] }
 # The same again: `test-util`, the client core's test hooks (a stand-in headset, a hold on the audio
 # road's sender, the off halves' arguments), which this crate's tests reach the roads through.
 tempo-client = { path = "../crates/tempo-client", features = ["test-util"] }
+# A loopback port held bound but not listening, so a test keeps "nothing answers here" on a port
+# no other socket can take until the test itself listens on it; std binds only by listening. Not
+# a new crate: socket2 is already in this crate's tree (Cargo.lock), as it is for tempo-audio's.
+socket2 = "0.6"
 
 [features]
 # FT-710 waterfall over the radio's internal FT4222 USB→SPI bridge. OFF by default: it links
