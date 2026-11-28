@@ -40481,12 +40481,18 @@ fn forget_qrz_book_place(engine: &SharedEngine, book: &str) {
 static QRZ_AUTO_SYNC_FAILED_AT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Whether the automatic QRZ sync is due: `hours` after the last sync that landed (`last_ok`, the
-/// book's high-water; 0 = never) and after the last that failed (`last_failed`; 0 = none). A book
-/// that cannot be synced, a key QRZ refuses or a book whose first fetch keeps failing, is tried
-/// again at the operator's interval, not at every five-minute tick of the thread.
+/// book's high-water; 0 = never), and after the last that failed (`last_failed`; 0 = none) the
+/// same interval but an hour at most. A book that cannot be synced, a key QRZ refuses or a book
+/// whose first fetch keeps failing, is not asked at every five-minute tick of the thread, and a
+/// network blip under a long interval costs an hour, not the interval.
+///
+/// Both stamps are the station's, not a book's: `last_ok` is the book synced last, and after a
+/// switch to another key's book the first sync of it waits for that one's interval.
 fn qrz_auto_sync_due(last_ok: u64, last_failed: u64, hours: u32, now: u64) -> bool {
-    let from = last_ok.max(last_failed);
-    from == 0 || now.saturating_sub(from) >= u64::from(hours) * 3_600
+    let interval = u64::from(hours) * 3_600;
+    let landed = last_ok == 0 || now.saturating_sub(last_ok) >= interval;
+    let failed = last_failed == 0 || now.saturating_sub(last_failed) >= interval.min(3_600);
+    landed && failed
 }
 
 /// #503: the call a station profile logs under now: the station's own call (`mycall`) for the
@@ -41449,9 +41455,10 @@ fn set_qrz_logbook_key_with(
     stored: &dyn Fn() -> Result<bool, keyring::Error>,
     write: &dyn Fn(Option<&str>) -> Result<(), String>,
 ) -> Result<(), String> {
-    let key = entered_credential(key); // #224
-                                       // #291: a different key can unlock a different book, so the owner learned for the old one
-                                       // (and whether this session already asked) no longer applies, nor does the sync's place in it.
+    // #224: the key as entered, trimmed.
+    let key = entered_credential(key);
+    // #291: a different key can unlock a different book, so the owner learned for the old one
+    // (and whether this session already asked) no longer applies, nor does the sync's place in it.
     forget_qrz_book_owner();
     if key.is_empty() {
         write(None)?;
@@ -43394,7 +43401,33 @@ fn sync_qrz_since(
     delta: bool,
     wait: bool,
 ) -> Result<LotwSyncResult, QrzSyncFailure> {
-    let QrzBookKey { user, key } = qrz_logbook_key(engine)
+    // The body carries the key; the transport never logs it.
+    let post = |body: String| {
+        propagation::live::qrz::post_form(
+            tempo_core::qrz::QRZ_LOGBOOK_URL,
+            env!("CARGO_PKG_VERSION"),
+            body,
+        )
+    };
+    sync_qrz_from_keychain(engine, &qrz_logbook_key, &post, delta, wait)
+}
+
+/// [`sync_qrz_since`] with the key read by `read_key` ([`qrz_logbook_key`]) and QRZ reached
+/// through `post`.
+///
+/// ⛔ The books' turns are taken BEFORE the key is read: the read is off the engine lock, and a key
+/// saved or a profile removed in between moves its book's turn ([`forget_qrz_book_place`]). Taken
+/// after, the sync would hold the new turn while it fetches with the old key, and write the old
+/// book's place into the new key's. Taken before, a turn that moved only drops the sync's writes.
+fn sync_qrz_from_keychain(
+    engine: &SharedEngine,
+    read_key: &dyn Fn(&SharedEngine) -> Result<Option<QrzBookKey>, String>,
+    post: &dyn Fn(String) -> Result<String, String>,
+    delta: bool,
+    wait: bool,
+) -> Result<LotwSyncResult, QrzSyncFailure> {
+    let turns = engine_lock(engine).qrz_book_turns();
+    let QrzBookKey { user, key } = read_key(engine)
         .map_err(|message| QrzSyncFailure {
             detail: QRZ_SYNC_NO_KEY,
             message: ScreenReason::new(message),
@@ -43408,31 +43441,25 @@ fn sync_qrz_since(
                     .to_string(),
             ),
         })?;
-    // The body carries the key; the transport never logs it.
-    let post = |body: String| {
-        propagation::live::qrz::post_form(
-            tempo_core::qrz::QRZ_LOGBOOK_URL,
-            env!("CARGO_PKG_VERSION"),
-            body,
-        )
-    };
-    sync_qrz_with(engine, &user, &key, &post, delta, wait)
+    let turn = turns.get(&user).copied().unwrap_or(0);
+    sync_qrz_with(engine, (&user, turn), &key, post, delta, wait)
 }
 
 /// [`sync_qrz_since`] past the keychain, with QRZ reached through `post`. `book` is the keychain
-/// user `key` was read from, which names the book's place ([`Settings::qrz_sync_place`]).
+/// user `key` was read from, which names the book's place ([`Settings::qrz_sync_place`]), and
+/// `turn` its turn from before the key was read: the sync's cursors land only on that turn.
 fn sync_qrz_with(
     engine: &SharedEngine,
-    book: &str,
+    (book, turn): (&str, u64),
     key: &str,
     post: &dyn Fn(String) -> Result<String, String>,
     delta: bool,
     wait: bool,
 ) -> Result<LotwSyncResult, QrzSyncFailure> {
-    let (place, turn) = {
+    let place = {
         let mut eng = engine_lock(engine);
         eng.select_qrz_book(book);
-        (eng.settings().qrz_sync_place(book), eng.qrz_book_turn(book))
+        eng.settings().qrz_sync_place(book)
     };
     let resuming = place.fetch_after_logid > 0;
     // One day of overlap: MODSINCE is DATE granularity, so a run just after
@@ -43588,9 +43615,16 @@ mod qrz_paged_sync_tests {
 
     /// A sync of the station-wide key's book: the hourly sync's when `delta`, else the button's.
     fn sync(engine: &SharedEngine, qrz: &FakeBook, delta: bool) -> Result<usize, String> {
-        sync_qrz_with(engine, HOME, KEY, &|b| qrz.post(b), delta, true)
-            .map(|r| r.added)
-            .map_err(|f| f.message.into_string())
+        sync_qrz_with(
+            engine,
+            (HOME, turn(engine, HOME)),
+            KEY,
+            &|b| qrz.post(b),
+            delta,
+            true,
+        )
+        .map(|r| r.added)
+        .map_err(|f| f.message.into_string())
     }
 
     /// A three-page book (250 + 250 + 120) comes down whole: three FETCHes, each starting one past
@@ -43676,7 +43710,7 @@ mod qrz_paged_sync_tests {
                 answer
             })
         };
-        let failed = sync_qrz_with(&engine, HOME, KEY, &cut, false, true)
+        let failed = sync_qrz_with(&engine, (HOME, 0), KEY, &cut, false, true)
             .expect_err("the cut page is refused");
         assert!(failed
             .message
@@ -43699,7 +43733,7 @@ mod qrz_paged_sync_tests {
             let tail = rest.trim_start_matches(|c: char| c.is_ascii_digit());
             qrz.post(format!("{head}AFTERLOGID%3A0{tail}"))
         };
-        let failed = sync_qrz_with(&engine, HOME, KEY, &from_the_start, false, true)
+        let failed = sync_qrz_with(&engine, (HOME, 0), KEY, &from_the_start, false, true)
             .expect_err("the stuck page is refused");
         assert!(
             failed.message.on_screen().contains("from its beginning"),
@@ -43780,9 +43814,16 @@ mod qrz_paged_sync_tests {
         key: &str,
         delta: bool,
     ) -> Result<usize, String> {
-        sync_qrz_with(engine, user, key, &|b| qrz.post(b), delta, true)
-            .map(|r| r.added)
-            .map_err(|f| f.message.into_string())
+        sync_qrz_with(
+            engine,
+            (user, turn(engine, user)),
+            key,
+            &|b| qrz.post(b),
+            delta,
+            true,
+        )
+        .map(|r| r.added)
+        .map_err(|f| f.message.into_string())
     }
 
     /// (resume logid, when the fetch began, the delta high-water) of `user`'s book.
@@ -43997,9 +44038,22 @@ mod qrz_paged_sync_tests {
             qrz_auto_sync_due(0, now - 3_600, 1, now),
             "an hour after the failure"
         );
+        // With a long interval, a failure waits an hour at most: a blip must not cost a day.
         assert!(
-            !qrz_auto_sync_due(0, now - 3_600, 3, now),
-            "the operator's interval"
+            !qrz_auto_sync_due(0, now - 1_800, 24, now),
+            "half an hour after the failure"
+        );
+        assert!(
+            qrz_auto_sync_due(0, now - 3_600, 24, now),
+            "an hour after the failure"
+        );
+        assert!(
+            qrz_auto_sync_due(now - 25 * 3_600, now - 3_600, 24, now),
+            "a delta overdue, retried an hour after it failed"
+        );
+        assert!(
+            !qrz_auto_sync_due(now - 3_600, 0, 24, now),
+            "a delta waits the interval"
         );
     }
 
@@ -44037,6 +44091,69 @@ mod qrz_paged_sync_tests {
         let (dir, engine) = crate::durable_command_tests::engine_on_store("qrz-rv2-race", 0);
         let home = FakeBook::of(620);
         let n = Cell::new(0);
+        let turn = turn(&engine, HOME);
+        let post = |b: String| {
+            // A quit part-way leaves what the place holds now: nothing of the old book.
+            if n.get() > 0 {
+                assert_eq!(place(&engine, HOME), (0, 0, 0), "page {}", n.get() + 1);
+            }
+            let r = home.post(b);
+            n.set(n.get() + 1);
+            if n.get() == 1 {
+                crate::forget_qrz_book_place(&engine, HOME);
+            }
+            r
+        };
+        assert!(sync_qrz_with(&engine, (HOME, turn), KEY, &post, false, true).is_ok());
+        assert_eq!(
+            place(&engine, HOME),
+            (0, 0, 0),
+            "the new key's book starts whole"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `book`'s turn now, as a sync takes it before it reads its key.
+    fn turn(engine: &SharedEngine, book: &str) -> u64 {
+        engine.lock().unwrap().qrz_book_turn(book)
+    }
+
+    /// The key is read off the engine lock, and it can be replaced between that read and the
+    /// sync: the sync, still fetching with the old key, leaves nothing in the new key's book.
+    #[test]
+    fn a_key_replaced_after_the_sync_read_it_leaves_no_place_behind() {
+        let (dir, engine) = crate::durable_command_tests::engine_on_store("qrz-read-race", 0);
+        let home = FakeBook::of(3);
+        let read = |e: &SharedEngine| {
+            let old = QrzBookKey {
+                user: HOME.to_string(),
+                key: KEY.to_string(),
+            };
+            // Saved again right after the sync read it.
+            crate::forget_qrz_book_place(e, HOME);
+            Ok(Some(old))
+        };
+        let added = sync_qrz_from_keychain(&engine, &read, &|b| home.post(b), true, true)
+            .map(|r| r.added)
+            .map_err(|f| f.message.into_string());
+        assert_eq!(added, Ok(3), "the old book still comes down");
+        assert_eq!(
+            place(&engine, HOME),
+            (0, 0, 0),
+            "the new key's book starts whole"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// From the third review: the key replaced while an hourly delta runs with the old one: the
+    /// delta's high-water must not land in the book the new key opens.
+    #[test]
+    fn rv3_a_key_changed_mid_delta_leaves_no_high_water() {
+        let (dir, engine) = crate::durable_command_tests::engine_on_store("qrz-rv3-delta", 0);
+        let home = FakeBook::of(3);
+        assert_eq!(sync_book(&engine, &home, HOME, KEY, false), Ok(3));
+        assert!(place(&engine, HOME).2 > 0, "seeded");
+        let n = Cell::new(0);
         let post = |b: String| {
             let r = home.post(b);
             n.set(n.get() + 1);
@@ -44045,11 +44162,44 @@ mod qrz_paged_sync_tests {
             }
             r
         };
-        assert!(sync_qrz_with(&engine, HOME, KEY, &post, false, true).is_ok());
+        let turn = turn(&engine, HOME);
+        let _ = sync_qrz_with(&engine, (HOME, turn), KEY, &post, true, true);
         assert_eq!(
             place(&engine, HOME),
             (0, 0, 0),
             "the new key's book starts whole"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// From the third review: a reset that removes a profile while a whole-book fetch runs in
+    /// its book: the running sync must not write its place back after the reset dropped it.
+    #[test]
+    fn rv3_a_reset_mid_fetch_leaves_no_place() {
+        let _publishing = crate::publishing_saves();
+        let (dir, engine) = crate::durable_command_tests::engine_on_store("qrz-rv3-reset", 0);
+        let id = add_profile(&engine, "W9XYZ/P");
+        let book = FakeBook {
+            shift: 1_000,
+            ..FakeBook::of(620)
+        };
+        let n = Cell::new(0);
+        let post = |b: String| {
+            let r = book.post(b);
+            n.set(n.get() + 1);
+            if n.get() == 1 {
+                let mut reset = engine.lock().unwrap().settings().clone();
+                reset.station_profiles.retain(|p| p.id != id);
+                crate::save_and_publish(&engine, reset, true).expect("reset");
+            }
+            r
+        };
+        let turn = turn(&engine, PORTABLE);
+        let _ = sync_qrz_with(&engine, (PORTABLE, turn), KEY_P, &post, false, true);
+        assert_eq!(
+            place(&engine, PORTABLE),
+            (0, 0, 0),
+            "the removed profile's book keeps no place"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

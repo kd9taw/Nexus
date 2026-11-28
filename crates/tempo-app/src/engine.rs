@@ -9572,6 +9572,12 @@ impl Engine {
         self.qrz_book_turns.get(book).copied().unwrap_or(0)
     }
 
+    /// Every book's turn ([`Self::qrz_book_turn`]), for a sync that does not yet know which book
+    /// its key opens: it takes them all before it reads the key.
+    pub fn qrz_book_turns(&self) -> std::collections::BTreeMap<String, u64> {
+        self.qrz_book_turns.clone()
+    }
+
     /// Record the sound card each TX audio device is on ([`Settings::tx_card_models`], persisted by
     /// the caller), as `tempo_audio::notify_sound::tx_card_models_after` works it out after a save.
     /// The narrow write, for the same reason as [`set_qrz_sync_cursor`](Self::set_qrz_sync_cursor).
